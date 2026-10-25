@@ -22,7 +22,7 @@ test("cached theme colors the first paint while the database request is pending"
   await page.route("**/api/**", async route => {
     if (new URL(route.request().url()).pathname === "/api/settings") {
       await pending;
-      await route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" } });
+      await route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
     } else {
       await route.fulfill({ json: [] });
     }
@@ -35,8 +35,8 @@ test("cached theme colors the first paint while the database request is pending"
       rendered: document.getElementById("root")!.childElementCount,
     })), { theme: "light", background: "rgb(245, 243, 238)", rendered: 0 });
     reply();
-    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
-    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "dark");
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "default");
+    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
   } finally { reply(); await page.close(); }
 });
 
@@ -64,7 +64,7 @@ test("database theme still loads when browser storage rejects writes", async () 
 
 test("theme picker changes board and open review immediately, then loads the saved palette before rendering", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  let theme: "dark" | "light" = "dark";
+  let theme: "default" | "light" = "default";
   let failPatch = false;
   let releasePatch!: () => void;
   const heldPatch = new Promise<void>(resolve => { releasePatch = resolve; });
@@ -118,7 +118,7 @@ test("theme picker changes board and open review immediately, then loads the sav
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("radio", { name: "Light" }).check();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
-    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "dark");
+    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
     const light = await palette();
     assert.equal(light.background, "rgb(245, 243, 238)");
     assert.equal(light.add, "rgb(225, 242, 230)");
@@ -135,13 +135,13 @@ test("theme picker changes board and open review immediately, then loads the sav
     assert.deepEqual(await palette(), light);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByRole("radio", { name: "Dark (original)" }).check();
-    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark" && localStorage.getItem("bakery-theme") === "dark");
+    await page.getByRole("radio", { name: "Default" }).check();
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
     assert.deepEqual(await palette(), dark);
     failPatch = true;
     await page.getByRole("radio", { name: "Light" }).check();
     await page.getByRole("alert").filter({ hasText: "Save rejected" }).waitFor();
     assert.deepEqual(await palette(), dark);
-    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "dark");
+    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
   } finally { releasePatch(); await page.close(); }
 });

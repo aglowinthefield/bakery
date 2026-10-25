@@ -500,7 +500,7 @@ function App() {
                     </button>
                   ) : (
                     <>
-                      <div className="mb-5 flex items-center gap-2 px-1">
+                      <div className="mb-2 flex min-h-6 items-center gap-2 px-1">
                         <span className={`size-2 rounded-full ${column.dot}`} />
                         <h2 className="text-sm font-semibold">
                           {column.label}
@@ -520,7 +520,7 @@ function App() {
                           </button>
                         )}
                       </div>
-                      <div className="mb-4 px-1 text-xs text-muted-foreground">
+                      <div className="mb-2 px-1 text-[11px] leading-[14px] text-muted-foreground">
                         {column.description}
                       </div>
                       <div className="space-y-3">
@@ -615,7 +615,7 @@ function App() {
           >
             <legend className="pt-5 font-medium">Theme</legend>
             <div className="mt-3 flex gap-5">
-              {(["dark", "light"] as const).map((theme) => (
+              {(["default", "compline", "light"] as const).map((theme) => (
                 <label
                   key={theme}
                   className="flex cursor-pointer items-center gap-2"
@@ -623,11 +623,15 @@ function App() {
                   <input
                     type="radio"
                     name="theme"
-                    checked={settings?.theme === theme}
+                    checked={(settings?.theme ?? "default") === theme}
                     onChange={() => saveSettings({ theme })}
-                    className="accent-primary"
+                    className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                   />
-                  {theme === "dark" ? "Dark (original)" : "Light"}
+                  {theme === "default"
+                    ? "Default"
+                    : theme === "compline"
+                      ? "Compline"
+                      : "Light"}
                 </label>
               ))}
             </div>

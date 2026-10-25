@@ -43,12 +43,13 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       }
     }
     assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" });
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" });
     assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { cardDetailsLayout: "drawer" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { theme: "unknown" })).status, 400);
-    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true, cardDetailsLayout: "dialog", theme: "dark" });
-    assert.deepEqual((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data, { confirmRunStart: true, cardDetailsLayout: "side", theme: "dark" });
+    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true, cardDetailsLayout: "dialog", theme: "default" });
+    assert.deepEqual((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data, { confirmRunStart: true, cardDetailsLayout: "side", theme: "default" });
+    assert.deepEqual((await request("/settings", "PATCH", { theme: "compline" })).data, { confirmRunStart: true, cardDetailsLayout: "side", theme: "compline" });
     assert.deepEqual((await request("/settings", "PATCH", { theme: "light" })).data, { confirmRunStart: true, cardDetailsLayout: "side", theme: "light" });
     assert.deepEqual((await request("/settings")).data, { confirmRunStart: true, cardDetailsLayout: "side", theme: "light" });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);

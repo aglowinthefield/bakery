@@ -6,7 +6,8 @@
     <title>Bakery</title>
     <script>
       try {
-        if (localStorage.getItem("bakery-theme") === "light") document.documentElement.dataset.theme = "light";
+        const theme = localStorage.getItem("bakery-theme");
+        if (theme === "compline" || theme === "light") document.documentElement.dataset.theme = theme;
       } catch { /* Storage can be disabled. The database still supplies the theme. */ }
     </script>
   </head>

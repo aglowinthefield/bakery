@@ -19,6 +19,7 @@
   --border: #3d424a;
   --ring: #b4bcc4;
   --sidebar: #171a1e;
+  --code-background: #171a1e;
   --selection: #676d77;
   --status-triage: #8b919a;
   --status-ready: #d4ccb4;
@@ -62,6 +63,7 @@
   --border: #ccc8be;
   --ring: #4b6277;
   --sidebar: #eeebe4;
+  --code-background: #eeebe4;
   --selection: #c8d6e0;
   --status-triage: #626b72;
   --status-ready: #554b36;
@@ -83,6 +85,40 @@
   --syntax-tag: #216e36;
   --syntax-heading: #0057b8;
   --syntax-list: #735c0f;
+}
+/* Compline palette by Joshua Blais: https://github.com/joshuablais/compline#palette */
+:root[data-theme="compline"] {
+  --background: #1a1d21;
+  --foreground: #f0efeb;
+  --card: #22262b;
+  --card-foreground: #f0efeb;
+  --popover: #282c34;
+  --popover-foreground: #f0efeb;
+  --primary: #d4ccb4;
+  --primary-foreground: #1a1d21;
+  --secondary: #282c34;
+  --secondary-foreground: #b4c4bc;
+  --muted: #282c34;
+  --muted-foreground: #adb3b9;
+  --accent: #3d424a;
+  --accent-foreground: #f0efeb;
+  --destructive: #cdacac;
+  --border: #676d77;
+  --ring: #b4bcc4;
+  --sidebar: #22262b;
+  --code-background: #1a1d21;
+  --diff-add: #29372f;
+  --diff-add-foreground: #b4c4bc;
+  --diff-remove: #392e32;
+  --diff-remove-foreground: #d9baba;
+  --status-review: #b4c4bc;
+  --syntax-keyword: #d9baba;
+  --syntax-entity: #d4ccb4;
+  --syntax-constant: #b4bcc4;
+  --syntax-string: #b4c4bc;
+  --syntax-variable: #d4ccb4;
+  --syntax-comment: #b5b9bb;
+  --syntax-tag: #b4c4bc;
 }
 @theme inline {
   --color-background: var(--background); --color-foreground: var(--foreground);
