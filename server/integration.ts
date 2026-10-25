@@ -55,6 +55,7 @@ export class Integration {
   private snapshot(card: Card, includeFiles: boolean) {
     const { repo, worktree, run } = this.location(card);
     const main = git(repo, "rev-parse", "main"), branch = git(worktree, "rev-parse", "HEAD");
+    const base = includeFiles ? git(worktree, "merge-base", main, branch) : "";
     const temp = mkdtempSync(join(tmpdir(), "bakery-review-"));
     try {
       const index = join(temp, "index");
@@ -63,9 +64,9 @@ export class Integration {
       const tree = gitCommand(worktree, ["write-tree"], index);
       const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, branch, tree })).digest("hex");
       if (!includeFiles) return { fingerprint, tree, main, files: [] as ReviewDiff["files"] };
-      const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", main, tree], undefined, true).split("\0").filter(Boolean);
+      const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
       if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Bakery");
-      const files = paths.map(path => ({ path, patch: git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", main, tree, "--", path) }));
+      const files = paths.map(path => ({ path, patch: git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", base, tree, "--", path) }));
       if (files.reduce((size, file) => size + file.patch.length, 0) > 2_000_000) throw new Error("Review diff exceeds 2 MB; inspect the worktree outside Bakery");
       return { fingerprint, tree, main, files };
     } finally { rmSync(temp, { recursive: true, force: true }); }

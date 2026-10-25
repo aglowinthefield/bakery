@@ -320,6 +320,8 @@ test("moving main after review requires a fresh diff before approval", () => {
     git(item.repo, "add", "other.txt");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "other work");
     assert.throws(() => item.integration.approve(item.card, review.fingerprint), /changed since review/);
-    assert.equal(item.integration.approve(item.card, item.integration.review(item.card).fingerprint).status, "done");
+    const current = item.integration.review(item.card);
+    assert.deepEqual(current.files.map(file => file.path), ["README.md"]);
+    assert.equal(item.integration.approve(item.card, current.fingerprint).status, "done");
   } finally { item.close(); }
 });

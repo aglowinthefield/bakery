@@ -1,9 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { memo, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { ArrowUpRight, ChevronDown, ChevronRight, CircleHelp, Clock3, GitBranch, LayoutGrid, LoaderCircle, Pencil, Plus, RefreshCw, Settings2, Square, XCircle } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/ui/dialog";
 import "./style.css";
+import "highlight.js/styles/github-dark.css";
+import { highlightDiffCode, parseDiff } from "./review-diff.js";
 
 type Status = "ready" | "running" | "review" | "failed" | "interrupted" | "done";
 type Board = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean };
@@ -159,19 +161,37 @@ function App() {
 function ReviewPanel({ review, error, onRefresh }: { review: ReviewDiff | null; error: string; onRefresh: () => void }) {
   return <section aria-label="Review diff" className="mt-8 border-t border-border pt-5">
     <div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">Review diff</h3><Button size="sm" variant="ghost" onClick={onRefresh}><RefreshCw size={13} /> Refresh diff</Button></div>
-    <p className="mt-2 text-xs text-muted-foreground">Card branch and unignored worktree changes compared with current local main. Refresh after editing; approval rejects changes made since this diff loaded.</p>
+    <p className="mt-2 text-xs text-muted-foreground">Card changes since its shared commit with main, including unignored worktree files. Refresh after editing; approval rejects changes made since this diff loaded.</p>
     {error && <p role="alert" className="mt-3 text-xs text-destructive">Could not load review diff: {error}</p>}
     {!review && !error && <p className="mt-3 text-xs text-muted-foreground">Loading review diff…</p>}
     {review && (review.files.length === 0 ? <p className="mt-4 text-xs text-muted-foreground">No differences from main.</p> : <>
       <p className="mt-4 text-xs font-medium">Changed files ({review.files.length})</p>
       <ul className="mt-2 space-y-1 font-mono text-xs">{review.files.map(file => <li key={file.path} className="break-all">{file.path}</li>)}</ul>
-      <div className="mt-4 space-y-3">{review.files.map((file, index) => <details key={file.path} open={index === 0} className="rounded-lg border border-border bg-background">
-        <summary className="cursor-pointer break-all px-4 py-3 font-mono text-xs">{file.path}</summary>
-        <pre className="max-h-96 overflow-auto border-t border-border p-4 font-mono text-[11px] leading-5 text-foreground/80">{file.patch || "No text diff (binary file)."}</pre>
-      </details>)}</div>
+      <div className="mt-4 space-y-3">{review.files.map((file, index) => <ReviewFile key={file.path} file={file} index={index} />)}</div>
     </>)}
   </section>;
 }
+function ReviewFile({ file, index }: { file: ReviewDiff["files"][number]; index: number }) {
+  const [open, setOpen] = useState(index === 0);
+  const panelId = `review-file-${index}`;
+  return <div className="overflow-hidden rounded-lg border border-border bg-background">
+    <button type="button" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(previous => !previous)} className="flex w-full items-center gap-2 break-all px-4 py-3 text-left font-mono text-xs hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      {open ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}{file.path}
+    </button>
+    {open && <div id={panelId}><DiffPatch path={file.path} patch={file.patch} /></div>}
+  </div>;
+}
+const DiffPatch = memo(function DiffPatch({ path, patch }: { path: string; patch: string }) {
+  const colors = { add: "bg-[#193529] text-[#b6e5c5]", remove: "bg-[#3b2528] text-[#f0b5b5]", context: "text-foreground/80", meta: "bg-[#282c34] text-muted-foreground" };
+  const parsed = parseDiff(patch);
+  const lines = parsed.length ? parsed : [{ kind: "meta" as const, code: "No text diff (binary file).", prefix: "" }];
+  return <div className="max-h-96 overflow-auto border-t border-border bg-[#171a1e]">
+    <pre className="m-0 min-w-max font-mono text-[11px] leading-5">{lines.map((line, index) => <div key={index} data-change={line.kind} className={`flex min-w-full w-max ${colors[line.kind]}`}>
+      {line.kind !== "meta" && <><span className="sr-only">{line.kind === "add" ? "Added line" : line.kind === "remove" ? "Removed line" : "Unchanged line"}</span><span aria-hidden="true" className="w-6 shrink-0 pl-2">{line.prefix}</span></>}
+      {line.kind === "meta" ? <span className="px-2">{line.code}</span> : <code className="pr-4" dangerouslySetInnerHTML={{ __html: highlightDiffCode(line.code, path) }} />}
+    </div>)}</pre>
+  </div>;
+});
 function AttemptList({ runs }: { runs: Run[] }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   return <div className="mt-8">
