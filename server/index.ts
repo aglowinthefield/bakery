@@ -90,7 +90,7 @@ const server = createServer(async (req, res) => {
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.listMergeFailures(repoBoard.repo)); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|approve|approval|withdraw|conflict))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -102,10 +102,15 @@ const server = createServer(async (req, res) => {
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
+        if (req.method === "GET" && action === "review") { send(res, 200, integration.review(item)); return; }
         if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
         if (req.method === "POST" && action === "start") { send(res, 202, worker.start(item)); return; }
-        if (req.method === "POST" && action === "approve") { send(res, 200, integration.approve(item)); return; }
+        if (req.method === "POST" && action === "approve") {
+          const { fingerprint } = await body(req);
+          if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review diff before approving");
+          send(res, 200, integration.approve(item, fingerprint)); return;
+        }
         if (req.method === "POST" && action === "withdraw") { send(res, 200, integration.withdraw(item)); return; }
         if (req.method === "POST" && action === "resolve") {
           if ((await body(req)).acknowledged !== true) throw new Error("Confirm that you inspected the interrupted worktree");

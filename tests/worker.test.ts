@@ -110,7 +110,8 @@ test("a conflict retry tells Pi to reconcile only the card branch with current m
     git("add", "README.md");
     git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "main change");
     const main = git("rev-parse", "main");
-    assert.throws(() => new Integration(board, data).approve(board.getCard(card.id)!), IntegrationConflictError);
+    const integration = new Integration(board, data);
+    assert.throws(() => integration.approve(board.getCard(card.id)!, integration.review(board.getCard(card.id)!).fingerprint), IntegrationConflictError);
     assert.equal(board.listMergeFailures(repo).length, 1);
     renameSync(first.worktree!, `${first.worktree!}-moved`);
     assert.throws(() => worker.start(board.getCard(card.id)!), /worktree is missing/);

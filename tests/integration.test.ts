@@ -2,7 +2,7 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "../server/board.js";
@@ -26,7 +26,9 @@ function fixture() {
   board.attach(run.id, process.pid, worktree);
   board.finish(run.id, "review");
   const integration = new Integration(board, data);
-  return { dir, repo, data, board, card: board.getCard(card.id)!, worktree, integration, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, repo, data, board, card: board.getCard(card.id)!, worktree, integration,
+    approve: (reviewedCard: Card) => integration.approve(reviewedCard, integration.review(reviewedCard).fingerprint),
+    close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("approval commits reviewed work, reconciles with newer main, and only then marks Done", () => {
@@ -39,7 +41,7 @@ test("approval commits reviewed work, reconciles with newer main, and only then 
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "other work");
     const mainBefore = git(item.repo, "rev-parse", "HEAD");
     assert.throws(() => item.board.setStatus(item.card.id, "done"), /without approval/);
-    const done = item.integration.approve(item.card);
+    const done = item.approve(item.card);
     assert.equal(done.status, "done");
     assert.equal(item.board.wasIntegrated(item.card.id), true);
     assert.notEqual(git(item.repo, "rev-parse", "HEAD"), mainBefore);
@@ -61,7 +63,7 @@ test("a conflict preserves the reviewed branch and keeps the card in Review", ()
     git(item.repo, "add", "README.md");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "other work");
     const mainBefore = git(item.repo, "rev-parse", "HEAD");
-    assert.throws(() => item.integration.approve(item.card), error => {
+    assert.throws(() => item.approve(item.card), error => {
       assert.ok(error instanceof IntegrationConflictError);
       assert.deepEqual(error.files, ["README.md"]);
       assert.equal(error.cardId, item.card.id);
@@ -78,7 +80,7 @@ test("a conflict preserves the reviewed branch and keeps the card in Review", ()
     assert.deepEqual(reopened.listMergeFailures(item.repo).map(failure => failure.files), [["README.md"]]);
     assert.deepEqual(reopened.listMergeFailures(item.worktree), []);
     reopened.close();
-    assert.throws(() => item.integration.approve(item.card), IntegrationConflictError);
+    assert.throws(() => item.approve(item.card), IntegrationConflictError);
     item.board.clearMergeFailure(item.card.id);
     assert.deepEqual(item.board.listMergeFailures(item.repo), []);
     assert.equal(git(item.repo, "status", "--porcelain"), "");
@@ -93,13 +95,13 @@ test("reviewed conflict resolution on the card branch can be approved without ch
     git(item.repo, "add", "README.md");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "main change");
     const main = git(item.repo, "rev-parse", "main");
-    assert.throws(() => item.integration.approve(item.card), IntegrationConflictError);
+    assert.throws(() => item.approve(item.card), IntegrationConflictError);
     assert.throws(() => git(item.worktree, "merge", "main"));
     writeFileSync(join(item.worktree, "README.md"), "main change\ncard change\n");
     git(item.worktree, "add", "README.md");
     git(item.worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "resolve conflict on card branch");
     assert.equal(git(item.repo, "rev-parse", "main"), main);
-    assert.equal(item.integration.approve(item.board.getCard(item.card.id)!).status, "done");
+    assert.equal(item.approve(item.board.getCard(item.card.id)!).status, "done");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "main change\ncard change\n");
   } finally { item.close(); }
 });
@@ -128,7 +130,7 @@ test("ignored files in main cannot be overwritten by an approved card", () => {
     git(item.repo, "add", ".gitignore");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "ignore local file");
     writeFileSync(join(item.repo, "local.txt"), "important ignored data\n");
-    assert.throws(() => item.integration.approve(item.card), /merge failed/);
+    assert.throws(() => item.approve(item.card), /merge failed/);
     assert.equal(readFileSync(join(item.repo, "local.txt"), "utf8"), "important ignored data\n");
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
   } finally { item.close(); }
@@ -147,7 +149,7 @@ test("approval resumes after main moved but before the Done status was saved", (
     const preparedHead = git(item.repo, "rev-parse", "HEAD");
     item.board.recordPreparedMerge(item.card.id, run.id, candidate, preparedHead);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
-    assert.equal(item.integration.approve(item.board.getCard(item.card.id)!).status, "done");
+    assert.equal(item.approve(item.board.getCard(item.card.id)!).status, "done");
     assert.equal(git(item.repo, "rev-parse", "HEAD"), preparedHead);
   } finally { item.close(); }
 });
@@ -165,7 +167,7 @@ test("a changed main tip cannot silently complete an interrupted approval", () =
     writeFileSync(join(item.repo, "README.md"), "original\n");
     git(item.repo, "add", "README.md");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "revert work");
-    assert.throws(() => item.integration.approve(item.board.getCard(item.card.id)!), /Main changed after Bakery merged/);
+    assert.throws(() => item.approve(item.board.getCard(item.card.id)!), /Main changed after Bakery merged/);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
   } finally { item.close(); }
 });
@@ -180,7 +182,7 @@ test("outside merges do not count as Bakery's prepared integration", () => {
     const run = item.board.listRuns(item.card.id)[0];
     item.board.recordApproval(item.card.id, run.id, candidate);
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "-s", "ours", "--no-ff", "--no-edit", candidate);
-    assert.throws(() => item.integration.approve(item.board.getCard(item.card.id)!), /merged outside Bakery/);
+    assert.throws(() => item.approve(item.board.getCard(item.card.id)!), /merged outside Bakery/);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n");
   } finally { item.close(); }
@@ -206,16 +208,37 @@ test("withdrawal unlocks revision but cannot hide an integration already on main
   } finally { item.close(); }
 });
 
-test("dirty main blocks approval before staging or committing the card", () => {
+test("unrelated dirty files on main survive approval", () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.repo, "notes.txt"), "baseline\n");
+    git(item.repo, "add", "notes.txt");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "notes");
+    writeFileSync(join(item.repo, "notes.txt"), "local edit\n");
+    writeFileSync(join(item.repo, "scratch.txt"), "untracked local edit\n");
+    writeFileSync(join(item.worktree, "README.md"), "card change\n");
+    assert.equal(item.approve(item.card).status, "done");
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "card change\n");
+    assert.equal(readFileSync(join(item.repo, "notes.txt"), "utf8"), "local edit\n");
+    assert.equal(readFileSync(join(item.repo, "scratch.txt"), "utf8"), "untracked local edit\n");
+    assert.match(git(item.repo, "status", "--porcelain"), /M notes.txt/);
+  } finally { item.close(); }
+});
+
+test("overlapping dirty files on main block approval without losing local edits", () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "card change\n");
     writeFileSync(join(item.repo, "README.md"), "uncommitted main change\n");
-    const cardBefore = git(item.worktree, "rev-parse", "HEAD");
-    assert.throws(() => item.integration.approve(item.card), /Main worktree has changes/);
-    assert.equal(git(item.worktree, "rev-parse", "HEAD"), cardBefore);
+    const mainBefore = git(item.repo, "rev-parse", "HEAD");
+    assert.throws(() => item.approve(item.card), /local changes|overwritten|merge failed/i);
+    assert.equal(git(item.repo, "rev-parse", "HEAD"), mainBefore);
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "uncommitted main change\n");
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
-    assert.equal(item.board.getApproval(item.card.id), undefined);
+    assert.ok(item.board.getApproval(item.card.id));
+    writeFileSync(join(item.repo, "README.md"), "original\n");
+    assert.equal(item.approve(item.card).status, "done");
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "card change\n");
   } finally { item.close(); }
 });
 
@@ -227,8 +250,76 @@ test("a legacy Done card with a reviewed run returns to Review for approval", ()
     const db = new DatabaseSync(join(item.dir, "board.sqlite"));
     db.prepare("UPDATE cards SET status='done' WHERE id=?").run(item.card.id); db.close();
     assert.equal(item.board.setStatus(item.card.id, "ready").status, "review");
-    assert.equal(item.integration.approve(item.board.getCard(item.card.id)!).status, "done");
+    assert.equal(item.approve(item.board.getCard(item.card.id)!).status, "done");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "card change\n");
     assert.ok(existsSync(item.worktree));
+  } finally { item.close(); }
+});
+
+test("review patches include untracked files and approval rejects changes after inspection", () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.worktree, "README.md"), "reviewed change\n");
+    writeFileSync(join(item.worktree, "new.txt"), "untracked\n");
+    const head = git(item.worktree, "rev-parse", "HEAD");
+    const review = item.integration.review(item.card);
+    assert.deepEqual(review.files.map(file => file.path), ["README.md", "new.txt"]);
+    assert.match(review.files[0].patch, /\+reviewed change/);
+    assert.match(review.files[1].patch, /\+untracked/);
+    assert.equal(git(item.worktree, "status", "--porcelain").includes("?? new.txt"), true);
+    writeFileSync(join(item.worktree, "new.txt"), "changed after review\n");
+    assert.throws(() => item.integration.approve(item.card, review.fingerprint), /changed since review/);
+    assert.equal(git(item.worktree, "rev-parse", "HEAD"), head);
+    assert.equal(item.board.getApproval(item.card.id), undefined);
+    const fresh = item.integration.review(item.card);
+    assert.notEqual(fresh.fingerprint, review.fingerprint);
+    assert.equal(item.integration.approve(item.card, fresh.fingerprint).status, "done");
+    assert.equal(readFileSync(join(item.repo, "new.txt"), "utf8"), "changed after review\n");
+  } finally { item.close(); }
+});
+
+test("a pre-commit hook cannot merge content absent from the reviewed diff", () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.worktree, "README.md"), "reviewed change\n");
+    const hook = join(item.repo, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, "#!/bin/sh\nprintf 'hook changed this\\n' > README.md\ngit add README.md\n");
+    chmodSync(hook, 0o755);
+    const reviewed = item.integration.review(item.card);
+    assert.match(reviewed.files[0].patch, /reviewed change/);
+    assert.throws(() => item.integration.approve(item.card, reviewed.fingerprint), /changed since review/);
+    assert.equal(item.board.getCard(item.card.id)?.status, "review");
+    assert.equal(item.board.getApproval(item.card.id), undefined);
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n");
+    assert.equal(item.integration.approve(item.card, item.integration.review(item.card).fingerprint).status, "done");
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "hook changed this\n");
+  } finally { item.close(); }
+});
+
+test("main advancing during card commit requires review against its new tip", () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.worktree, "README.md"), "reviewed change\n");
+    const hook = join(item.repo, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, `#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR\ngit -C '${item.repo}' -c core.hooksPath=/dev/null -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm 'other change'\n`);
+    chmodSync(hook, 0o755);
+    const reviewed = item.integration.review(item.card), mainBefore = git(item.repo, "rev-parse", "main");
+    assert.throws(() => item.integration.approve(item.card, reviewed.fingerprint), /changed since review/);
+    assert.notEqual(git(item.repo, "rev-parse", "main"), mainBefore);
+    assert.equal(item.board.getCard(item.card.id)?.status, "review");
+    assert.equal(item.integration.approve(item.card, item.integration.review(item.card).fingerprint).status, "done");
+  } finally { item.close(); }
+});
+
+test("moving main after review requires a fresh diff before approval", () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.worktree, "README.md"), "card change\n");
+    const review = item.integration.review(item.card);
+    writeFileSync(join(item.repo, "other.txt"), "other change\n");
+    git(item.repo, "add", "other.txt");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "other work");
+    assert.throws(() => item.integration.approve(item.card, review.fingerprint), /changed since review/);
+    assert.equal(item.integration.approve(item.card, item.integration.review(item.card).fingerprint).status, "done");
   } finally { item.close(); }
 });
