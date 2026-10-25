@@ -42,7 +42,10 @@ Settings lets you enable automatic pickup per repository and select 1–4 concur
 ```sh
 npm test
 npm run build
+npm run format:check
 ```
+
+`npm run build` runs the formatter check before TypeScript and Vite. `npm run format` fixes the board, card details, review, and attempts modules. The check covers those frontend modules as they are split out; it does not yet cover every server or test file. Consistent formatting reduces broad same-line edits, but cannot prevent two branches from editing the same import.
 
 Tests launch a fake offline Pi command and exercise local Git integration in temporary repositories. They do not call a model, test live provider auth, or run tests in repositories you add to Bakery. Manual approval is your verification decision; it does not run checks. Unattended review uses the configured repository command before and after its tentative merge. External CI and token/cost budgets are not implemented.
 
