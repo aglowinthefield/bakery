@@ -69,6 +69,21 @@ test("turning off pickup blocks new runs but leaves already running Pi alone", a
   } finally { await item.close(); }
 });
 
+test("a failed automatic run pauses pickup before another card starts", async () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.dir, "fake-pi"), "#!/bin/sh\nexit 2\n");
+    const first = item.card("Will fail"), second = item.card("Must wait");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(first.id)?.status === "failed");
+    item.pickup.tick();
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, false);
+    assert.match(item.board.getBoard(item.repoBoard.id)?.autoPickupError ?? "", /automatic run failed/i);
+    assert.equal(item.board.listRuns(second.id).length, 0);
+  } finally { await item.close(); }
+});
+
 test("a rolling six-start limit prevents unbounded model spend and persists after reopening", async () => {
   const item = fixture();
   try {
