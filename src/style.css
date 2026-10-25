@@ -25,7 +25,13 @@
   --diff-remove-background: #3b2528;
   --diff-remove-foreground: #f0b5b5;
   --diff-meta-background: #282c34;
-  --review-status: #b8c4b8;
+  --status-triage: #8b919a;
+  --status-ready: #d4ccb4;
+  --status-running: #b4bcc4;
+  --status-review: #b8c4b8;
+  --status-failed: #cdacac;
+  --status-interrupted: #c6ad89;
+  --status-done: #9aa59d;
   --radius: 0.75rem;
 }
 /* Compline palette by Joshua Blais: https://github.com/joshuablais/compline#palette */
@@ -54,8 +60,22 @@
   --diff-remove-background: #392e32;
   --diff-remove-foreground: #d9baba;
   --diff-meta-background: #282c34;
-  --review-status: #b4c4bc;
+  --status-triage: #adb3b9;
+  --status-ready: #d4ccb4;
+  --status-running: #b4bcc4;
+  --status-review: #b4c4bc;
+  --status-failed: #d9baba;
+  --status-interrupted: #c9b597;
+  --status-done: #99a49c;
 }
+[data-status="triage"] { --lane-status-color: var(--status-triage); }
+[data-status="ready"] { --lane-status-color: var(--status-ready); }
+[data-status="running"] { --lane-status-color: var(--status-running); }
+[data-status="review"] { --lane-status-color: var(--status-review); }
+[data-status="failed"] { --lane-status-color: var(--status-failed); }
+[data-status="interrupted"] { --lane-status-color: var(--status-interrupted); }
+[data-status="done"] { --lane-status-color: var(--status-done); }
+.lane-status-dot { background-color: var(--lane-status-color); }
 :root[data-theme="compline"] :is(button, input, textarea, select, a):focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;

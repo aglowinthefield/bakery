@@ -37,49 +37,41 @@ const columns: {
   id: Status;
   label: string;
   description: string;
-  dot: string;
 }[] = [
   {
     id: "triage",
     label: "Triage",
     description: "Awaiting approval for work",
-    dot: "bg-muted-foreground",
   },
   {
     id: "ready",
     label: "Ready",
     description: "Can start a Pi run",
-    dot: "bg-primary",
   },
   {
     id: "running",
     label: "Running",
     description: "Pi is working",
-    dot: "bg-[#b4bcc4]",
   },
   {
     id: "review",
     label: "Review",
     description: "Inspect, then approve and merge",
-    dot: "bg-[var(--review-status)]",
   },
   {
     id: "failed",
     label: "Failed",
     description: "Needs another attempt",
-    dot: "bg-destructive",
   },
   {
     id: "interrupted",
     label: "Interrupted",
     description: "Inspect the process",
-    dot: "bg-[#d4ccb4]",
   },
   {
     id: "done",
     label: "Done",
     description: "Merged or closed without a run",
-    dot: "bg-muted-foreground",
   },
 ];
 function App() {
@@ -468,6 +460,7 @@ function App() {
                 <section
                   key={column.id}
                   aria-label={`${column.label} lane`}
+                  data-status={column.id}
                   className={`${collapsed ? "w-12" : "w-[280px]"} shrink-0`}
                 >
                   {collapsed ? (
@@ -479,6 +472,10 @@ function App() {
                       className="flex min-h-48 w-full flex-col items-center gap-3 rounded-lg border border-border bg-card px-2 py-3 text-sm hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <ChevronRight size={16} />
+                      <span
+                        aria-hidden="true"
+                        className="lane-status-dot size-2.5 shrink-0 rounded-full"
+                      />
                       <span className="[writing-mode:vertical-rl]">
                         {column.label}
                       </span>
@@ -489,7 +486,10 @@ function App() {
                   ) : (
                     <>
                       <div className="mb-2 flex min-h-6 items-center gap-2 px-1">
-                        <span className={`size-2 rounded-full ${column.dot}`} />
+                        <span
+                          aria-hidden="true"
+                          className="lane-status-dot size-2.5 shrink-0 rounded-full"
+                        />
                         <h2 className="text-sm font-semibold">
                           {column.label}
                         </h2>
