@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join, extname, isAbsolute, resolve } from "node:path";
 import { Board } from "./board.js";
 import { Worker } from "./worker.js";
-import { Integration } from "./integration.js";
+import { Integration, IntegrationConflictError } from "./integration.js";
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -77,7 +77,13 @@ const server = createServer(async (req, res) => {
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|approve|approval|withdraw))?)?$/);
+    const conflictsRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflicts$/);
+    if (conflictsRoute && req.method === "GET") {
+      const repoBoard = board.getBoard(conflictsRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      send(res, 200, board.listMergeFailures(repoBoard.repo)); return;
+    }
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|approve|approval|withdraw|conflict))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -89,6 +95,7 @@ const server = createServer(async (req, res) => {
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
+        if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
         if (req.method === "POST" && action === "start") { send(res, 202, worker.start(item)); return; }
         if (req.method === "POST" && action === "approve") { send(res, 200, integration.approve(item)); return; }
@@ -119,6 +126,10 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { "Content-Type": mime[extname(target)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff" });
     res.end(readFileSync(target));
   } catch (error) {
+    if (error instanceof IntegrationConflictError) {
+      send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details });
+      return;
+    }
     const message = error instanceof Error ? error.message : "Unknown error";
     send(res, /not found/i.test(message) ? 404 : 400, { error: message });
   }

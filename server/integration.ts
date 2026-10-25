@@ -9,7 +9,14 @@ function git(repo: string, ...args: string[]): string {
   } catch (error) {
     const result = error as { stderr?: Buffer; stdout?: Buffer };
     const detail = (result.stderr?.toString() || result.stdout?.toString() || "Git command failed").trim();
-    throw new Error(`${args[0]} failed: ${detail.slice(0, 600)}`);
+    const operation = args[0] === "-c" ? args.find(arg => arg === "merge" || arg === "commit") ?? "git" : args[0];
+    throw new Error(`${operation} failed: ${detail.slice(0, 4000)}`);
+  }
+}
+export class IntegrationConflictError extends Error {
+  readonly code = "merge_conflict";
+  constructor(readonly cardId: string, readonly files: string[], readonly details: string) {
+    super("Changes conflict with current main");
   }
 }
 function clean(repo: string) { return git(repo, "status", "--porcelain") === ""; }
@@ -78,8 +85,16 @@ export class Integration {
       try {
         git(scratch, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-ff", "--no-edit", approved.candidate);
       } catch (error) {
-        // No integration was prepared or published. Keep the branch commit, but allow another run to revise it.
+        // No integration was published. Read the scratch index before removing it so the UI can name the conflicts.
+        let files: string[] = [];
+        try { files = [...new Set(git(scratch, "ls-files", "-u", "-z").split("\0").filter(Boolean).map(entry => entry.slice(entry.indexOf("\t") + 1)))]; }
+        catch { /* Keep the original Git failure if the scratch index cannot be read. */ }
         this.board.cancelApproval(card.id, run.id);
+        if (files.length) {
+          const details = error instanceof Error ? error.message : String(error);
+          this.board.recordMergeFailure(card.id, files, details);
+          throw new IntegrationConflictError(card.id, files, details);
+        }
         throw error;
       }
       const merged = git(scratch, "rev-parse", "HEAD");

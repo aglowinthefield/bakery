@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "../server/board.js";
-import { Integration } from "../server/integration.js";
+import { Integration, IntegrationConflictError } from "../server/integration.js";
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
@@ -48,6 +48,7 @@ test("approval commits reviewed work, reconciles with newer main, and only then 
     assert.equal(readFileSync(join(item.repo, "new.txt"), "utf8"), "new file\n");
     assert.equal(git(item.repo, "status", "--porcelain"), "");
     assert.equal(git(item.worktree, "status", "--porcelain"), "");
+    assert.deepEqual(item.board.listMergeFailures(item.repo), []);
     assert.equal(item.board.setStatus(item.card.id, "ready").status, "ready");
   } finally { item.close(); }
 });
@@ -60,14 +61,37 @@ test("a conflict preserves the reviewed branch and keeps the card in Review", ()
     git(item.repo, "add", "README.md");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "other work");
     const mainBefore = git(item.repo, "rev-parse", "HEAD");
-    assert.throws(() => item.integration.approve(item.card), /merge failed/);
+    assert.throws(() => item.integration.approve(item.card), error => {
+      assert.ok(error instanceof IntegrationConflictError);
+      assert.deepEqual(error.files, ["README.md"]);
+      assert.equal(error.cardId, item.card.id);
+      assert.match(error.details, /CONFLICT/);
+      return true;
+    });
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
     assert.equal(git(item.repo, "rev-parse", "HEAD"), mainBefore);
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "main change\n");
     assert.equal(readFileSync(join(item.worktree, "README.md"), "utf8"), "card change\n");
     assert.equal(item.board.getApproval(item.card.id), undefined);
-    assert.throws(() => item.integration.approve(item.card), /merge failed/);
+    assert.deepEqual(item.board.listMergeFailures(item.repo).map(failure => failure.files), [["README.md"]]);
+    const reopened = new Board(join(item.dir, "board.sqlite"));
+    assert.deepEqual(reopened.listMergeFailures(item.repo).map(failure => failure.files), [["README.md"]]);
+    assert.deepEqual(reopened.listMergeFailures(item.worktree), []);
+    reopened.close();
+    assert.throws(() => item.integration.approve(item.card), IntegrationConflictError);
+    item.board.clearMergeFailure(item.card.id);
+    assert.deepEqual(item.board.listMergeFailures(item.repo), []);
     assert.equal(git(item.repo, "status", "--porcelain"), "");
+  } finally { item.close(); }
+});
+
+test("starting a new run clears stale merge diagnostics", () => {
+  const item = fixture();
+  try {
+    item.board.recordMergeFailure(item.card.id, ["README.md"], "old conflict");
+    assert.equal(item.board.listMergeFailures(item.repo).length, 1);
+    item.board.claim(item.card.id);
+    assert.deepEqual(item.board.listMergeFailures(item.repo), []);
   } finally { item.close(); }
 });
 
