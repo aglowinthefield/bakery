@@ -483,7 +483,7 @@ function App() {
                     </button>
                   ) : (
                     <>
-                      <div className="mb-5 flex items-center gap-2 px-1">
+                      <div className="mb-2 flex min-h-6 items-center gap-2 px-1">
                         <span className={`size-2 rounded-full ${column.dot}`} />
                         <h2 className="text-sm font-semibold">
                           {column.label}
@@ -503,7 +503,7 @@ function App() {
                           </button>
                         )}
                       </div>
-                      <div className="mb-4 px-1 text-xs text-muted-foreground">
+                      <div className="mb-2 px-1 text-[11px] leading-[14px] text-muted-foreground">
                         {column.description}
                       </div>
                       <div className="space-y-3">
