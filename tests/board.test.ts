@@ -118,6 +118,33 @@ test("existing cards become repository boards without losing runs", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("older approval tables gain prepared merge columns without losing pending approvals", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const path = join(dir, "board.sqlite"), first = new Board(path);
+    const closed = first.createCard({ title: "Collapse", body: "", repo: dir });
+    const closedRun = first.claim(closed.id);
+    first.finish(closedRun.id, "review");
+    const pending = first.createCard({ title: "Pending", body: "", repo: dir });
+    const pendingRun = first.claim(pending.id);
+    first.finish(pendingRun.id, "review");
+    first.close();
+    const legacy = new DatabaseSync(path);
+    legacy.exec("DROP TABLE approvals; CREATE TABLE approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL)");
+    legacy.prepare("INSERT INTO approvals VALUES (?, ?, ?)").run(pending.id, pendingRun.id, "old-commit");
+    legacy.prepare("UPDATE cards SET status='done' WHERE id=?").run(closed.id);
+    legacy.close();
+
+    const upgraded = new Board(path);
+    assert.equal(upgraded.setStatus(closed.id, "ready").status, "review");
+    assert.deepEqual({ ...upgraded.getApproval(pending.id) }, { cardId: pending.id, runId: pendingRun.id, candidate: "old-commit", preparedHead: null, merged: 0 });
+    upgraded.close();
+    const reopened = new Board(path);
+    assert.equal(reopened.getApproval(pending.id)?.candidate, "old-commit");
+    reopened.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("existing repository boards gain removal support on upgrade", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {

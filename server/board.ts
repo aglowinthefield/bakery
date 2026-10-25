@@ -23,6 +23,9 @@ export class Board {
     if (!(this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).some(column => column.name === "archived")) {
       this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     }
+    const approvalColumns = new Set((this.db.prepare("PRAGMA table_info(approvals)").all() as { name: string }[]).map(column => column.name));
+    if (!approvalColumns.has("preparedHead")) this.db.exec("ALTER TABLE approvals ADD COLUMN preparedHead TEXT");
+    if (!approvalColumns.has("merged")) this.db.exec("ALTER TABLE approvals ADD COLUMN merged INTEGER NOT NULL DEFAULT 0");
     // Preserve old cards and runs. A stored repository path is never reinterpreted against today's cwd.
     for (const row of this.db.prepare("SELECT DISTINCT repo FROM cards WHERE repo NOT IN (SELECT repo FROM boards)").all() as { repo: string }[]) this.addRepo(row.repo);
     // After a process restart, never infer success or schedule a second worker.
