@@ -70,3 +70,43 @@ test("changed files open their own patches and focus the heading without changin
     assert.equal(requests.filter(request => request.endsWith("/review")).length, 1);
   } finally { await page.close(); }
 });
+
+test("the side panel switches cards without leaking the previous card's review or attempts", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    const cards = [
+      { id: "review", title: "Review card", status: "review" },
+      { id: "ready", title: "Ready card", status: "ready" },
+    ].map(card => ({ ...card, body: "", repo: "/tmp/repo", source: "manual", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }));
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side" },
+      "/api/boards/board/cards": cards,
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/review/runs": [{ id: "run", attempt: 1, status: "review", output: "Old output", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
+      "/api/boards/board/cards/review/approval": { pending: false },
+      "/api/boards/board/cards/review/comments": [],
+      "/api/boards/board/cards/review/auto-review": [],
+      "/api/boards/board/cards/review/review": { fingerprint: "a".repeat(64), files: [{ path: "src/old.ts", patch: "@@ -0,0 +1 @@\n+old\n" }] },
+      "/api/boards/board/cards/ready/runs": [],
+      "/api/boards/board/cards/ready/approval": { pending: false },
+      "/api/boards/board/cards/ready/comments": [],
+      "/api/boards/board/cards/ready/auto-review": [],
+    };
+    assert.ok(path in data, `Unexpected API request: ${path}`);
+    await route.fulfill({ json: data[path] });
+  });
+  try {
+    await page.goto(url);
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByText("Changed files (1)").waitFor();
+    await page.getByText("Old output").waitFor();
+    await page.getByRole("button", { name: /Ready card/ }).click();
+    await page.getByRole("heading", { name: "Ready card" }).waitFor();
+    assert.equal(await page.getByText("Old output").count(), 0);
+    assert.equal(await page.getByRole("heading", { name: "Review diff" }).count(), 0);
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByText("Changed files (1)").waitFor();
+  } finally { await page.close(); }
+});
