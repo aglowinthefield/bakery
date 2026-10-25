@@ -11,6 +11,7 @@ export class Worker {
   private active = new Map<string, ChildProcess>();
   constructor(private board: Board, private dataDir: string, private piBin = "pi") {}
   start(card: Card): Run {
+    if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
     const root = git(card.repo, "rev-parse", "--show-toplevel");
     if (realpathSync(root) !== realpathSync(card.repo)) throw new Error("Workspace must be the root of a Git repository");

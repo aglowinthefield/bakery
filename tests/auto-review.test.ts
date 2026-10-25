@@ -26,6 +26,7 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
   const integration = new Integration(board, data), auto = new AutoReview(board, integration, piBin);
   function reviewedCard() {
     const card = board.createCard({ repo, title: "Add a new line", body: "Include a regression test" });
+    board.setStatus(card.id, "ready");
     const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
     git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
     board.attach(run.id, process.pid, worktree);

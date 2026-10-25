@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 
-export type CardStatus = "ready" | "running" | "review" | "failed" | "interrupted" | "done";
+export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done";
 export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null };
 export type BakerySettings = { confirmRunStart: boolean; cardDetailsLayout: "dialog" | "side" };
 type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null };
@@ -171,7 +171,7 @@ export class Board {
   createCard(input: { title: string; body: string; repo: string }): Card {
     const id = randomUUID(), time = now();
     this.addRepo(input.repo);
-    this.db.prepare("INSERT INTO cards VALUES (?, ?, ?, ?, 'ready', 'manual', ?, ?)").run(id, input.title, input.body, input.repo, time, time);
+    this.db.prepare("INSERT INTO cards VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?)").run(id, input.title, input.body, input.repo, time, time);
     return this.getCard(id)!;
   }
   updateCard(id: string, input: { title: string; body: string; repo: string }): Card {
@@ -182,11 +182,12 @@ export class Board {
     this.db.prepare("UPDATE cards SET title=?, body=?, updatedAt=? WHERE id=?").run(input.title, input.body, now(), id);
     return this.getCard(id)!;
   }
-  setStatus(id: string, status: "ready" | "done"): Card {
+  setStatus(id: string, status: "triage" | "ready" | "done"): Card {
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
     if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge");
+    if (status === "triage" && (card.status !== "ready" || this.listRuns(id).length)) throw new Error("Only unstarted Ready cards can move to Triage");
     if (status === "done" && this.listRuns(id).length) throw new Error("Cards with run work cannot be marked Done without approval and integration");
     // Recover cards closed by the old status-only action without launching another Pi run.
     if (status === "ready" && card.status === "done" && this.listRuns(id)[0]?.status === "review" && !this.wasIntegrated(id)) {
@@ -310,6 +311,7 @@ export class Board {
       if (card.status === "running") throw new Error("Card already has an active run");
       if (card.status === "interrupted") throw new Error("Resolve the interrupted process before retrying");
       if (card.status === "done") throw new Error("Reopen this card before starting a run");
+      if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
       if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry Approve and merge");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       const id = randomUUID(), sessionId = `bakery-${cardId}`;
