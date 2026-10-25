@@ -1,0 +1,41 @@
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import css from "highlight.js/lib/languages/css";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import markdown from "highlight.js/lib/languages/markdown";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
+
+for (const [name, grammar] of Object.entries({ bash, css, javascript, json, markdown, typescript, xml, yaml })) hljs.registerLanguage(name, grammar);
+
+const languages: Record<string, string> = {
+  ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+  css: "css", scss: "css", json: "json", md: "markdown", mdx: "markdown", html: "xml", svg: "xml", xml: "xml",
+  sh: "bash", bash: "bash", yml: "yaml", yaml: "yaml",
+};
+export function languageForPath(path: string): string | null {
+  return languages[path.split(".").at(-1)?.toLowerCase() ?? ""] ?? null;
+}
+
+export type DiffLine = { kind: "meta" | "add" | "remove" | "context"; code: string; prefix: string };
+export function parseDiff(patch: string): DiffLine[] {
+  if (!patch) return [];
+  let inHunk = false;
+  return patch.split("\n").map(line => {
+    if (line.startsWith("diff --git ")) inHunk = false;
+    if (line.startsWith("@@")) { inHunk = true; return { kind: "meta", code: line, prefix: "" }; }
+    if (!inHunk || line.startsWith("\\ No newline at end of file")) return { kind: "meta", code: line, prefix: "" };
+    const kind = line[0] === "+" ? "add" : line[0] === "-" ? "remove" : line[0] === " " ? "context" : "meta";
+    return kind === "meta" ? { kind, code: line, prefix: "" } : { kind, code: line.slice(1), prefix: line[0] };
+  });
+}
+
+function escapeHtml(code: string): string {
+  return code.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
+}
+export function highlightDiffCode(code: string, path: string): string {
+  const language = languageForPath(path);
+  return language ? hljs.highlight(code, { language, ignoreIllegals: true }).value : escapeHtml(code);
+}

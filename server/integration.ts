@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "./board.js";
 
-function git(repo: string, ...args: string[]): string {
+function gitCommand(repo: string, args: string[], index?: string, raw = false): string {
   try {
-    return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    const output = execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: index ? { ...process.env, GIT_INDEX_FILE: index } : process.env, maxBuffer: 8 * 1024 * 1024 });
+    return raw ? output : output.trim();
   } catch (error) {
     const result = error as { stderr?: Buffer; stdout?: Buffer };
     const detail = (result.stderr?.toString() || result.stdout?.toString() || "Git command failed").trim();
@@ -13,6 +16,8 @@ function git(repo: string, ...args: string[]): string {
     throw new Error(`${operation} failed: ${detail.slice(0, 4000)}`);
   }
 }
+function git(repo: string, ...args: string[]): string { return gitCommand(repo, args); }
+export type ReviewDiff = { fingerprint: string; files: { path: string; patch: string }[] };
 export class IntegrationConflictError extends Error {
   readonly code = "merge_conflict";
   constructor(readonly cardId: string, readonly files: string[], readonly details: string) {
@@ -33,6 +38,45 @@ function isAncestor(repo: string, ancestor: string, descendant: string) {
 export class Integration {
   constructor(private board: Board, private dataDir: string) {}
 
+  private location(card: Card) {
+    const run = this.board.listRuns(card.id)[0];
+    if (card.status !== "review" || !run || run.status !== "review" || !run.worktree) throw new Error("Only a reviewed run can be inspected or approved");
+    const repo = card.repo, worktree = join(this.dataDir, "worktrees", card.id);
+    if (!existsSync(worktree) || realpathSync(worktree) !== realpathSync(run.worktree)) throw new Error("Card worktree is missing or has moved");
+    if (realpathSync(git(repo, "rev-parse", "--show-toplevel")) !== realpathSync(repo) ||
+      realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree) ||
+      realpathSync(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
+      realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")) ||
+      git(worktree, "symbolic-ref", "--short", "HEAD") !== `bakery/${card.id}`) throw new Error("Card worktree is not on its expected branch in this repository");
+    if (git(worktree, "ls-files", "-u")) throw new Error("Resolve conflicts in the card worktree before review");
+    return { repo, worktree, run };
+  }
+
+  private snapshot(card: Card, includeFiles: boolean) {
+    const { repo, worktree, run } = this.location(card);
+    const main = git(repo, "rev-parse", "main"), branch = git(worktree, "rev-parse", "HEAD");
+    const base = includeFiles ? git(worktree, "merge-base", main, branch) : "";
+    const temp = mkdtempSync(join(tmpdir(), "bakery-review-"));
+    try {
+      const index = join(temp, "index");
+      gitCommand(worktree, ["read-tree", "HEAD"], index);
+      gitCommand(worktree, ["add", "-A"], index);
+      const tree = gitCommand(worktree, ["write-tree"], index);
+      const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, branch, tree })).digest("hex");
+      if (!includeFiles) return { fingerprint, tree, main, files: [] as ReviewDiff["files"] };
+      const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
+      if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Bakery");
+      const files = paths.map(path => ({ path, patch: git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", base, tree, "--", path) }));
+      if (files.reduce((size, file) => size + file.patch.length, 0) > 2_000_000) throw new Error("Review diff exceeds 2 MB; inspect the worktree outside Bakery");
+      return { fingerprint, tree, main, files };
+    } finally { rmSync(temp, { recursive: true, force: true }); }
+  }
+
+  review(card: Card): ReviewDiff {
+    const { fingerprint, files } = this.snapshot(card, true);
+    return { fingerprint, files };
+  }
+
   withdraw(card: Card): Card {
     const approval = this.board.getApproval(card.id);
     if (card.status !== "review" || !approval) throw new Error("No pending approval to withdraw");
@@ -41,31 +85,26 @@ export class Integration {
     return this.board.getCard(card.id)!;
   }
 
-  approve(card: Card): Card {
-    const run = this.board.listRuns(card.id)[0];
-    if (card.status !== "review" || !run || run.status !== "review" || !run.worktree) throw new Error("Only a reviewed run can be approved");
-    const repo = card.repo, worktree = join(this.dataDir, "worktrees", card.id);
-    if (!existsSync(worktree) || realpathSync(worktree) !== realpathSync(run.worktree)) throw new Error("Card worktree is missing or has moved");
-    if (realpathSync(git(repo, "rev-parse", "--show-toplevel")) !== realpathSync(repo) ||
-      realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree) ||
-      realpathSync(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
-      realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")) ||
-      git(worktree, "symbolic-ref", "--short", "HEAD") !== `bakery/${card.id}`) throw new Error("Card worktree is not on its expected branch in this repository");
+  approve(card: Card, reviewedFingerprint: string): Card {
+    const { repo, worktree, run } = this.location(card);
     if (git(repo, "symbolic-ref", "--short", "HEAD") !== "main") throw new Error("Check out main at the repository root before approving");
-    if (!clean(repo)) throw new Error("Main worktree has changes; commit or move them before approving");
-    if (git(worktree, "ls-files", "-u")) throw new Error("Resolve conflicts in the card worktree before approving");
+    const localStatus = gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true);
+    const inspected = this.snapshot(card, false);
+    if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
 
     let approved = this.board.getApproval(card.id);
     if (approved) {
       if (approved.runId !== run.id || git(worktree, "rev-parse", "HEAD") !== approved.candidate || !clean(worktree)) throw new Error("Card worktree changed after approval; inspect it before retrying");
     } else {
       git(worktree, "add", "-A");
+      if (git(worktree, "write-tree") !== inspected.tree) throw new Error("Worktree changed since review; refresh the diff before approving");
       if (git(worktree, "diff", "--cached", "--name-only")) {
         git(worktree, "diff", "--cached", "--check");
         git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`);
       }
       if (!clean(worktree)) throw new Error("Card worktree changed while committing; inspect it and retry");
       const candidate = git(worktree, "rev-parse", "HEAD");
+      if (git(worktree, "rev-parse", "HEAD^{tree}") !== inspected.tree) throw new Error("Committed work changed since review; refresh the diff before approving");
       // A card must contribute a commit, not merely close an unchanged run.
       if (!git(repo, "rev-list", "main.." + candidate)) throw new Error("This card has no unmerged commits to approve");
       approved = this.board.recordApproval(card.id, run.id, candidate);
@@ -77,6 +116,7 @@ export class Integration {
     }
     if (isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Bakery; inspect main before closing this card");
     const base = git(repo, "rev-parse", "main");
+    if (base !== inspected.main) throw new Error("Main changed since review; refresh the diff before approving");
     const directory = join(this.dataDir, "integrations");
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const scratch = mkdtempSync(join(directory, `${card.id}-`));
@@ -99,10 +139,10 @@ export class Integration {
       }
       const merged = git(scratch, "rev-parse", "HEAD");
       git(repo, "diff", "--check", base, merged);
-      if (git(repo, "rev-parse", "main") !== base || !clean(repo)) throw new Error("Main changed during approval; retry to reconcile with its new tip");
+      if (git(repo, "rev-parse", "main") !== base || gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true) !== localStatus) throw new Error("Main or its local changes changed during approval; retry before merging");
       this.board.recordPreparedMerge(card.id, run.id, approved.candidate, merged);
       git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
-      if (!clean(repo)) throw new Error("Main was merged but has new local changes; inspect it and retry approval");
+      // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.
       return this.board.completeApproval(card.id, run.id, approved.candidate);
     } finally {
       // Only remove Bakery's temporary integration checkout. Keep the card worktree on every failure.
