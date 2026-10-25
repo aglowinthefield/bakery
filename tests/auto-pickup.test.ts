@@ -17,7 +17,7 @@ function fixture() {
   writeFileSync(fakePi, `#!/bin/sh\nwhile [ ! -f '${join(dir, "release")}' ]; do sleep 0.05; done\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`); chmodSync(fakePi, 0o755);
   const board = new Board(join(dir, "board.sqlite")), repoBoard = board.addRepo(repo);
   const worker = new Worker(board, data, fakePi), pickup = new AutoPickup(board, worker);
-  const card = (title: string) => board.createCard({ title, body: "Small change", repo });
+  const card = (title: string) => board.setStatus(board.createCard({ title, body: "Small change", repo }).id, "ready");
   return { dir, repo, board, repoBoard, worker, pickup, card, release: () => writeFileSync(join(dir, "release"), "ok"), close: async () => { await worker.shutdown(); board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 async function waitFor(predicate: () => boolean) {
