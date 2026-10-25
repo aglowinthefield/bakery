@@ -21,6 +21,7 @@ function fixture() {
   git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
   const board = new Board(join(dir, "board.sqlite"));
   const card = board.createCard({ title: "Review work", body: "", repo });
+  board.setStatus(card.id, "ready");
   const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
   git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
   board.attach(run.id, process.pid, worktree);

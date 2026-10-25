@@ -12,12 +12,32 @@ test("manual cards persist and only one active attempt may be claimed", () => {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Fix the feed", body: "Reproduce first", repo: dir });
     assert.equal(board.listCards()[0]?.title, "Fix the feed");
+    assert.equal(card.status, "triage");
+    assert.throws(() => board.claim(card.id), /Move.*Ready/);
+    assert.equal(board.listRuns(card.id).length, 0);
+    assert.equal(board.setStatus(card.id, "ready").status, "ready");
     const run = board.claim(card.id);
     assert.equal(run.attempt, 1);
     assert.throws(() => board.claim(card.id), /active run/);
     board.finish(run.id, "failed", "Worker exited");
     assert.equal(board.claim(card.id).attempt, 2);
     board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("existing Ready cards stay Ready when the database opens", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const path = join(dir, "board.sqlite"), first = new Board(path);
+    const card = first.createCard({ title: "Already approved", body: "", repo: dir });
+    first.close();
+    const legacy = new DatabaseSync(path);
+    legacy.prepare("UPDATE cards SET status='ready' WHERE id=?").run(card.id);
+    legacy.close();
+    const upgraded = new Board(path);
+    assert.equal(upgraded.getCard(card.id)?.status, "ready");
+    assert.equal(upgraded.claim(card.id).attempt, 1);
+    upgraded.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -46,6 +66,7 @@ test("repository boards retain cards and keep attempted work in its original rep
     assert.deepEqual(first.listRepos(), [alpha, beta]);
     assert.deepEqual(first.listCards(alpha).map(item => item.title), ["Alpha work"]);
     assert.deepEqual(first.listCards(beta).map(item => item.title), ["Beta work"]);
+    first.setStatus(card.id, "ready");
     const run = first.claim(card.id);
     first.finish(run.id, "failed");
     assert.throws(() => first.updateCard(card.id, { title: "Moved", body: "", repo: beta }), /repository/i);
@@ -75,6 +96,7 @@ test("edit a board before attempts and remove it without deleting cards", () => 
     assert.deepEqual(reopened.listBoards(), []);
     assert.equal(reopened.addRepo(root).id, old.id);
     assert.equal(reopened.listCards(root)[0]?.id, card.id);
+    reopened.setStatus(card.id, "ready");
     const run = reopened.claim(card.id);
     reopened.finish(run.id, "review");
     assert.throws(() => reopened.renameBoard(old.id, oldRoot), /attempt/);
@@ -88,6 +110,7 @@ test("cannot remove a board while a run is active or interrupted", () => {
     const path = join(dir, "board.sqlite"), repo = join(dir, "repo");
     const board = new Board(path), item = board.addRepo(repo);
     const card = board.createCard({ title: "In progress", body: "", repo });
+    board.setStatus(card.id, "ready");
     board.claim(card.id);
     assert.throws(() => board.archiveBoard(item.id), /running or interrupted/);
     board.close();
@@ -132,9 +155,11 @@ test("older approval tables gain prepared merge columns without losing pending a
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
     const closed = first.createCard({ title: "Collapse", body: "", repo: dir });
+    first.setStatus(closed.id, "ready");
     const closedRun = first.claim(closed.id);
     first.finish(closedRun.id, "review");
     const pending = first.createCard({ title: "Pending", body: "", repo: dir });
+    first.setStatus(pending.id, "ready");
     const pendingRun = first.claim(pending.id);
     first.finish(pendingRun.id, "review");
     first.close();
@@ -186,6 +211,7 @@ test("restart preserves interrupted work as blocked rather than dispatching it a
     const path = join(dir, "board.sqlite");
     const first = new Board(path);
     const card = first.createCard({ title: "A ticket", body: "", repo: dir });
+    first.setStatus(card.id, "ready");
     first.claim(card.id);
     first.close();
     const second = new Board(path);

@@ -113,7 +113,7 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "POST" && action === "status") {
           const { status } = await body(req);
-          if (status !== "ready" && status !== "done") throw new Error("Status must be ready or done");
+          if (status !== "triage" && status !== "ready" && status !== "done") throw new Error("Status must be triage, ready, or done");
           send(res, 200, board.setStatus(id, status)); return;
         }
         if (req.method === "POST" && action === "stop") {

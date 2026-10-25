@@ -61,8 +61,17 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(settings.status, 200);
     assert.equal(settings.data.autoCollapseEmptySwimlanes, true);
     assert.equal((await request("/boards")).data.find((item: { id: string }) => item.id === second.id).autoCollapseEmptySwimlanes, false);
+    execFileSync("git", ["-C", alpha, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;
     assert.equal(card.repo, realpathSync(alpha));
+    assert.equal(card.status, "triage");
+    assert.match((await request(`/boards/${first.id}/cards/${card.id}/start`, "POST")).data.error, /Move.*Ready/);
+    assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "running" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "triage" })).data.status, "triage");
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
+    assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
     assert.equal((await request(`/boards/${second.id}/cards`)).data.length, 0);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/runs`)).status, 404);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/start`, "POST")).status, 404);

@@ -17,7 +17,9 @@ test("an uncommitted repository cannot start a worktree or consume an attempt", 
     const board = new Board(join(dir, "board.sqlite"));
     const worker = new Worker(board, join(dir, "data"), join(dir, "missing-pi"));
     const card = board.createCard({ title: "Start", body: "", repo });
-    assert.throws(() => worker.start(card), /initial commit/);
+    assert.throws(() => worker.start(card), /Move.*Ready/);
+    board.setStatus(card.id, "ready");
+    assert.throws(() => worker.start(board.getCard(card.id)!), /initial commit/);
     assert.equal(board.getCard(card.id)?.status, "ready");
     assert.deepEqual(board.listRuns(card.id), []);
     board.close();
@@ -51,7 +53,8 @@ test("card transcript groups tool activity by turn without storing tool argument
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Transcript", body: "", repo });
-    const run = worker.start(card);
+    board.setStatus(card.id, "ready");
+    const run = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.listCards(repo)[0]?.turns === 1);
     assert.equal(board.getRun(run.id)?.status, "running");
     await waitFor(() => board.getRun(run.id)?.status === "review");
@@ -78,7 +81,8 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Test", body: "No network", repo });
-    const first = worker.start(card);
+    board.setStatus(card.id, "ready");
+    const first = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(first.id)?.status === "review");
     assert.match(board.getRun(first.id)!.output, /Worked offline/);
     const next = worker.start(board.getCard(card.id)!);
@@ -103,7 +107,8 @@ test("a conflict retry tells Pi to reconcile only the card branch with current m
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Resolve safely", body: "Update README", repo });
-    const first = worker.start(card);
+    board.setStatus(card.id, "ready");
+    const first = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(first.id)?.status === "review");
     writeFileSync(join(first.worktree!, "README.md"), "card change\n");
     writeFileSync(join(repo, "README.md"), "main change\n");
