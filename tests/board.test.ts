@@ -105,15 +105,24 @@ test("existing cards become repository boards without losing runs", () => {
     legacy.exec(`CREATE TABLE cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT NOT NULL, finishedAt TEXT, UNIQUE(cardId, attempt));`);
     legacy.prepare("INSERT INTO cards VALUES (?, 'Before migration', '', ?, 'review', 'manual', '2026-01-01', '2026-01-01')").run("old-card", repo);
-    legacy.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt) VALUES ('old-run', 'old-card', 1, 'review', 'old-session', '2026-01-01')").run();
+    legacy.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, output, startedAt) VALUES ('old-run', 'old-card', 1, 'review', 'old-session', ?, '2026-01-01')").run("\nTurn 1: read ×1\nTurn 3: bash ×1\n");
     legacy.close();
     const board = new Board(path);
     assert.deepEqual(board.listRepos(), [repo]);
     assert.equal(board.listCards(repo)[0]?.id, "old-card");
     assert.equal(board.listRuns("old-card")[0]?.sessionId, "old-session");
+    assert.equal(board.listCards(repo)[0]?.turns, 3);
+    assert.equal(board.listCards(repo)[0]?.turnsIncomplete, 1);
+    const next = board.claim("old-card");
+    board.completeTurn(next.id);
+    board.completeTurn(next.id);
+    assert.equal(board.listCards(repo)[0]?.turns, 5);
+    board.finish(next.id, "review");
     board.close();
     const reopened = new Board(path);
     assert.deepEqual(reopened.listRepos(), [repo]);
+    assert.equal(reopened.listCards(repo)[0]?.turns, 5);
+    assert.equal(reopened.listCards(repo)[0]?.turnsIncomplete, 1);
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
