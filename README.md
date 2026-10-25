@@ -13,6 +13,8 @@ npm run dev
 
 Open http://127.0.0.1:5173. For a single production server, run `npm run build && npm start`, then open http://127.0.0.1:4317.
 
+For local scripts, use `npm run bakery -- boards` or `npm run bakery -- cards`. Other commands: `create --title "..." --body "..."`, `ready CARD_ID`, `triage CARD_ID`, `runs CARD_ID`, `conflicts`, and `pickup [on|off] [--concurrency 2]`. Add `--board ID|PATH` if you have more than one repository, or `--json` for complete machine-readable API responses. The package also exposes the `bakery-cli` bin when linked (`npm link`). `BAKERY_URL` or `BAKERY_PORT` selects a different local server. The CLI talks to the running server's HTTP API, **not SQLite**, so its changes use the same guards as the UI. `ready` on a board with auto pickup and `pickup on` require `--yes`: either action may start paid Pi runs. The CLI does not start a run directly or approve merges.
+
 The server binds to loopback. Data and worktrees live under `~/.local/share/bakery/` by default. Override with `BAKERY_DATA_DIR`, `BAKERY_PORT`, or `BAKERY_PI_BIN` for a local test. Do not expose the server on a network: there is no account authentication. The UI is a local operator control surface, not a remote service.
 
 Add a repository by entering its Git root (an absolute path or `~/` path). Bakery expands `~` using the server user's home directory, stores the canonical root, and displays the resulting absolute path. Each repository gets a separate board; new cards inherit its root. Existing cards are grouped by their stored paths when you upgrade.
