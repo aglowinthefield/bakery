@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, chmodSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
+import { Integration, IntegrationConflictError } from "../server/integration.js";
 
 test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
@@ -85,6 +86,55 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+test("a conflict retry tells Pi to reconcile only the card branch with current main", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", repo]);
+    writeFileSync(join(repo, "README.md"), "initial\n");
+    git("add", "README.md");
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+    const card = board.createCard({ title: "Resolve safely", body: "Update README", repo });
+    const first = worker.start(card);
+    await waitFor(() => board.getRun(first.id)?.status === "review");
+    writeFileSync(join(first.worktree!, "README.md"), "card change\n");
+    writeFileSync(join(repo, "README.md"), "main change\n");
+    git("add", "README.md");
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "main change");
+    const main = git("rev-parse", "main");
+    assert.throws(() => new Integration(board, data).approve(board.getCard(card.id)!), IntegrationConflictError);
+    assert.equal(board.listMergeFailures(repo).length, 1);
+    renameSync(first.worktree!, `${first.worktree!}-moved`);
+    assert.throws(() => worker.start(board.getCard(card.id)!), /worktree is missing/);
+    assert.equal(board.listRuns(card.id).length, 1);
+    assert.equal(board.listMergeFailures(repo).length, 1);
+    renameSync(`${first.worktree!}-moved`, first.worktree!);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nexit 1\n`);
+    const failed = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(failed.id)?.status === "failed");
+    assert.match(readFileSync(promptFile, "utf8"), /README\.md/);
+    assert.equal(board.listMergeFailures(repo).length, 1);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    const retry = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(retry.id)?.status === "review");
+    const prompt = readFileSync(promptFile, "utf8");
+    assert.match(prompt, /README\.md/);
+    assert.match(prompt, new RegExp(main));
+    assert.match(prompt, /merge (current )?main into (the )?card worktree/i);
+    assert.match(prompt, /do not (change|modify|merge into) main/i);
+    assert.equal(retry.worktree, first.worktree);
+    assert.equal(retry.sessionId, first.sessionId);
+    assert.equal(retry.attempt, 3);
+    assert.deepEqual(board.listMergeFailures(repo), []);
+    assert.equal(git("rev-parse", "main"), main);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 async function waitFor(predicate: () => boolean) {
   const end = Date.now() + 5000;
   while (!predicate()) {

@@ -106,8 +106,12 @@ export class Board {
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
     return this.getCard(id)!;
   }
+  getMergeFailure(cardId: string): MergeFailure | undefined {
+    const row = this.db.prepare("SELECT * FROM merge_failures WHERE cardId=?").get(cardId) as { cardId: string; files: string; details: string } | undefined;
+    return row && { cardId: row.cardId, files: JSON.parse(row.files) as string[], details: row.details };
+  }
   listMergeFailures(repo: string): MergeFailure[] {
-    return (this.db.prepare("SELECT merge_failures.* FROM merge_failures JOIN cards ON cards.id=merge_failures.cardId WHERE cards.repo=? AND cards.status='review'").all(repo) as { cardId: string; files: string; details: string }[])
+    return (this.db.prepare("SELECT merge_failures.* FROM merge_failures JOIN cards ON cards.id=merge_failures.cardId WHERE cards.repo=? AND cards.status IN ('review', 'failed')").all(repo) as { cardId: string; files: string; details: string }[])
       .map(row => ({ cardId: row.cardId, files: JSON.parse(row.files) as string[], details: row.details }));
   }
   recordMergeFailure(cardId: string, files: string[], details: string): void {
@@ -173,7 +177,6 @@ export class Board {
       const id = randomUUID(), sessionId = `bakery-${cardId}`;
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt) VALUES (?, ?, ?, 'running', ?, ?)").run(id, cardId, attempt, sessionId, now());
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
-      this.clearMergeFailure(cardId);
       this.db.exec("COMMIT");
       return this.getRun(id)!;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
@@ -194,6 +197,7 @@ export class Board {
     try {
       this.db.prepare("UPDATE runs SET status=?, error=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, now(), id);
       this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), run.cardId);
+      if (status === "review") this.clearMergeFailure(run.cardId);
       this.db.exec("COMMIT");
     } catch (err) { this.db.exec("ROLLBACK"); throw err; }
   }

@@ -18,6 +18,15 @@ export class Worker {
     catch { throw new Error(`Repository ${root} has no HEAD commit. Make an initial commit before starting a run; Bakery will not commit for you.`); }
     const worktree = join(this.dataDir, "worktrees", card.id);
     const branch = `bakery/${card.id}`;
+    const conflict = this.board.getMergeFailure(card.id);
+    const mainTip = conflict ? git(root, "rev-parse", "main") : null;
+    if (conflict && !existsSync(worktree)) throw new Error("Card worktree is missing; inspect and restore it before repairing the conflict");
+    if (conflict && (
+      realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree) ||
+      git(worktree, "symbolic-ref", "--short", "HEAD") !== branch ||
+      realpathSync(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
+      realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     const run = this.board.claim(card.id);
     try {
       if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");
@@ -27,7 +36,10 @@ export class Worker {
       this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
       return this.board.getRun(run.id)!;
     }
-    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}\n\nWork in this dedicated worktree: ${worktree}. This is an implementation attempt. Follow this repository's own instructions. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
+    const instructions = conflict
+      ? `This is a merge-conflict repair attempt. Bakery could not merge this card into main. Conflicting files: ${JSON.stringify(conflict.files)}. Current main tip: ${mainTip}. Reconcile the reviewed card work with current main. You may merge current main into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. Bakery will ask for human review and approval again; do not attempt to integrate it yourself.`
+      : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action.";
+    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
     let child: ChildProcess;
     try {
       child = spawn(this.piBin, ["--mode", "json", "--session-id", run.sessionId, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });

@@ -85,12 +85,36 @@ test("a conflict preserves the reviewed branch and keeps the card in Review", ()
   } finally { item.close(); }
 });
 
-test("starting a new run clears stale merge diagnostics", () => {
+test("reviewed conflict resolution on the card branch can be approved without changing main first", () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.worktree, "README.md"), "card change\n");
+    writeFileSync(join(item.repo, "README.md"), "main change\n");
+    git(item.repo, "add", "README.md");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "main change");
+    const main = git(item.repo, "rev-parse", "main");
+    assert.throws(() => item.integration.approve(item.card), IntegrationConflictError);
+    assert.throws(() => git(item.worktree, "merge", "main"));
+    writeFileSync(join(item.worktree, "README.md"), "main change\ncard change\n");
+    git(item.worktree, "add", "README.md");
+    git(item.worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "resolve conflict on card branch");
+    assert.equal(git(item.repo, "rev-parse", "main"), main);
+    assert.equal(item.integration.approve(item.board.getCard(item.card.id)!).status, "done");
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "main change\ncard change\n");
+  } finally { item.close(); }
+});
+
+test("failed repair keeps merge diagnostics until a reviewed attempt completes", () => {
   const item = fixture();
   try {
     item.board.recordMergeFailure(item.card.id, ["README.md"], "old conflict");
     assert.equal(item.board.listMergeFailures(item.repo).length, 1);
-    item.board.claim(item.card.id);
+    const failed = item.board.claim(item.card.id);
+    assert.deepEqual(item.board.listMergeFailures(item.repo), []);
+    item.board.finish(failed.id, "failed", "Pi failed");
+    assert.equal(item.board.listMergeFailures(item.repo).length, 1);
+    const repaired = item.board.claim(item.card.id);
+    item.board.finish(repaired.id, "review");
     assert.deepEqual(item.board.listMergeFailures(item.repo), []);
   } finally { item.close(); }
 });
