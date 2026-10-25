@@ -20,6 +20,9 @@ export class Worker {
     const worktree = join(this.dataDir, "worktrees", card.id);
     const branch = `bakery/${card.id}`;
     const conflict = this.board.getMergeFailure(card.id);
+    const latestRun = this.board.listRuns(card.id)[0];
+    if (latestRun && this.board.hasDraftReviewComments(card.id, latestRun.id)) throw new Error("Submit or remove draft review comments before running Pi again");
+    const feedback = this.board.getFeedbackForRun(card.id);
     const mainTip = conflict ? git(root, "rev-parse", "main") : null;
     if (conflict && !existsSync(worktree)) throw new Error("Card worktree is missing; inspect and restore it before repairing the conflict");
     if (conflict && (
@@ -40,7 +43,8 @@ export class Worker {
     const instructions = conflict
       ? `This is a merge-conflict repair attempt. Bakery could not merge this card into main. Conflicting files: ${JSON.stringify(conflict.files)}. Current main tip: ${mainTip}. Reconcile the reviewed card work with current main. You may merge current main into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. Bakery will ask for human review and approval again; do not attempt to integrate it yourself.`
       : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action.";
-    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
+    const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
+    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${feedbackPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
     let child: ChildProcess;
     try {
       child = spawn(this.piBin, ["--mode", "json", "--session-id", run.sessionId, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });

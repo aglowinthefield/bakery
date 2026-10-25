@@ -6,6 +6,7 @@ import { join, extname, isAbsolute, resolve } from "node:path";
 import { Board } from "./board.js";
 import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
+import { parseDiff } from "../src/diff-lines.js";
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -60,9 +61,14 @@ const server = createServer(async (req, res) => {
     }
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
-      const { confirmRunStart } = await body(req);
-      if (typeof confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
-      send(res, 200, board.updateSettings({ confirmRunStart })); return;
+      const input = await body(req);
+      if (!("confirmRunStart" in input) && !("cardDetailsLayout" in input)) throw new Error("Specify a setting to update");
+      if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
+      if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
+      send(res, 200, board.updateSettings({
+        confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
+        cardDetailsLayout: "cardDetailsLayout" in input ? input.cardDetailsLayout as "dialog" | "side" : undefined,
+      })); return;
     }
     if (path === "/api/boards" && req.method === "GET") { send(res, 200, board.listBoards()); return; }
     if (path === "/api/boards" && req.method === "POST") {
@@ -90,7 +96,13 @@ const server = createServer(async (req, res) => {
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.listMergeFailures(repoBoard.repo)); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict))?)?$/);
+    const commentRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/([\w-]+)\/comments\/([\w-]+)$/);
+    if (commentRoute && req.method === "DELETE") {
+      const repoBoard = board.getBoard(commentRoute[1]), card = board.getCard(commentRoute[2]);
+      if (!repoBoard || card?.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
+      board.deleteReviewComment(card.id, commentRoute[3]); send(res, 200, { ok: true }); return;
+    }
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -103,6 +115,26 @@ const server = createServer(async (req, res) => {
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
         if (req.method === "GET" && action === "review") { send(res, 200, integration.review(item)); return; }
+        if (req.method === "GET" && action === "comments") { send(res, 200, board.listReviewComments(id)); return; }
+        if (req.method === "POST" && action === "comments") {
+          const input = await body(req);
+          if (typeof input.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(input.fingerprint) ||
+            typeof input.path !== "string" || !Number.isSafeInteger(input.line) || typeof input.body !== "string" ||
+            !input.body.trim() || input.body.length > 1000) throw new Error("Invalid review comment");
+          const diff = integration.review(item);
+          if (diff.fingerprint !== input.fingerprint) throw new Error("Work changed since review; refresh the diff before commenting");
+          const line = parseDiff(diff.files.find(file => file.path === input.path)?.patch ?? "")[Number(input.line) - 1];
+          if (!line || line.kind === "meta") throw new Error("Comment on a code line in the current diff");
+          const run = board.listRuns(id)[0];
+          send(res, 201, board.addReviewComment(id, run.id, diff.fingerprint, input.path, Number(input.line), line.kind, line.code, input.body, line.newLine ?? line.oldLine ?? null)); return;
+        }
+        if (req.method === "POST" && action === "request-changes") {
+          const { fingerprint } = await body(req);
+          if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review diff before requesting changes");
+          const diff = integration.review(item);
+          if (diff.fingerprint !== fingerprint) throw new Error("Work changed since review; refresh the diff before requesting changes");
+          send(res, 200, board.requestChanges(id, board.listRuns(id)[0].id, fingerprint)); return;
+        }
         if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
         if (req.method === "POST" && action === "start") { send(res, 202, worker.start(item)); return; }

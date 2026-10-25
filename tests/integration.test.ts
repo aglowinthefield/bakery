@@ -56,6 +56,20 @@ test("approval commits reviewed work, reconciles with newer main, and only then 
   } finally { item.close(); }
 });
 
+test("draft feedback blocks integration before any commit", () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.worktree, "README.md"), "reviewed\n");
+    const run = item.board.listRuns(item.card.id)[0];
+    const draft = item.board.addReviewComment(item.card.id, run.id, item.integration.review(item.card).fingerprint, "README.md", 3, "add", "reviewed", "Clarify this");
+    const before = git(item.worktree, "rev-parse", "HEAD");
+    assert.throws(() => item.approve(item.card), /Submit or remove draft review comments/);
+    assert.equal(git(item.worktree, "rev-parse", "HEAD"), before);
+    item.board.deleteReviewComment(item.card.id, draft.id);
+    assert.equal(item.approve(item.card).status, "done");
+  } finally { item.close(); }
+});
+
 test("a conflict preserves the reviewed branch and keeps the card in Review", () => {
   const item = fixture();
   try {

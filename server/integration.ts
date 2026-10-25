@@ -87,6 +87,8 @@ export class Integration {
 
   approve(card: Card, reviewedFingerprint: string): Card {
     const { repo, worktree, run } = this.location(card);
+    if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
+    if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
     if (git(repo, "symbolic-ref", "--short", "HEAD") !== "main") throw new Error("Check out main at the repository root before approving");
     const localStatus = gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true);
     const inspected = this.snapshot(card, false);

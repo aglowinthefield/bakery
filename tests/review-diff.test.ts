@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { highlightDiffCode, parseDiff, languageForPath } from "../src/review-diff.js";
+import { highlightDiffCode, languageForPath } from "../src/review-diff.js";
+import { parseDiff } from "../src/diff-lines.js";
 
 test("diff metadata stays neutral while additions and deletions are distinct", () => {
   const lines = parseDiff([
@@ -16,6 +17,9 @@ test("diff metadata stays neutral while additions and deletions are distinct", (
   ].join("\n"));
   assert.deepEqual(lines.map(line => line.kind), ["meta", "meta", "meta", "meta", "meta", "remove", "add", "context", "meta"]);
   assert.deepEqual(lines.slice(5, 8).map(line => line.code), ["const old = 1;", "const next = 2;", "context();"]);
+  assert.deepEqual(lines.slice(5, 8).map(line => [line.oldLine, line.newLine]), [[1, undefined], [undefined, 1], [2, 2]]);
+  const multiHunk = parseDiff("@@ -20,1 +8,2 @@\n-kept\n+replaced\n+extra\n@@ -40 +90 @@\n still here");
+  assert.deepEqual(multiHunk.filter(line => line.kind !== "meta").map(line => [line.oldLine, line.newLine]), [[20, undefined], [undefined, 8], [undefined, 9], [40, 90]]);
   assert.equal(parseDiff("diff --git a/a.png b/a.png\nBinary files a/a.png and b/a.png differ").every(line => line.kind === "meta"), true);
 });
 

@@ -19,19 +19,6 @@ export function languageForPath(path: string): string | null {
   return languages[path.split(".").at(-1)?.toLowerCase() ?? ""] ?? null;
 }
 
-export type DiffLine = { kind: "meta" | "add" | "remove" | "context"; code: string; prefix: string };
-export function parseDiff(patch: string): DiffLine[] {
-  if (!patch) return [];
-  let inHunk = false;
-  return patch.split("\n").map(line => {
-    if (line.startsWith("diff --git ")) inHunk = false;
-    if (line.startsWith("@@")) { inHunk = true; return { kind: "meta", code: line, prefix: "" }; }
-    if (!inHunk || line.startsWith("\\ No newline at end of file")) return { kind: "meta", code: line, prefix: "" };
-    const kind = line[0] === "+" ? "add" : line[0] === "-" ? "remove" : line[0] === " " ? "context" : "meta";
-    return kind === "meta" ? { kind, code: line, prefix: "" } : { kind, code: line.slice(1), prefix: line[0] };
-  });
-}
-
 function escapeHtml(code: string): string {
   return code.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }

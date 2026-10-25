@@ -45,12 +45,50 @@ test("run confirmation preference defaults off and persists across restarts", ()
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
-    assert.deepEqual(first.getSettings(), { confirmRunStart: false });
-    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true });
+    assert.deepEqual(first.getSettings(), { confirmRunStart: false, cardDetailsLayout: "dialog" });
+    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true, cardDetailsLayout: "dialog" });
+    assert.deepEqual(first.updateSettings({ cardDetailsLayout: "side" }), { confirmRunStart: true, cardDetailsLayout: "side" });
     first.close();
     const second = new Board(path);
-    assert.deepEqual(second.getSettings(), { confirmRunStart: true });
+    assert.deepEqual(second.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side" });
     second.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("review comments remain on their original snapshot and feedback persists until a new reviewed run", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-feedback-"));
+  try {
+    const path = join(dir, "board.sqlite"), board = new Board(path);
+    const card = board.createCard({ title: "Review", body: "", repo: dir });
+    board.setStatus(card.id, "ready");
+    const first = board.claim(card.id);
+    board.finish(first.id, "review");
+    const fingerprint = "a".repeat(64);
+    const comment = board.addReviewComment(card.id, first.id, fingerprint, "src/app.ts", 12, "add", "const next = 1;", "Please handle null", 42);
+    assert.equal(board.listReviewComments(card.id)[0]?.id, comment.id);
+    assert.equal(board.listReviewComments(card.id)[0]?.fileLine, 42);
+    const stale = board.addReviewComment(card.id, first.id, "b".repeat(64), "src/app.ts", 8, "remove", "old", "Old draft");
+    assert.throws(() => board.requestChanges(card.id, first.id, fingerprint), /Remove draft comments on older diffs/);
+    assert.equal(board.hasDraftReviewComments(card.id, first.id), true);
+    board.deleteReviewComment(card.id, stale.id);
+    assert.throws(() => board.requestChanges(card.id, first.id, "b".repeat(64)), /current diff|comments/i);
+    board.requestChanges(card.id, first.id, fingerprint);
+    assert.equal(board.hasDraftReviewComments(card.id, first.id), false);
+    assert.equal(board.hasRequestedChanges(card.id, first.id), true);
+    assert.deepEqual(board.getFeedbackForRun(card.id).map(item => item.body), ["Please handle null"]);
+    assert.throws(() => board.addReviewComment(card.id, first.id, fingerprint, "src/app.ts", 14, "add", "x", "More"), /already requested/i);
+    const retry = board.claim(card.id);
+    assert.deepEqual(board.getFeedbackForRun(card.id).map(item => item.id), [comment.id]);
+    board.finish(retry.id, "failed");
+    assert.deepEqual(board.getFeedbackForRun(card.id).map(item => item.id), [comment.id]);
+    const next = board.claim(card.id);
+    board.finish(next.id, "review");
+    assert.deepEqual(board.getFeedbackForRun(card.id), []);
+    assert.equal(board.listReviewComments(card.id)[0]?.runId, first.id);
+    board.close();
+    const reopened = new Board(path);
+    assert.equal(reopened.listReviewComments(card.id)[0]?.body, "Please handle null");
+    reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
