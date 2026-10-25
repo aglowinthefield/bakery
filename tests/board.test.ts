@@ -169,9 +169,14 @@ test("existing repository boards gain removal support on upgrade", () => {
     legacy.close();
     const reopened = new Board(path);
     assert.equal(reopened.getBoard(item.id)?.repo, repo);
-    reopened.archiveBoard(item.id);
-    assert.deepEqual(reopened.listBoards(), []);
+    assert.equal(reopened.getBoard(item.id)?.autoCollapseEmptySwimlanes, false);
+    assert.equal(reopened.setAutoCollapseEmptySwimlanes(item.id, true).autoCollapseEmptySwimlanes, true);
     reopened.close();
+    const persisted = new Board(path);
+    assert.equal(persisted.listBoards()[0]?.autoCollapseEmptySwimlanes, true);
+    persisted.archiveBoard(item.id);
+    assert.deepEqual(persisted.listBoards(), []);
+    persisted.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -2,8 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 
 export type CardStatus = "ready" | "running" | "review" | "failed" | "interrupted" | "done";
-export type RepoBoard = { id: string; repo: string };
+export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean };
 export type BakerySettings = { confirmRunStart: boolean };
+type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number };
+const toRepoBoard = (row: BoardRow): RepoBoard => ({ ...row, autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0 });
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number };
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
@@ -19,14 +21,14 @@ export class Board {
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)));
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
-    if (!(this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).some(column => column.name === "archived")) {
-      this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
-    }
+    const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
+    if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+    if (!boardColumns.has("autoCollapseEmptySwimlanes")) this.db.exec("ALTER TABLE boards ADD COLUMN autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0");
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
       this.db.exec("ALTER TABLE runs ADD COLUMN turns INTEGER NOT NULL DEFAULT 0");
@@ -58,16 +60,24 @@ export class Board {
     return this.getSettings();
   }
   listRepos(): string[] { return this.listBoards().map(board => board.repo); }
-  listBoards(): RepoBoard[] { return this.db.prepare("SELECT id, repo FROM boards WHERE archived=0 ORDER BY repo").all() as RepoBoard[]; }
-  getBoard(id: string): RepoBoard | undefined { return this.db.prepare("SELECT id, repo FROM boards WHERE id=? AND archived=0").get(id) as RepoBoard | undefined; }
+  listBoards(): RepoBoard[] { return (this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes FROM boards WHERE archived=0 ORDER BY repo").all() as BoardRow[]).map(toRepoBoard); }
+  getBoard(id: string): RepoBoard | undefined {
+    const row = this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes FROM boards WHERE id=? AND archived=0").get(id) as BoardRow | undefined;
+    return row && toRepoBoard(row);
+  }
   addRepo(repo: string): RepoBoard {
-    const existing = this.db.prepare("SELECT id, repo FROM boards WHERE repo=?").get(repo) as RepoBoard | undefined;
+    const existing = this.db.prepare("SELECT id FROM boards WHERE repo=?").get(repo) as { id: string } | undefined;
     if (existing) {
       this.db.prepare("UPDATE boards SET archived=0 WHERE id=?").run(existing.id);
-      return existing;
+      return this.getBoard(existing.id)!;
     }
     const id = randomUUID();
     this.db.prepare("INSERT INTO boards(id, repo) VALUES (?, ?)").run(id, repo);
+    return this.getBoard(id)!;
+  }
+  setAutoCollapseEmptySwimlanes(id: string, enabled: boolean): RepoBoard {
+    if (!this.getBoard(id)) throw new Error("Board not found");
+    this.db.prepare("UPDATE boards SET autoCollapseEmptySwimlanes=? WHERE id=?").run(enabled ? 1 : 0, id);
     return this.getBoard(id)!;
   }
   renameBoard(id: string, repo: string): RepoBoard {
