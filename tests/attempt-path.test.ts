@@ -22,7 +22,7 @@ async function openAttempts() {
   await page.route("**/api/**", route => {
     const path = new URL(route.request().url()).pathname;
     const data = path === "/api/boards" ? [{ id: "board", repo: "/Users/example/projects/repo" }]
-      : path === "/api/settings" ? { confirmRunStart: false, cardDetailsLayout: "dialog" }
+      : path === "/api/settings" ? { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" }
       : path === "/api/boards/board/cards" ? [{ id: "card", title: "Copy a path", body: "", repo: "/Users/example/projects/repo", source: "manual", status: "failed", createdAt: "2025-01-01T10:00:00Z", updatedAt: "2025-01-01T10:00:00Z", turns: 0, turnsIncomplete: 0 }]
       : path === "/api/boards/board/cards/card/runs" ? runs
       : path === "/api/boards/board/cards/card/approval" ? { pending: false }

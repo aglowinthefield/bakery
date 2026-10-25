@@ -66,12 +66,14 @@ const server = createServer(async (req, res) => {
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
-      if (!("confirmRunStart" in input) && !("cardDetailsLayout" in input)) throw new Error("Specify a setting to update");
+      if (!("confirmRunStart" in input) && !("cardDetailsLayout" in input) && !("theme" in input)) throw new Error("Specify a setting to update");
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
+      if ("theme" in input && input.theme !== "dark" && input.theme !== "light") throw new Error("theme must be dark or light");
       send(res, 200, board.updateSettings({
         confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
         cardDetailsLayout: "cardDetailsLayout" in input ? input.cardDetailsLayout as "dialog" | "side" : undefined,
+        theme: "theme" in input ? input.theme as "dark" | "light" : undefined,
       })); return;
     }
     if (path === "/api/boards" && req.method === "GET") { send(res, 200, board.listBoards()); return; }

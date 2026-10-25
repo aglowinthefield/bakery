@@ -18,7 +18,71 @@
   --destructive: #cdacac;
   --border: #3d424a;
   --ring: #b4bcc4;
+  --sidebar: #171a1e;
+  --selection: #676d77;
+  --status-triage: #8b919a;
+  --status-ready: #d4ccb4;
+  --status-running: #b4bcc4;
+  --status-review: #b8c4b8;
+  --status-failed: #cdacac;
+  --status-interrupted: #d4ccb4;
+  --status-done: #8b919a;
+  --diff-add: #193529;
+  --diff-add-foreground: #b6e5c5;
+  --diff-remove: #3b2528;
+  --diff-remove-foreground: #f0b5b5;
+  --syntax-keyword: #ff7b72;
+  --syntax-entity: #d2a8ff;
+  --syntax-constant: #79c0ff;
+  --syntax-string: #a5d6ff;
+  --syntax-variable: #ffa657;
+  --syntax-comment: #8b949e;
+  --syntax-tag: #7ee787;
+  --syntax-heading: #79c0ff;
+  --syntax-list: #f2cc60;
   --radius: 0.75rem;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --background: #f5f3ee;
+  --foreground: #242a30;
+  --card: #ffffff;
+  --card-foreground: #242a30;
+  --popover: #ffffff;
+  --popover-foreground: #242a30;
+  --primary: #554b36;
+  --primary-foreground: #ffffff;
+  --secondary: #eae7e0;
+  --secondary-foreground: #30363c;
+  --muted: #eae7e0;
+  --muted-foreground: #555e66;
+  --accent: #ded9cf;
+  --accent-foreground: #242a30;
+  --destructive: #9d3038;
+  --border: #ccc8be;
+  --ring: #4b6277;
+  --sidebar: #eeebe4;
+  --selection: #c8d6e0;
+  --status-triage: #626b72;
+  --status-ready: #554b36;
+  --status-running: #45627c;
+  --status-review: #38684a;
+  --status-failed: #9d3038;
+  --status-interrupted: #926621;
+  --status-done: #626b72;
+  --diff-add: #e1f2e6;
+  --diff-add-foreground: #184a30;
+  --diff-remove: #fae6e7;
+  --diff-remove-foreground: #882b34;
+  --syntax-keyword: #ad2835;
+  --syntax-entity: #6934ae;
+  --syntax-constant: #0057b8;
+  --syntax-string: #193f74;
+  --syntax-variable: #a34b04;
+  --syntax-comment: #555e66;
+  --syntax-tag: #216e36;
+  --syntax-heading: #0057b8;
+  --syntax-list: #735c0f;
 }
 @theme inline {
   --color-background: var(--background); --color-foreground: var(--foreground);
@@ -29,10 +93,34 @@
   --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive); --color-border: var(--border); --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-status-triage: var(--status-triage); --color-status-ready: var(--status-ready);
+  --color-status-running: var(--status-running); --color-status-review: var(--status-review);
+  --color-status-failed: var(--status-failed); --color-status-interrupted: var(--status-interrupted);
+  --color-status-done: var(--status-done);
+  --color-diff-add: var(--diff-add); --color-diff-add-foreground: var(--diff-add-foreground);
+  --color-diff-remove: var(--diff-remove); --color-diff-remove-foreground: var(--diff-remove-foreground);
   --radius-sm: calc(var(--radius) * .55); --radius-md: calc(var(--radius) * .75); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) * 1.35);
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: var(--background); color: var(--foreground); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
 button, input, textarea { font: inherit; }
-::selection { background: #676d77; color: #f0efeb; }
-::-webkit-scrollbar { height: 8px; width: 8px; } ::-webkit-scrollbar-thumb { background: #3d424a; border-radius: 12px; }
+::selection { background: var(--selection); color: var(--foreground); }
+::-webkit-scrollbar { height: 8px; width: 8px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 12px; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Diff syntax follows the active palette; line colors still mark additions and removals. */
+[data-change] :is(.hljs-keyword, .hljs-doctag, .hljs-template-tag, .hljs-type) { color: var(--syntax-keyword); }
+[data-change] :is(.hljs-title, .hljs-title.class_, .hljs-title.function_) { color: var(--syntax-entity); }
+[data-change] :is(.hljs-attr, .hljs-attribute, .hljs-literal, .hljs-meta, .hljs-number, .hljs-variable) { color: var(--syntax-constant); }
+[data-change] :is(.hljs-regexp, .hljs-string) { color: var(--syntax-string); }
+[data-change] :is(.hljs-built_in, .hljs-symbol) { color: var(--syntax-variable); }
+[data-change] :is(.hljs-comment, .hljs-code, .hljs-formula) { color: var(--syntax-comment); }
+[data-change] :is(.hljs-name, .hljs-quote, .hljs-selector-tag) { color: var(--syntax-tag); }
+[data-change] .hljs-section { color: var(--syntax-heading); }
+[data-change] .hljs-bullet { color: var(--syntax-list); }
+[data-change] :is(.hljs-subst, .hljs-emphasis, .hljs-strong) { color: inherit; }
+[data-change] .hljs-addition { color: var(--diff-add-foreground); background: var(--diff-add); }
+[data-change] .hljs-deletion { color: var(--diff-remove-foreground); background: var(--diff-remove); }
+/* Red/green rows keep all syntax legible, including nested highlight spans. */
+[data-change="add"] [class*="hljs-"], [data-change="add"] .hljs { color: var(--diff-add-foreground); }
+[data-change="remove"] [class*="hljs-"], [data-change="remove"] .hljs { color: var(--diff-remove-foreground); }

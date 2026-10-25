@@ -26,7 +26,7 @@ test("changed files open their own patches and focus the heading without changin
     requests.push(`${route.request().method()} ${path}`);
     const data: Record<string, unknown> = {
       "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
-      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog" },
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
       "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
@@ -87,7 +87,7 @@ test("a request failure remains visible after closing card details", async () =>
     }
     const data: Record<string, unknown> = {
       "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
-      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog" },
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
       "/api/boards/board/cards": [{ id: "ready", title: "Ready card", body: "", repo: "/tmp/repo", source: "manual", status: "ready", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }],
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/ready/runs": [],
@@ -119,7 +119,7 @@ test("the side panel switches cards without leaking the previous card's review o
     ].map(card => ({ ...card, body: "", repo: "/tmp/repo", source: "manual", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }));
     const data: Record<string, unknown> = {
       "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
-      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side" },
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "dark" },
       "/api/boards/board/cards": cards,
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/review/runs": [{ id: "run", attempt: 1, status: "review", output: "Old output", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],

@@ -299,10 +299,10 @@ function DiffPatch({
   onSelect?: (line: number) => void;
 }) {
   const colors = {
-    add: "bg-[#193529] text-[#b6e5c5]",
-    remove: "bg-[#3b2528] text-[#f0b5b5]",
+    add: "bg-diff-add text-diff-add-foreground",
+    remove: "bg-diff-remove text-diff-remove-foreground",
     context: "text-foreground/80",
-    meta: "bg-[#282c34] text-muted-foreground",
+    meta: "bg-muted text-muted-foreground",
   };
   const parsed = parseDiff(patch);
   const lines = parsed.length
@@ -315,7 +315,7 @@ function DiffPatch({
         },
       ];
   return (
-    <div className="max-h-96 overflow-auto border-t border-border bg-[#171a1e] font-mono text-[11px] leading-5 whitespace-pre">
+    <div className="max-h-96 overflow-auto border-t border-border bg-sidebar font-mono text-[11px] leading-5 whitespace-pre">
       {lines.map((line, index) => (
         <div key={index}>
           <div

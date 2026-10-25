@@ -45,13 +45,27 @@ test("run confirmation preference defaults off and persists across restarts", ()
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
-    assert.deepEqual(first.getSettings(), { confirmRunStart: false, cardDetailsLayout: "dialog" });
-    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true, cardDetailsLayout: "dialog" });
-    assert.deepEqual(first.updateSettings({ cardDetailsLayout: "side" }), { confirmRunStart: true, cardDetailsLayout: "side" });
+    assert.deepEqual(first.getSettings(), { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" });
+    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true, cardDetailsLayout: "dialog", theme: "dark" });
+    assert.deepEqual(first.updateSettings({ cardDetailsLayout: "side" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "dark" });
+    assert.deepEqual(first.updateSettings({ theme: "light" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "light" });
     first.close();
     const second = new Board(path);
-    assert.deepEqual(second.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side" });
+    assert.deepEqual(second.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "light" });
     second.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("theme migration preserves settings in a database without the theme column", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-theme-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const legacy = new DatabaseSync(path);
+    legacy.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY, confirmRunStart INTEGER NOT NULL, cardDetailsLayout TEXT NOT NULL); INSERT INTO settings VALUES (1, 1, 'side')");
+    legacy.close();
+    const board = new Board(path);
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "dark" });
+    board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

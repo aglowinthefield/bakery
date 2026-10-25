@@ -21,8 +21,8 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./components/ui/dialog";
-import "./style.css";
 import "highlight.js/styles/github-dark.css";
+import "./style.css";
 import { api, date } from "./api.js";
 import { CardDetails } from "./card-details.js";
 import type {
@@ -32,6 +32,15 @@ import type {
   MergeConflict,
   Status,
 } from "./model.js";
+
+// The database is authoritative. Storage only avoids a palette flash on repeat visits.
+function cacheTheme(theme: BakerySettings["theme"]) {
+  try {
+    localStorage.setItem("bakery-theme", theme);
+  } catch {
+    // Private or full storage must not prevent settings from loading or saving.
+  }
+}
 
 const columns: {
   id: Status;
@@ -43,43 +52,43 @@ const columns: {
     id: "triage",
     label: "Triage",
     description: "Awaiting approval for work",
-    dot: "bg-muted-foreground",
+    dot: "bg-status-triage",
   },
   {
     id: "ready",
     label: "Ready",
     description: "Can start a Pi run",
-    dot: "bg-primary",
+    dot: "bg-status-ready",
   },
   {
     id: "running",
     label: "Running",
     description: "Pi is working",
-    dot: "bg-[#b4bcc4]",
+    dot: "bg-status-running",
   },
   {
     id: "review",
     label: "Review",
     description: "Inspect, then approve and merge",
-    dot: "bg-[#b8c4b8]",
+    dot: "bg-status-review",
   },
   {
     id: "failed",
     label: "Failed",
     description: "Needs another attempt",
-    dot: "bg-destructive",
+    dot: "bg-status-failed",
   },
   {
     id: "interrupted",
     label: "Interrupted",
     description: "Inspect the process",
-    dot: "bg-[#d4ccb4]",
+    dot: "bg-status-interrupted",
   },
   {
     id: "done",
     label: "Done",
     description: "Merged or closed without a run",
-    dot: "bg-muted-foreground",
+    dot: "bg-status-done",
   },
 ];
 function App() {
@@ -114,7 +123,11 @@ function App() {
       })
       .catch((err) => setError(String(err)));
     void api<BakerySettings>("/settings")
-      .then(setSettings)
+      .then((next) => {
+        document.documentElement.dataset.theme = next.theme;
+        cacheTheme(next.theme);
+        setSettings(next);
+      })
       .catch((err) => setError(String(err)));
   }, []);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -152,16 +165,19 @@ function App() {
     if (!settings) return;
     const previous = settings;
     setSettings({ ...settings, ...patch });
+    if (patch.theme) document.documentElement.dataset.theme = patch.theme;
     void action(async () => {
       try {
-        setSettings(
-          await api<BakerySettings>("/settings", {
-            method: "PATCH",
-            body: JSON.stringify(patch),
-          }),
-        );
+        const saved = await api<BakerySettings>("/settings", {
+          method: "PATCH",
+          body: JSON.stringify(patch),
+        });
+        setSettings(saved);
+        document.documentElement.dataset.theme = saved.theme;
+        cacheTheme(saved.theme);
       } catch (error) {
         setSettings(previous);
+        document.documentElement.dataset.theme = previous.theme;
         throw error;
       }
     });
@@ -221,9 +237,10 @@ function App() {
       [boardId]: { ...previous[boardId], [status]: !collapsed },
     }));
   };
+  if (!settings && !error) return null;
   return (
     <div className="min-h-screen lg:flex">
-      <aside className="flex flex-col border-b border-border bg-[#171a1e] lg:sticky lg:top-0 lg:h-screen lg:w-[228px] lg:shrink-0 lg:border-r lg:border-b-0">
+      <aside className="flex flex-col border-b border-border bg-sidebar lg:sticky lg:top-0 lg:h-screen lg:w-[228px] lg:shrink-0 lg:border-r lg:border-b-0">
         <div className="flex items-center gap-3 px-6 py-7">
           <div className="grid size-9 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
             <span className="text-xl leading-none">✳</span>
@@ -293,8 +310,8 @@ function App() {
         </div>
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-[#b8c4b8]" /> Local only{" "}
-            <span className="ml-auto font-mono">v0.1</span>
+            <span className="size-1.5 rounded-full bg-status-review" /> Local
+            only <span className="ml-auto font-mono">v0.1</span>
           </div>
         </div>
       </aside>
@@ -592,6 +609,29 @@ function App() {
               </span>
             </span>
           </label>
+          <fieldset
+            className="mt-6 border-t border-border pt-5 text-sm"
+            disabled={!settings || busy}
+          >
+            <legend className="pt-5 font-medium">Theme</legend>
+            <div className="mt-3 flex gap-5">
+              {(["dark", "light"] as const).map((theme) => (
+                <label
+                  key={theme}
+                  className="flex cursor-pointer items-center gap-2"
+                >
+                  <input
+                    type="radio"
+                    name="theme"
+                    checked={settings?.theme === theme}
+                    onChange={() => saveSettings({ theme })}
+                    className="accent-primary"
+                  />
+                  {theme === "dark" ? "Dark (original)" : "Light"}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <fieldset
             className="mt-6 border-t border-border pt-5 text-sm"
             disabled={!settings || busy}

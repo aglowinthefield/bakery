@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done";
 export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; autoPickupEnabledAt: string | null; autoPickupError: string };
-export type BakerySettings = { confirmRunStart: boolean; cardDetailsLayout: "dialog" | "side" };
+export type BakerySettings = { confirmRunStart: boolean; cardDetailsLayout: "dialog" | "side"; theme: "dark" | "light" };
 type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; autoPickupEnabledAt: string | null; autoPickupError: string };
 const toRepoBoard = (row: BoardRow): RepoBoard => ({ ...row, autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0 });
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number };
@@ -29,12 +29,13 @@ export class Board {
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT);
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
-      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')));
+      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'dark' CHECK(theme IN ('dark', 'light')));
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
     const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
     if (!settingsColumns.has("cardDetailsLayout")) this.db.exec("ALTER TABLE settings ADD COLUMN cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side'))");
+    if (!settingsColumns.has("theme")) this.db.exec("ALTER TABLE settings ADD COLUMN theme TEXT NOT NULL DEFAULT 'dark' CHECK(theme IN ('dark', 'light'))");
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoCollapseEmptySwimlanes")) this.db.exec("ALTER TABLE boards ADD COLUMN autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0");
@@ -76,12 +77,12 @@ export class Board {
   }
   close() { this.db.close(); }
   getSettings(): BakerySettings {
-    const row = this.db.prepare("SELECT confirmRunStart, cardDetailsLayout FROM settings WHERE id=1").get() as { confirmRunStart: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"] };
-    return { confirmRunStart: row.confirmRunStart === 1, cardDetailsLayout: row.cardDetailsLayout };
+    const row = this.db.prepare("SELECT confirmRunStart, cardDetailsLayout, theme FROM settings WHERE id=1").get() as { confirmRunStart: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"] };
+    return { confirmRunStart: row.confirmRunStart === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme };
   }
   updateSettings(settings: Partial<BakerySettings>): BakerySettings {
     const current = this.getSettings();
-    this.db.prepare("UPDATE settings SET confirmRunStart=?, cardDetailsLayout=? WHERE id=1").run((settings.confirmRunStart ?? current.confirmRunStart) ? 1 : 0, settings.cardDetailsLayout ?? current.cardDetailsLayout);
+    this.db.prepare("UPDATE settings SET confirmRunStart=?, cardDetailsLayout=?, theme=? WHERE id=1").run((settings.confirmRunStart ?? current.confirmRunStart) ? 1 : 0, settings.cardDetailsLayout ?? current.cardDetailsLayout, settings.theme ?? current.theme);
     return this.getSettings();
   }
   listRepos(): string[] { return this.listBoards().map(board => board.repo); }
