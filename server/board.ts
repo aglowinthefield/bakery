@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 export type CardStatus = "ready" | "running" | "review" | "failed" | "interrupted" | "done";
 export type RepoBoard = { id: string; repo: string };
+export type BakerySettings = { confirmRunStart: boolean };
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null };
 const now = () => new Date().toISOString();
@@ -14,7 +15,9 @@ export class Board {
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0);`);
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)));
+      INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
     if (!(this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).some(column => column.name === "archived")) {
       this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     }
@@ -25,6 +28,14 @@ export class Board {
       UPDATE cards SET status='interrupted' WHERE status='running';`);
   }
   close() { this.db.close(); }
+  getSettings(): BakerySettings {
+    const row = this.db.prepare("SELECT confirmRunStart FROM settings WHERE id=1").get() as { confirmRunStart: number };
+    return { confirmRunStart: row.confirmRunStart === 1 };
+  }
+  updateSettings(settings: BakerySettings): BakerySettings {
+    this.db.prepare("UPDATE settings SET confirmRunStart=? WHERE id=1").run(settings.confirmRunStart ? 1 : 0);
+    return this.getSettings();
+  }
   listRepos(): string[] { return this.listBoards().map(board => board.repo); }
   listBoards(): RepoBoard[] { return this.db.prepare("SELECT id, repo FROM boards WHERE archived=0 ORDER BY repo").all() as RepoBoard[]; }
   getBoard(id: string): RepoBoard | undefined { return this.db.prepare("SELECT id, repo FROM boards WHERE id=? AND archived=0").get(id) as RepoBoard | undefined; }

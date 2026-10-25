@@ -56,6 +56,12 @@ const server = createServer(async (req, res) => {
       const origin = req.headers.origin;
       if (origin && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
+    if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
+    if (path === "/api/settings" && req.method === "PATCH") {
+      const { confirmRunStart } = await body(req);
+      if (typeof confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
+      send(res, 200, board.updateSettings({ confirmRunStart })); return;
+    }
     if (path === "/api/boards" && req.method === "GET") { send(res, 200, board.listBoards()); return; }
     if (path === "/api/boards" && req.method === "POST") {
       const root = repoRoot((await body(req)).repo);

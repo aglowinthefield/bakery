@@ -21,6 +21,19 @@ test("manual cards persist and only one active attempt may be claimed", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("run confirmation preference defaults off and persists across restarts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const path = join(dir, "board.sqlite"), first = new Board(path);
+    assert.deepEqual(first.getSettings(), { confirmRunStart: false });
+    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true });
+    first.close();
+    const second = new Board(path);
+    assert.deepEqual(second.getSettings(), { confirmRunStart: true });
+    second.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("repository boards retain cards and keep attempted work in its original repository", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {

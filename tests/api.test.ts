@@ -43,6 +43,10 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       }
     }
     assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false });
+    assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
+    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true });
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: true });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
