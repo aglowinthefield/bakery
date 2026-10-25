@@ -28,6 +28,7 @@ type Props = {
   onClose: () => void;
   onEdit: (card: Card) => void;
   onRefresh: () => void;
+  onError: (message: string) => void;
   onConflict: (conflict: MergeConflict | null) => void;
 };
 
@@ -39,6 +40,7 @@ export function CardDetails({
   onClose,
   onEdit,
   onRefresh,
+  onError,
   onConflict,
 }: Props) {
   const cardId = card?.id;
@@ -98,7 +100,10 @@ export function CardDetails({
           setAutoJobs(jobs);
         }
       } catch (err) {
-        if (current) setError(String(err));
+        if (current) {
+          setError(String(err));
+          onError(String(err));
+        }
       } finally {
         if (current) timer = setTimeout(() => void poll(), 2000);
       }
@@ -143,6 +148,7 @@ export function CardDetails({
   const action = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
+    onError("");
     try {
       await fn();
       refresh();
@@ -153,7 +159,11 @@ export function CardDetails({
           ? (err.conflict as MergeConflict | undefined)
           : undefined;
       if (conflict) onConflict(conflict);
-      else setError(err instanceof Error ? err.message : String(err));
+      else {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message);
+        onError(message);
+      }
       return false;
     } finally {
       setBusy(false);

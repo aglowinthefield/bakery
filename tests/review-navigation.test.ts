@@ -71,6 +71,44 @@ test("changed files open their own patches and focus the heading without changin
   } finally { await page.close(); }
 });
 
+test("a request failure remains visible after closing card details", async () => {
+  const page = await browser.newPage();
+  let resolveStart!: () => void;
+  const started = new Promise<void>(resolve => { resolveStart = resolve; });
+  let finishStart!: () => void;
+  const response = new Promise<void>(resolve => { finishStart = resolve; });
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/start")) {
+      resolveStart();
+      await response;
+      await route.fulfill({ status: 409, json: { error: "The worktree changed before start" } });
+      return;
+    }
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog" },
+      "/api/boards/board/cards": [{ id: "ready", title: "Ready card", body: "", repo: "/tmp/repo", source: "manual", status: "ready", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/ready/runs": [],
+      "/api/boards/board/cards/ready/approval": { pending: false },
+      "/api/boards/board/cards/ready/comments": [],
+      "/api/boards/board/cards/ready/auto-review": [],
+    };
+    assert.ok(path in data, `Unexpected API request: ${path}`);
+    await route.fulfill({ json: data[path] });
+  });
+  try {
+    await page.goto(url);
+    await page.getByRole("button", { name: /Ready card/ }).click();
+    await page.getByRole("button", { name: "Start Pi run" }).click();
+    await started;
+    await page.getByRole("button", { name: "Close" }).click();
+    finishStart();
+    await page.getByRole("alert").filter({ hasText: "The worktree changed before start" }).waitFor();
+  } finally { finishStart(); await page.close(); }
+});
+
 test("the side panel switches cards without leaking the previous card's review or attempts", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.route("**/api/**", async route => {

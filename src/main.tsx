@@ -928,6 +928,7 @@ function App() {
             setSelected(null);
           }}
           onRefresh={refresh}
+          onError={setError}
           onConflict={(conflict) =>
             setMergeConflicts((previous) =>
               conflict
