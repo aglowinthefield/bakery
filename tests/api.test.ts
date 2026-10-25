@@ -46,9 +46,17 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
+    assert.equal(first.autoCollapseEmptySwimlanes, false);
     assert.equal((await request("/boards", "POST", { repo: alpha })).status, 400);
     assert.equal((await request("/boards", "POST", { repo: "code/beta" })).status, 400);
     const second = (await request("/boards", "POST", { repo: beta })).data;
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: "yes" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", {})).status, 400);
+    assert.equal((await request(`/boards/missing/settings`, "PATCH", { autoCollapseEmptySwimlanes: true })).status, 404);
+    const settings = await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: true });
+    assert.equal(settings.status, 200);
+    assert.equal(settings.data.autoCollapseEmptySwimlanes, true);
+    assert.equal((await request("/boards")).data.find((item: { id: string }) => item.id === second.id).autoCollapseEmptySwimlanes, false);
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;
     assert.equal(card.repo, realpathSync(alpha));
     assert.equal((await request(`/boards/${second.id}/cards`)).data.length, 0);
@@ -58,12 +66,14 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}`, "PATCH", { repo: beta })).status, 400);
     const moved = await request(`/boards/${first.id}`, "PATCH", { repo: gamma });
     assert.equal(moved.status, 200);
+    assert.equal(moved.data.autoCollapseEmptySwimlanes, true);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync(gamma));
     assert.equal((await request(`/boards/${first.id}`, "DELETE")).status, 200);
     assert.equal((await request(`/boards/${first.id}/cards`)).status, 404);
     assert.equal((await request("/boards")).data.length, 1);
     const restored = await request("/boards", "POST", { repo: gamma });
     assert.equal(restored.data.id, first.id);
+    assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].id, card.id);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {

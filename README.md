@@ -17,7 +17,7 @@ The server binds to loopback. Data and worktrees live under `~/.local/share/bake
 
 Add a repository by entering its Git root (an absolute path or `~/` path). Bakery keeps a separate board for each repository and stores the canonical root. New cards inherit the selected board's root. Existing cards are grouped by their stored paths when you upgrade.
 
-To repair an incorrect path, edit the board. Bakery moves its cards only if none has an attempt, because attempts keep their worktrees and sessions in the original repository. If a card has an attempt, create a new card on the correct board. Removing a board hides it without deleting cards, runs, or worktrees; add the same repository again to restore it.
+To repair an incorrect path, edit the board. Bakery moves its cards only if none has an attempt, because attempts keep their worktrees and sessions in the original repository. If a card has an attempt, create a new card on the correct board. Removing a board hides it without deleting cards, runs, or worktrees; add the same repository again to restore it. Lanes without active cards can be collapsed by hand, including Done when it contains completed cards. Each board has an Auto-collapse setting that persists across restarts. Manual expand or collapse choices last until the page reloads or that board's Auto-collapse setting changes; a lane with active cards always stays open.
 
 A repository needs an initial commit containing the files Pi should work on. Git worktrees start from `HEAD`; uncommitted or untracked files in the original checkout do not appear in the card's worktree. Bakery does not stage or commit files for you.
 

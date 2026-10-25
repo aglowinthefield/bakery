@@ -69,6 +69,13 @@ const server = createServer(async (req, res) => {
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
     }
+    const settingsRoute = path.match(/^\/api\/boards\/([\w-]+)\/settings$/);
+    if (settingsRoute && req.method === "PATCH") {
+      if (!board.getBoard(settingsRoute[1])) { send(res, 404, { error: "Board not found" }); return; }
+      const { autoCollapseEmptySwimlanes } = await body(req);
+      if (typeof autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
+      send(res, 200, board.setAutoCollapseEmptySwimlanes(settingsRoute[1], autoCollapseEmptySwimlanes)); return;
+    }
     const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
