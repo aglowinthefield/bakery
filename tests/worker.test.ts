@@ -23,6 +23,45 @@ test("an uncommitted repository cannot start a worktree or consume an attempt", 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("card transcript groups tool activity by turn without storing tool arguments or results", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    const events = [
+      { type: "turn_start" },
+      { type: "tool_execution_start", toolCallId: "a", toolName: "read", args: { path: "SECRET_ARGUMENT" } },
+      { type: "tool_execution_end", toolCallId: "a", isError: false, result: { content: "SECRET_RESULT" } },
+      { type: "tool_execution_start", toolCallId: "b", toolName: "read" },
+      { type: "tool_execution_end", toolCallId: "b", isError: false },
+      { type: "tool_execution_start", toolCallId: "c", toolName: "bash" },
+      { type: "tool_execution_end", toolCallId: "c", isError: true },
+      { type: "turn_end", message: { stopReason: "toolUse" } },
+      { type: "turn_start" },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Checked the layout." } },
+      { type: "tool_execution_start", toolCallId: "d", toolName: "edit" },
+      { type: "turn_end", message: { stopReason: "stop" } },
+      { type: "agent_settled", aborted: false },
+    ];
+    writeFileSync(fakePi, `#!/bin/sh\nprintf 'change\\n' >> README.md\nprintf '%s\\n' ${events.map(event => `'${JSON.stringify(event)}'`).join(" ")}\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Transcript", body: "", repo });
+    const run = worker.start(card);
+    await waitFor(() => board.getRun(run.id)?.status === "review");
+    const output = board.getRun(run.id)!.output;
+    assert.match(output, /Turn 1: read ×2, bash ×1; 1 failed/);
+    assert.match(output, /Turn 2: edit ×1; 1 unfinished/);
+    assert.match(output, /worktree: 1 changed file \(README\.md\)/);
+    assert.match(output, /Checked the layout\./);
+    assert.doesNotMatch(output, /SECRET_ARGUMENT|SECRET_RESULT|\[tool:/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a Pi settlement requests review; retry uses the same card worktree and session", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake");
