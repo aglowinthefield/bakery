@@ -7,6 +7,7 @@ import { Board } from "./board.js";
 import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
 import { AutoReview } from "./auto-review.js";
+import { AutoPickup } from "./auto-pickup.js";
 import { parseDiff } from "../src/diff-lines.js";
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
@@ -18,11 +19,12 @@ let lock: number;
 try { lock = openSync(lockPath, "wx", 0o600); writeSync(lock, `${process.pid}\n`); }
 catch { throw new Error(`Bakery already owns ${dataDir}, or has a stale lock at ${lockPath}. Check the recorded PID before removing it.`); }
 let board: Board;
-try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverAutoReviews(); }
+try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const worker = new Worker(board, dataDir, process.env.BAKERY_PI_BIN ?? "pi");
 const integration = new Integration(board, dataDir);
 const autoReview = new AutoReview(board, integration, process.env.BAKERY_PI_BIN ?? "pi");
+const autoPickup = new AutoPickup(board, worker);
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 function send(res: ServerResponse, status: number, payload: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
@@ -90,6 +92,10 @@ const server = createServer(async (req, res) => {
       const repoBoard = board.getBoard(settingsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       const input = await body(req);
+      if ("autoPickupEnabled" in input || "pickupConcurrency" in input) {
+        if (typeof input.autoPickupEnabled !== "boolean" || !Number.isSafeInteger(input.pickupConcurrency)) throw new Error("Specify autoPickupEnabled and pickupConcurrency together");
+        send(res, 200, board.setAutoPickup(repoBoard.id, input.autoPickupEnabled, Number(input.pickupConcurrency))); return;
+      }
       if ("autoReviewEnabled" in input || "verificationCommand" in input) {
         if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
         send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled, input.verificationCommand)); return;
@@ -187,6 +193,6 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); });
-const shutdown = () => { server.close(); void Promise.all([worker.shutdown(), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); }); };
+server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); });
+const shutdown = () => { server.close(); autoPickup.shutdown(); void Promise.all([worker.shutdown(), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); }); };
 process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);

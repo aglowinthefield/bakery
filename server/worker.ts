@@ -10,7 +10,7 @@ function git(repo: string, ...args: string[]) {
 export class Worker {
   private active = new Map<string, ChildProcess>();
   constructor(private board: Board, private dataDir: string, private piBin = "pi") {}
-  start(card: Card): Run {
+  start(card: Card, startedBy: "manual" | "auto" = "manual"): Run {
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
     const root = git(card.repo, "rev-parse", "--show-toplevel");
@@ -31,7 +31,7 @@ export class Worker {
       realpathSync(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
       realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
-    const run = this.board.claim(card.id);
+    const run = this.board.claim(card.id, startedBy);
     try {
       if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");
       mkdirSync(join(this.dataDir, "worktrees"), { recursive: true });

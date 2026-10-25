@@ -253,6 +253,7 @@ test("restart preserves interrupted work as blocked rather than dispatching it a
     first.claim(card.id);
     first.close();
     const second = new Board(path);
+    second.recoverInterruptedRuns();
     assert.equal(second.listCards()[0]?.status, "interrupted");
     assert.throws(() => second.claim(card.id), /interrupted/);
     assert.equal(second.resolveInterrupted(card.id).status, "failed");

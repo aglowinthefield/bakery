@@ -55,6 +55,8 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(first.autoCollapseEmptySwimlanes, false);
     assert.equal(first.autoReviewEnabled, false);
     assert.equal(first.verificationCommand, "");
+    assert.equal(first.autoPickupEnabled, false);
+    assert.equal(first.pickupConcurrency, 2);
     assert.equal((await request("/boards", "POST", { repo: alpha })).status, 400);
     assert.equal((await request("/boards", "POST", { repo: "code/beta" })).status, 400);
     const second = (await request("/boards", "POST", { repo: beta })).data;
@@ -73,6 +75,11 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.ok(auto.data.autoReviewEnabledAt);
     assert.deepEqual((await request(`/boards/${first.id}/cards/nonexistent/auto-review`)).status, 404);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: false, verificationCommand: "npm test && npm run build" })).data.autoReviewEnabled, false);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 0 })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 5 })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2 })).data.autoPickupEnabled, true);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: false, pickupConcurrency: 2 })).data.autoPickupEnabled, false);
     assert.equal((await request("/boards")).data.find((item: { id: string }) => item.id === second.id).autoCollapseEmptySwimlanes, false);
     execFileSync("git", ["-C", alpha, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;

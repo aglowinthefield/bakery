@@ -2,12 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done";
-export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null };
+export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; autoPickupEnabledAt: string | null; autoPickupError: string };
 export type BakerySettings = { confirmRunStart: boolean; cardDetailsLayout: "dialog" | "side" };
-type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null };
-const toRepoBoard = (row: BoardRow): RepoBoard => ({ ...row, autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, autoReviewEnabled: row.autoReviewEnabled !== 0 });
+type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; autoPickupEnabledAt: string | null; autoPickupError: string };
+const toRepoBoard = (row: BoardRow): RepoBoard => ({ ...row, autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0 });
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number };
-export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number };
+export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto" };
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null };
 export type MergeFailure = { cardId: string; files: string[]; details: string };
@@ -22,8 +22,8 @@ export class Board {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT);
+      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', UNIQUE(cardId, attempt));
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '');
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT);
@@ -41,7 +41,10 @@ export class Board {
     if (!boardColumns.has("autoReviewEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewEnabled INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("verificationCommand")) this.db.exec("ALTER TABLE boards ADD COLUMN verificationCommand TEXT NOT NULL DEFAULT ''");
     if (!boardColumns.has("autoReviewEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewEnabledAt TEXT");
-    // Do not retry a paid review after a restart. Leave the run for a human to inspect.
+    if (!boardColumns.has("autoPickupEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupEnabled INTEGER NOT NULL DEFAULT 0");
+    if (!boardColumns.has("pickupConcurrency")) this.db.exec("ALTER TABLE boards ADD COLUMN pickupConcurrency INTEGER NOT NULL DEFAULT 2");
+    if (!boardColumns.has("autoPickupEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupEnabledAt TEXT");
+    if (!boardColumns.has("autoPickupError")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupError TEXT NOT NULL DEFAULT ''");
 
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
@@ -55,12 +58,15 @@ export class Board {
       }
     }
     if (!runColumns.has("turnsIncomplete")) this.db.exec("ALTER TABLE runs ADD COLUMN turnsIncomplete INTEGER NOT NULL DEFAULT 1");
+    if (!runColumns.has("startedBy")) this.db.exec("ALTER TABLE runs ADD COLUMN startedBy TEXT NOT NULL DEFAULT 'manual'");
     const approvalColumns = new Set((this.db.prepare("PRAGMA table_info(approvals)").all() as { name: string }[]).map(column => column.name));
     if (!approvalColumns.has("preparedHead")) this.db.exec("ALTER TABLE approvals ADD COLUMN preparedHead TEXT");
     if (!approvalColumns.has("merged")) this.db.exec("ALTER TABLE approvals ADD COLUMN merged INTEGER NOT NULL DEFAULT 0");
     // Preserve old cards and runs. A stored repository path is never reinterpreted against today's cwd.
     for (const row of this.db.prepare("SELECT DISTINCT repo FROM cards WHERE repo NOT IN (SELECT repo FROM boards)").all() as { repo: string }[]) this.addRepo(row.repo);
-    // After a process restart, never infer success or schedule a second worker.
+  }
+  recoverInterruptedRuns(): void {
+    // Only the server calls this under the exclusive data-directory lock.
     this.db.exec(`UPDATE runs SET status='interrupted', error='Server restarted while this run was active', finishedAt=datetime('now') WHERE status='running';
       UPDATE cards SET status='interrupted' WHERE status='running';`);
   }
@@ -79,9 +85,9 @@ export class Board {
     return this.getSettings();
   }
   listRepos(): string[] { return this.listBoards().map(board => board.repo); }
-  listBoards(): RepoBoard[] { return (this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt FROM boards WHERE archived=0 ORDER BY repo").all() as BoardRow[]).map(toRepoBoard); }
+  listBoards(): RepoBoard[] { return (this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, autoPickupEnabledAt, autoPickupError FROM boards WHERE archived=0 ORDER BY repo").all() as BoardRow[]).map(toRepoBoard); }
   getBoard(id: string): RepoBoard | undefined {
-    const row = this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt FROM boards WHERE id=? AND archived=0").get(id) as BoardRow | undefined;
+    const row = this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, autoPickupEnabledAt, autoPickupError FROM boards WHERE id=? AND archived=0").get(id) as BoardRow | undefined;
     return row && toRepoBoard(row);
   }
   addRepo(repo: string): RepoBoard {
@@ -107,6 +113,40 @@ export class Board {
     this.db.prepare("UPDATE boards SET autoReviewEnabled=?, verificationCommand=?, autoReviewEnabledAt=? WHERE id=?")
       .run(enabled ? 1 : 0, command, enabled ? (board.autoReviewEnabled && board.verificationCommand === command ? board.autoReviewEnabledAt : now()) : null, id);
     return this.getBoard(id)!;
+  }
+  setAutoPickup(id: string, enabled: boolean, concurrency: number): RepoBoard {
+    const current = this.getBoard(id);
+    if (!current) throw new Error("Board not found");
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Auto-pickup concurrency must be between 1 and 4");
+    this.db.prepare("UPDATE boards SET autoPickupEnabled=?, pickupConcurrency=?, autoPickupEnabledAt=?, autoPickupError='' WHERE id=?")
+      .run(enabled ? 1 : 0, concurrency, enabled ? (current.autoPickupEnabled ? current.autoPickupEnabledAt : now()) : null, id);
+    return this.getBoard(id)!;
+  }
+  pauseAutoPickup(id: string, reason: string): void {
+    this.db.prepare("UPDATE boards SET autoPickupEnabled=0, autoPickupEnabledAt=NULL, autoPickupError=? WHERE id=?")
+      .run(reason.slice(0, 500), id);
+  }
+  runningCount(repo: string): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM cards WHERE repo=? AND status='running'").get(repo) as { n: number }).n;
+  }
+  autoStartsToday(repo: string): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM runs JOIN cards ON cards.id=runs.cardId WHERE cards.repo=? AND startedBy='auto' AND julianday(startedAt)>=julianday('now','-1 day')").get(repo) as { n: number }).n;
+  }
+  listAutoPickupCandidates(): { card: Card; board: RepoBoard }[] {
+    const result: { card: Card; board: RepoBoard }[] = [];
+    for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
+      if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || this.autoStartsToday(repoBoard.repo) >= 6) continue;
+      const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY createdAt, rowid").all(repoBoard.repo) as { id: string }[];
+      result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })));
+    }
+    return result;
+  }
+  autoPickupBlocker(repoBoard: RepoBoard): string | undefined {
+    if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status='interrupted' LIMIT 1").get(repoBoard.repo)) return "An interrupted run needs inspection before automatic pickup";
+    if (this.db.prepare(`SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId
+      WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed' AND runs.startedAt>=? LIMIT 1`).get(repoBoard.repo, repoBoard.autoPickupEnabledAt))
+      return "An automatic run failed; inspect it before re-enabling pickup";
+    return undefined;
   }
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {
     const result: { card: Card; run: Run; board: RepoBoard }[] = [];
@@ -303,7 +343,7 @@ export class Board {
     this.db.prepare("UPDATE cards SET status='failed', updatedAt=? WHERE id=?").run(now(), id);
     return this.getCard(id)!;
   }
-  claim(cardId: string): Run {
+  claim(cardId: string, startedBy: "manual" | "auto" = "manual"): Run {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId);
@@ -313,9 +353,15 @@ export class Board {
       if (card.status === "done") throw new Error("Reopen this card before starting a run");
       if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
       if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry Approve and merge");
+      const repoBoard = this.listBoards().find(item => item.repo === card.repo);
+      if (repoBoard?.autoPickupEnabled && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
+        throw new Error(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
+      if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
+        this.autoStartsToday(card.repo) >= 6 || this.autoPickupBlocker(repoBoard)))
+        throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       const id = randomUUID(), sessionId = `bakery-${cardId}`;
-      this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt) VALUES (?, ?, ?, 'running', ?, ?)").run(id, cardId, attempt, sessionId, now());
+      this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy) VALUES (?, ?, ?, 'running', ?, ?, ?)").run(id, cardId, attempt, sessionId, now(), startedBy);
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
       this.db.exec("COMMIT");
       return this.getRun(id)!;
