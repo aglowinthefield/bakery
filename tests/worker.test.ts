@@ -47,12 +47,15 @@ test("card transcript groups tool activity by turn without storing tool argument
       { type: "turn_end", message: { stopReason: "stop" } },
       { type: "agent_settled", aborted: false },
     ];
-    writeFileSync(fakePi, `#!/bin/sh\nprintf 'change\\n' >> README.md\nprintf '%s\\n' ${events.map(event => `'${JSON.stringify(event)}'`).join(" ")}\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf 'change\\n' >> README.md\nprintf '%s\\n' ${events.slice(0, 8).map(event => `'${JSON.stringify(event)}'`).join(" ")}\nsleep 0.8\nprintf '%s\\n' ${events.slice(8).map(event => `'${JSON.stringify(event)}'`).join(" ")}\n`);
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Transcript", body: "", repo });
     const run = worker.start(card);
+    await waitFor(() => board.listCards(repo)[0]?.turns === 1);
+    assert.equal(board.getRun(run.id)?.status, "running");
     await waitFor(() => board.getRun(run.id)?.status === "review");
+    assert.equal(board.listCards(repo)[0]?.turns, 2);
     const output = board.getRun(run.id)!.output;
     assert.match(output, /Turn 1: read ×2, bash ×1; 1 failed/);
     assert.match(output, /Turn 2: edit ×1; 1 unfinished/);
@@ -71,7 +74,7 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     writeFileSync(join(repo, "README.md"), "fixture\n");
     execFileSync("git", ["-C", repo, "add", "README.md"]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
-    writeFileSync(fakePi, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Worked offline.\"}}' '{\"type\":\"agent_settled\",\"aborted\":false}'\n");
+    writeFileSync(fakePi, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"turn_start\"}' '{\"type\":\"turn_end\"}' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Worked offline.\"}}' '{\"type\":\"agent_settled\",\"aborted\":false}'\n");
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Test", body: "No network", repo });
@@ -83,6 +86,7 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     assert.equal(next.attempt, 2);
     assert.equal(next.sessionId, first.sessionId);
     assert.equal(next.worktree, first.worktree);
+    assert.equal(board.listCards(repo)[0]?.turns, 2);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

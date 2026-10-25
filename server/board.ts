@@ -6,11 +6,13 @@ export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: 
 export type BakerySettings = { confirmRunStart: boolean };
 type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number };
 const toRepoBoard = (row: BoardRow): RepoBoard => ({ ...row, autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0 });
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string };
-export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null };
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number };
+export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number };
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 const now = () => new Date().toISOString();
+const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete
+  FROM cards LEFT JOIN runs ON runs.cardId=cards.id`;
 
 export class Board {
   private db: DatabaseSync;
@@ -18,7 +20,7 @@ export class Board {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, UNIQUE(cardId, attempt));
+      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, UNIQUE(cardId, attempt));
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
@@ -27,6 +29,18 @@ export class Board {
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoCollapseEmptySwimlanes")) this.db.exec("ALTER TABLE boards ADD COLUMN autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0");
+    const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
+    if (!runColumns.has("turns")) {
+      this.db.exec("ALTER TABLE runs ADD COLUMN turns INTEGER NOT NULL DEFAULT 0");
+      // Older transcripts lack event counts. Their highest visible activity marker is only an estimate.
+      const update = this.db.prepare("UPDATE runs SET turns=? WHERE id=?");
+      for (const row of this.db.prepare("SELECT id, output FROM runs").all() as { id: string; output: string }[]) {
+        let count = 0;
+        for (const match of row.output.matchAll(/(?:^|\n)Turn (\d+):/g)) count = Math.max(count, Number(match[1]));
+        update.run(count, row.id);
+      }
+    }
+    if (!runColumns.has("turnsIncomplete")) this.db.exec("ALTER TABLE runs ADD COLUMN turnsIncomplete INTEGER NOT NULL DEFAULT 1");
     const approvalColumns = new Set((this.db.prepare("PRAGMA table_info(approvals)").all() as { name: string }[]).map(column => column.name));
     if (!approvalColumns.has("preparedHead")) this.db.exec("ALTER TABLE approvals ADD COLUMN preparedHead TEXT");
     if (!approvalColumns.has("merged")) this.db.exec("ALTER TABLE approvals ADD COLUMN merged INTEGER NOT NULL DEFAULT 0");
@@ -86,8 +100,10 @@ export class Board {
     if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status IN ('running', 'interrupted') LIMIT 1").get(board.repo)) throw new Error("Resolve running or interrupted cards before removing this board");
     this.db.prepare("UPDATE boards SET archived=1 WHERE id=?").run(id);
   }
-  listCards(repo?: string): Card[] { return (repo === undefined ? this.db.prepare("SELECT * FROM cards ORDER BY createdAt DESC").all() : this.db.prepare("SELECT * FROM cards WHERE repo=? ORDER BY createdAt DESC").all(repo)) as Card[]; }
-  getCard(id: string): Card | undefined { return this.db.prepare("SELECT * FROM cards WHERE id=?").get(id) as Card | undefined; }
+  listCards(repo?: string): Card[] { return (repo === undefined
+    ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.createdAt DESC`).all()
+    : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.createdAt DESC`).all(repo)) as Card[]; }
+  getCard(id: string): Card | undefined { return this.db.prepare(`${cardQuery} WHERE cards.id=? GROUP BY cards.id`).get(id) as Card | undefined; }
   createCard(input: { title: string; body: string; repo: string }): Card {
     const id = randomUUID(), time = now();
     this.addRepo(input.repo);
@@ -194,6 +210,7 @@ export class Board {
   getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
   listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }
   attach(id: string, pid: number, worktree: string) { this.db.prepare("UPDATE runs SET pid=?, worktree=? WHERE id=? AND status='running'").run(pid, worktree, id); }
+  completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
   append(id: string, chunk: string) {
     // Keep a bounded tail. Store only human-readable text; never raw tool arguments or credentials.
     const run = this.getRun(id);

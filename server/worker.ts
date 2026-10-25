@@ -68,6 +68,7 @@ export class Worker {
             const tool = tools.get(event.toolCallId);
             if (tool) { tool.finished = true; tool.failed = event.isError === true; }
           }
+          if (event.type === "turn_end") this.board.completeTurn(run.id);
           if (event.type === "turn_end" && tools.size) {
             const counts = new Map<string, number>();
             let failed = 0, unfinished = 0;
