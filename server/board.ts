@@ -2,13 +2,14 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done";
-export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean };
+export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null };
 export type BakerySettings = { confirmRunStart: boolean; cardDetailsLayout: "dialog" | "side" };
-type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number };
-const toRepoBoard = (row: BoardRow): RepoBoard => ({ ...row, autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0 });
+type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null };
+const toRepoBoard = (row: BoardRow): RepoBoard => ({ ...row, autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, autoReviewEnabled: row.autoReviewEnabled !== 0 });
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number };
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null };
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const now = () => new Date().toISOString();
@@ -22,9 +23,10 @@ export class Board {
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT);
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')));
@@ -36,6 +38,11 @@ export class Board {
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoCollapseEmptySwimlanes")) this.db.exec("ALTER TABLE boards ADD COLUMN autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0");
+    if (!boardColumns.has("autoReviewEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewEnabled INTEGER NOT NULL DEFAULT 0");
+    if (!boardColumns.has("verificationCommand")) this.db.exec("ALTER TABLE boards ADD COLUMN verificationCommand TEXT NOT NULL DEFAULT ''");
+    if (!boardColumns.has("autoReviewEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewEnabledAt TEXT");
+    // Do not retry a paid review after a restart. Leave the run for a human to inspect.
+
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
       this.db.exec("ALTER TABLE runs ADD COLUMN turns INTEGER NOT NULL DEFAULT 0");
@@ -57,6 +64,10 @@ export class Board {
     this.db.exec(`UPDATE runs SET status='interrupted', error='Server restarted while this run was active', finishedAt=datetime('now') WHERE status='running';
       UPDATE cards SET status='interrupted' WHERE status='running';`);
   }
+  recoverAutoReviews(): void {
+    // Only the server may call this, after obtaining its exclusive data-directory lock.
+    this.db.prepare("UPDATE auto_review_jobs SET state='needs_human', details='Server restarted during agent review; inspect manually', finishedAt=? WHERE state='running'").run(now());
+  }
   close() { this.db.close(); }
   getSettings(): BakerySettings {
     const row = this.db.prepare("SELECT confirmRunStart, cardDetailsLayout FROM settings WHERE id=1").get() as { confirmRunStart: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"] };
@@ -68,9 +79,9 @@ export class Board {
     return this.getSettings();
   }
   listRepos(): string[] { return this.listBoards().map(board => board.repo); }
-  listBoards(): RepoBoard[] { return (this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes FROM boards WHERE archived=0 ORDER BY repo").all() as BoardRow[]).map(toRepoBoard); }
+  listBoards(): RepoBoard[] { return (this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt FROM boards WHERE archived=0 ORDER BY repo").all() as BoardRow[]).map(toRepoBoard); }
   getBoard(id: string): RepoBoard | undefined {
-    const row = this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes FROM boards WHERE id=? AND archived=0").get(id) as BoardRow | undefined;
+    const row = this.db.prepare("SELECT id, repo, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt FROM boards WHERE id=? AND archived=0").get(id) as BoardRow | undefined;
     return row && toRepoBoard(row);
   }
   addRepo(repo: string): RepoBoard {
@@ -87,6 +98,51 @@ export class Board {
     if (!this.getBoard(id)) throw new Error("Board not found");
     this.db.prepare("UPDATE boards SET autoCollapseEmptySwimlanes=? WHERE id=?").run(enabled ? 1 : 0, id);
     return this.getBoard(id)!;
+  }
+  setAutoReview(id: string, enabled: boolean, verificationCommand: string): RepoBoard {
+    const board = this.getBoard(id);
+    if (!board) throw new Error("Board not found");
+    const command = verificationCommand.trim();
+    if (command.length > 500 || (enabled && !command)) throw new Error("Auto-review requires a verification command (maximum 500 characters)");
+    this.db.prepare("UPDATE boards SET autoReviewEnabled=?, verificationCommand=?, autoReviewEnabledAt=? WHERE id=?")
+      .run(enabled ? 1 : 0, command, enabled ? (board.autoReviewEnabled && board.verificationCommand === command ? board.autoReviewEnabledAt : now()) : null, id);
+    return this.getBoard(id)!;
+  }
+  listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {
+    const result: { card: Card; run: Run; board: RepoBoard }[] = [];
+    for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled)) {
+      if (this.autoReviewMergesToday(repoBoard.repo) >= 3) continue;
+      for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
+        const run = this.listRuns(card.id)[0];
+        if (run?.status === "review" && run.finishedAt && repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&
+          !this.getAutoReviewJob(run.id) && !this.getApproval(card.id) && !this.getMergeFailure(card.id) &&
+          !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id)) result.push({ card, run, board: repoBoard });
+      }
+    }
+    return result.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
+  }
+  autoReviewMergesToday(repo: string): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM auto_review_jobs JOIN cards ON cards.id=auto_review_jobs.cardId WHERE cards.repo=? AND state='merged' AND julianday(finishedAt)>=julianday('now','-1 day')")
+      .get(repo) as { n: number }).n;
+  }
+  getAutoReviewJob(runId: string): AutoReviewJob | undefined {
+    return this.db.prepare("SELECT * FROM auto_review_jobs WHERE runId=?").get(runId) as AutoReviewJob | undefined;
+  }
+  listAutoReviewJobs(cardId: string): AutoReviewJob[] {
+    return this.db.prepare("SELECT * FROM auto_review_jobs WHERE cardId=? ORDER BY startedAt DESC").all(cardId) as AutoReviewJob[];
+  }
+  beginAutoReview(cardId: string, runId: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const candidate = this.listAutoReviewCandidates().find(item => item.card.id === cardId && item.run.id === runId);
+      if (!candidate) throw new Error("Auto-review is not eligible for this card");
+      this.db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt) VALUES (?,?,'running',?)").run(cardId, runId, now());
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  finishAutoReview(runId: string, state: "needs_human" | "merged", details: string, fingerprint = ""): void {
+    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=? WHERE runId=? AND state='running'")
+      .run(state, details.slice(0, 4000), fingerprint, now(), runId);
   }
   renameBoard(id: string, repo: string): RepoBoard {
     const board = this.getBoard(id);

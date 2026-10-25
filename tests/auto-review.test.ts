@@ -1,0 +1,196 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Board } from "../server/board.js";
+import { Integration } from "../server/integration.js";
+import { AutoReview, reviewerVerdict } from "../server/auto-review.js";
+
+function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
+const settle = (verdict: string) => [
+  JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: verdict }] } }),
+  JSON.stringify({ type: "agent_settled", aborted: false }), "",
+].join("\n");
+function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and correct"}') {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-")), repo = join(dir, "repo"), data = join(dir, "data");
+  mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
+  git(repo, "init", "-q", "-b", "main");
+  writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
+  git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
+  const board = new Board(join(dir, "board.sqlite")), repoBoard = board.addRepo(repo);
+  const piBin = join(dir, "fake-pi");
+  // The fake emits the same JSON events as --mode json; it never calls a model.
+  writeFileSync(piBin, `#!/bin/sh\ncat <<'EVENTS'\n${settle(verdict)}EVENTS\n`); chmodSync(piBin, 0o755);
+  const integration = new Integration(board, data), auto = new AutoReview(board, integration, piBin);
+  function reviewedCard() {
+    const card = board.createCard({ repo, title: "Add a new line", body: "Include a regression test" });
+    board.setStatus(card.id, "ready");
+    const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
+    git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    board.attach(run.id, process.pid, worktree);
+    writeFileSync(join(worktree, "README.md"), `original\nnew ${card.id}\n`);
+    board.finish(run.id, "review");
+    return { card: board.getCard(card.id)!, run: board.getRun(run.id)!, worktree };
+  }
+  return { dir, repo, data, board, repoBoard, auto, reviewedCard, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test("strict agent verdict rejects missing settlement, invalid JSON, and ambiguous formats", () => {
+  assert.deepEqual(reviewerVerdict(settle('{"verdict":"approve","reason":"Looks correct"}')), { verdict: "approve", reason: "Looks correct" });
+  assert.throws(() => reviewerVerdict(settle('```json\n{"verdict":"approve","reason":"fine"}\n```')), /Unexpected token|JSON/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine","extra":true}')), /invalid or ambiguous/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"aborted":false', '"aborted":true')), /did not settle/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"stopReason":"end_turn"', '"stopReason":"length"')), /did not settle/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"agent_settled"', '"message_end"')), /did not settle/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"agent_settled"', '"message_end"') + settle('{"verdict":"approve","reason":"fine"}')), /did not settle/);
+});
+
+test("new opt-in reviews run a separate tool-free reviewer and verify before local merge", async () => {
+  const item = fixture();
+  try {
+    const old = item.reviewedCard();
+    assert.equal(item.board.listAutoReviewCandidates().length, 0);
+    item.board.setAutoReview(item.repoBoard.id, true, "test -f README.md && printf verified");
+    assert.equal(item.board.listAutoReviewCandidates().length, 0, "old review must not auto-merge");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    assert.deepEqual(item.board.listAutoReviewCandidates().map(entry => entry.card.id), [current.card.id]);
+    await item.auto.tick();
+    assert.equal(item.board.getCard(current.card.id)?.status, "done");
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "merged");
+    assert.equal(item.board.autoReviewMergesToday(item.repo), 1);
+    assert.match(readFileSync(join(item.repo, "README.md"), "utf8"), new RegExp(current.card.id));
+    assert.equal(item.board.getCard(old.card.id)?.status, "review");
+    await item.auto.tick();
+    assert.equal(item.board.autoReviewMergesToday(item.repo), 1);
+  } finally { item.close(); }
+});
+
+test("card text edits during review leave the candidate for a human", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    const script = join(item.dir, "fake-pi");
+    writeFileSync(script, `#!/bin/sh\nnode -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(${JSON.stringify(join(item.dir, "board.sqlite"))}); db.prepare("UPDATE cards SET body = ? WHERE id = ?").run("Changed acceptance criteria", ${JSON.stringify(current.card.id)}); db.close()'\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"Looks fine"}')}EVENTS\n`);
+    await item.auto.tick();
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /Card changed during agent review/);
+  } finally { item.close(); }
+});
+
+test("binary changes are never auto-approved without inspectable bytes", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    writeFileSync(join(current.worktree, "image.png"), Buffer.from([0, 1, 2, 3]));
+    await item.auto.tick();
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /Binary.*human review/);
+  } finally { item.close(); }
+});
+
+test("opening another Board cannot invalidate an active review; explicit restart recovery can", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    item.board.beginAutoReview(current.card.id, current.run.id);
+    const second = new Board(join(item.dir, "board.sqlite"));
+    assert.equal(second.getAutoReviewJob(current.run.id)?.state, "running");
+    second.recoverAutoReviews(); // This method is only called by the exclusive-lock server at startup.
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "needs_human");
+    assert.throws(() => new Integration(item.board, item.data).approve(current.card, new Integration(item.board, item.data).review(current.card).fingerprint, "auto", () => {}), /no longer active/);
+    second.close();
+  } finally { item.close(); }
+});
+
+test("the three-merge daily cap and disabling stop new autonomous reviews", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    for (let i = 0; i < 3; i++) {
+      const current = item.reviewedCard();
+      await item.auto.tick();
+      assert.equal(item.board.getCard(current.card.id)?.status, "done");
+    }
+    const fourth = item.reviewedCard();
+    assert.equal(item.board.autoReviewMergesToday(item.repo), 3);
+    assert.equal(item.board.listAutoReviewCandidates().length, 0);
+    await item.auto.tick();
+    assert.equal(item.board.getCard(fourth.card.id)?.status, "review");
+    item.board.setAutoReview(item.repoBoard.id, false, "true");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewEnabled, false);
+    assert.equal(item.board.listAutoReviewCandidates().length, 0);
+  } finally { item.close(); }
+});
+
+test("failing verification leaves the card in Review without calling a model or retrying", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "exit 2");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard(), before = git(item.repo, "rev-parse", "main");
+    await item.auto.tick();
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    assert.equal(git(item.repo, "rev-parse", "main"), before);
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "needs_human");
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /failed/);
+    assert.equal(item.board.listAutoReviewCandidates().length, 0);
+  } finally { item.close(); }
+});
+
+test("verification must pass on the merged result, not just the card branch", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "test ! -e blocked.txt");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    writeFileSync(join(item.repo, "blocked.txt"), "new main content\n");
+    git(item.repo, "add", "blocked.txt");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "new main file");
+    const before = git(item.repo, "rev-parse", "main");
+    await item.auto.tick();
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    assert.equal(git(item.repo, "rev-parse", "main"), before);
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /merged result/);
+  } finally { item.close(); }
+});
+
+test("agent findings or an ambiguous response fail closed", async () => {
+  for (const verdict of ['{"verdict":"needs_human","reason":"Missing test"}', 'I approve']) {
+    const item = fixture(verdict);
+    try {
+      item.board.setAutoReview(item.repoBoard.id, true, "true");
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const current = item.reviewedCard(), before = git(item.repo, "rev-parse", "main");
+      await item.auto.tick();
+      assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "needs_human");
+      assert.equal(item.board.getCard(current.card.id)?.status, "review");
+      assert.equal(git(item.repo, "rev-parse", "main"), before);
+    } finally { item.close(); }
+  }
+});
+
+test("changing the work during verification blocks auto-merge and restarting does not re-run a reviewer", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "printf changed >> README.md");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await item.auto.tick();
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /changed during verification/);
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    const reopened = new Board(join(item.dir, "board.sqlite"));
+    assert.equal(reopened.getAutoReviewJob(current.run.id)?.state, "needs_human");
+    assert.equal(reopened.listAutoReviewCandidates().length, 0);
+    reopened.close();
+  } finally { item.close(); }
+});
