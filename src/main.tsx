@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { ArrowUpRight, ChevronDown, ChevronRight, CircleHelp, Clock3, GitBranch, LayoutGrid, Maximize2, Minimize2, Pencil, Plus, RefreshCw, Settings2, Square, XCircle } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -244,6 +244,19 @@ function DiffPatch({ path, patch, comments, onSelect }: { path: string; patch: s
 }
 function AttemptList({ runs }: { runs: Run[] }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [copyFeedback, setCopyFeedback] = useState<{ runId: string; copied: boolean } | null>(null);
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current); }, []);
+  const copyPath = async (runId: string, path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopyFeedback({ runId, copied: true });
+    } catch {
+      setCopyFeedback({ runId, copied: false });
+    }
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    feedbackTimer.current = setTimeout(() => setCopyFeedback(null), 3000);
+  };
   return <div className="mt-8">
     <h3 className="mb-4 text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">Attempts</h3>
     <div className="space-y-4">{runs.map((run, index) => {
@@ -256,7 +269,7 @@ function AttemptList({ runs }: { runs: Run[] }) {
           <span className="ml-auto flex items-center gap-1 text-muted-foreground"><Clock3 size={12} /> {date(run.startedAt)}</span>
         </button>
         {open && <div id={`attempt-${run.id}`} className="border-t border-border">
-          {run.worktree && <div className="truncate px-4 pt-3 font-mono text-[11px] text-muted-foreground">{run.worktree}</div>}
+          {run.worktree && <div className="px-4 pt-3 text-[11px]"><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><span className="min-w-0 flex-1 font-mono text-muted-foreground [overflow-wrap:anywhere]">{run.worktree}</span><Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => { if (run.worktree) void copyPath(run.id, run.worktree); }}>Copy path</Button></div>{copyFeedback?.runId === run.id && <p role={copyFeedback.copied ? "status" : "alert"} className={`mt-1 ${copyFeedback.copied ? "text-primary" : "text-destructive"}`}>{copyFeedback.copied ? "Path copied" : "Could not copy path"}</p>}</div>}
           {run.error && <p className="px-4 pt-3 text-xs text-destructive">{run.error}</p>}
           <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[11px] leading-5 text-foreground/75">{run.output || (run.status === "running" ? "Waiting for Pi output…" : "No assistant output recorded.")}</pre>
         </div>}
