@@ -68,22 +68,30 @@ test("card transcript groups tool activity by turn without storing tool argument
 
 test("a Pi settlement requests review; retry uses the same card worktree and session", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
-  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake");
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
   try {
     execFileSync("git", ["init", "-q", repo]);
     writeFileSync(join(repo, "README.md"), "fixture\n");
     execFileSync("git", ["-C", repo, "add", "README.md"]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
-    writeFileSync(fakePi, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"turn_start\"}' '{\"type\":\"turn_end\"}' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Worked offline.\"}}' '{\"type\":\"agent_settled\",\"aborted\":false}'\n");
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"turn_start"}' '{"type":"turn_end"}' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Worked offline."}}' '{"type":"agent_settled","aborted":false}'\n`);
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Test", body: "No network", repo });
     const first = worker.start(card);
     await waitFor(() => board.getRun(first.id)?.status === "review");
     assert.match(board.getRun(first.id)!.output, /Worked offline/);
+    const fingerprint = "a".repeat(64);
+    board.addReviewComment(card.id, first.id, fingerprint, "README.md", 4, "add", "changed", "Add a regression test", 2);
+    assert.throws(() => worker.start(board.getCard(card.id)!), /Submit or remove draft review comments/);
+    assert.equal(board.listRuns(card.id).length, 1);
+    board.requestChanges(card.id, first.id, fingerprint);
     const next = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(next.id)?.status === "review");
     assert.equal(next.attempt, 2);
+    assert.match(readFileSync(promptFile, "utf8"), /Add a regression test/);
+    assert.match(readFileSync(promptFile, "utf8"), /README\.md/);
+    assert.match(readFileSync(promptFile, "utf8"), /"fileLine":2/);
     assert.equal(next.sessionId, first.sessionId);
     assert.equal(next.worktree, first.worktree);
     assert.equal(board.listCards(repo)[0]?.turns, 2);

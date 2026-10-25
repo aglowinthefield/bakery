@@ -3,13 +3,14 @@ import { randomUUID } from "node:crypto";
 
 export type CardStatus = "ready" | "running" | "review" | "failed" | "interrupted" | "done";
 export type RepoBoard = { id: string; repo: string; autoCollapseEmptySwimlanes: boolean };
-export type BakerySettings = { confirmRunStart: boolean };
+export type BakerySettings = { confirmRunStart: boolean; cardDetailsLayout: "dialog" | "side" };
 type BoardRow = { id: string; repo: string; autoCollapseEmptySwimlanes: number };
 const toRepoBoard = (row: BoardRow): RepoBoard => ({ ...row, autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0 });
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number };
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type MergeFailure = { cardId: string; files: string[]; details: string };
+export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const now = () => new Date().toISOString();
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete
   FROM cards LEFT JOIN runs ON runs.cardId=cards.id`;
@@ -24,8 +25,14 @@ export class Board {
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)));
+      CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
+      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')));
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
+    const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
+    if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
+    const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
+    if (!settingsColumns.has("cardDetailsLayout")) this.db.exec("ALTER TABLE settings ADD COLUMN cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side'))");
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoCollapseEmptySwimlanes")) this.db.exec("ALTER TABLE boards ADD COLUMN autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0");
@@ -52,11 +59,12 @@ export class Board {
   }
   close() { this.db.close(); }
   getSettings(): BakerySettings {
-    const row = this.db.prepare("SELECT confirmRunStart FROM settings WHERE id=1").get() as { confirmRunStart: number };
-    return { confirmRunStart: row.confirmRunStart === 1 };
+    const row = this.db.prepare("SELECT confirmRunStart, cardDetailsLayout FROM settings WHERE id=1").get() as { confirmRunStart: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"] };
+    return { confirmRunStart: row.confirmRunStart === 1, cardDetailsLayout: row.cardDetailsLayout };
   }
-  updateSettings(settings: BakerySettings): BakerySettings {
-    this.db.prepare("UPDATE settings SET confirmRunStart=? WHERE id=1").run(settings.confirmRunStart ? 1 : 0);
+  updateSettings(settings: Partial<BakerySettings>): BakerySettings {
+    const current = this.getSettings();
+    this.db.prepare("UPDATE settings SET confirmRunStart=?, cardDetailsLayout=? WHERE id=1").run((settings.confirmRunStart ?? current.confirmRunStart) ? 1 : 0, settings.cardDetailsLayout ?? current.cardDetailsLayout);
     return this.getSettings();
   }
   listRepos(): string[] { return this.listBoards().map(board => board.repo); }
@@ -132,6 +140,53 @@ export class Board {
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
     return this.getCard(id)!;
   }
+  listReviewComments(cardId: string): ReviewComment[] {
+    return this.db.prepare("SELECT * FROM review_comments WHERE cardId=? ORDER BY createdAt, id").all(cardId) as ReviewComment[];
+  }
+  addReviewComment(cardId: string, runId: string, fingerprint: string, path: string, line: number, kind: ReviewComment["kind"], code: string, body: string, fileLine: number | null = null): ReviewComment {
+    if (!body.trim() || body.length > 1000 || path.length > 1000 || code.length > 10000 || !Number.isSafeInteger(line) || line < 1 || (fileLine !== null && (!Number.isSafeInteger(fileLine) || fileLine < 1))) throw new Error("Invalid review comment");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
+      if (card?.status !== "review" || run?.id !== runId || run.status !== "review" || this.getApproval(cardId)) throw new Error("Only the latest unapproved review accepts comments");
+      if (this.hasRequestedChanges(cardId, runId)) throw new Error("Changes already requested for this review; run Pi again to revise it");
+      const count = this.db.prepare("SELECT COUNT(*) AS n FROM review_comments WHERE cardId=? AND runId=? AND state='draft'").get(cardId, runId) as { n: number };
+      if (count.n >= 25) throw new Error("Limit of 25 draft comments per review");
+      const id = randomUUID();
+      this.db.prepare("INSERT INTO review_comments(id,cardId,runId,fingerprint,path,line,fileLine,kind,code,body,createdAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        .run(id, cardId, runId, fingerprint, path, line, fileLine, kind, code, body.trim(), now());
+      this.db.exec("COMMIT");
+      return this.db.prepare("SELECT * FROM review_comments WHERE id=?").get(id) as ReviewComment;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  deleteReviewComment(cardId: string, id: string): void {
+    const result = this.db.prepare("DELETE FROM review_comments WHERE id=? AND cardId=? AND state='draft'").run(id, cardId);
+    if (!result.changes) throw new Error("Only draft comments can be removed");
+  }
+  hasRequestedChanges(cardId: string, runId: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM review_comments WHERE cardId=? AND runId=? AND state='requested' LIMIT 1").get(cardId, runId);
+  }
+  hasDraftReviewComments(cardId: string, runId: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM review_comments WHERE cardId=? AND runId=? AND state='draft' LIMIT 1").get(cardId, runId);
+  }
+  requestChanges(cardId: string, runId: string, fingerprint: string): ReviewComment[] {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
+      if (card?.status !== "review" || run?.id !== runId || run.status !== "review" || this.getApproval(cardId)) throw new Error("Only the latest unapproved review can request changes");
+      if (this.hasRequestedChanges(cardId, runId)) throw new Error("Changes already requested for this review");
+      if (this.db.prepare("SELECT 1 FROM review_comments WHERE cardId=? AND runId=? AND fingerprint<>? AND state='draft'").get(cardId, runId, fingerprint)) throw new Error("Remove draft comments on older diffs before requesting changes");
+      const result = this.db.prepare("UPDATE review_comments SET state='requested' WHERE cardId=? AND runId=? AND fingerprint=? AND state='draft'").run(cardId, runId, fingerprint);
+      if (!result.changes) throw new Error("Add comments on the current diff before requesting changes");
+      this.db.exec("COMMIT");
+      return this.listReviewComments(cardId);
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  getFeedbackForRun(cardId: string): ReviewComment[] {
+    return this.db.prepare(`SELECT review_comments.* FROM review_comments JOIN runs ON runs.id=review_comments.runId
+      WHERE review_comments.cardId=? AND review_comments.state='requested' AND runs.status='review'
+      AND runs.attempt=(SELECT MAX(attempt) FROM runs WHERE cardId=? AND status='review') ORDER BY review_comments.createdAt, review_comments.id`).all(cardId, cardId) as ReviewComment[];
+  }
   getMergeFailure(cardId: string): MergeFailure | undefined {
     const row = this.db.prepare("SELECT * FROM merge_failures WHERE cardId=?").get(cardId) as { cardId: string; files: string; details: string } | undefined;
     return row && { cardId: row.cardId, files: JSON.parse(row.files) as string[], details: row.details };
@@ -155,6 +210,7 @@ export class Board {
     const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
     if (card?.status !== "review" || run?.id !== runId || run.status !== "review") throw new Error("Only the latest reviewed run can be approved");
     if (this.getApproval(cardId)) throw new Error("Approval already in progress");
+    if (this.hasRequestedChanges(cardId, runId)) throw new Error("Changes requested; review a new attempt before approving");
     this.db.prepare("INSERT INTO approvals(cardId, runId, candidate, merged) VALUES (?, ?, ?, 0) ON CONFLICT(cardId) DO UPDATE SET runId=excluded.runId, candidate=excluded.candidate, preparedHead=NULL, merged=0").run(cardId, runId, candidate);
     this.clearMergeFailure(cardId);
     return this.getApproval(cardId)!;
