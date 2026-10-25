@@ -43,6 +43,10 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       }
     }
     assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false });
+    assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
+    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true });
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: true });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
@@ -62,9 +66,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${second.id}/cards`)).data.length, 0);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/runs`)).status, 404);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/start`, "POST")).status, 404);
+    assert.equal((await request(`/boards/${second.id}/cards/${card.id}/approve`, "POST")).status, 404);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}/approve`, "POST")).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].id, card.id);
     assert.equal((await request(`/boards/${first.id}`, "PATCH", { repo: beta })).status, 400);
-    const moved = await request(`/boards/${first.id}`, "PATCH", { repo: gamma });
+    const moved = await request(`/boards/${first.id}`, "PATCH", { repo: "~/code/gamma" });
+    assert.equal(moved.data.repo, realpathSync(gamma));
     assert.equal(moved.status, 200);
     assert.equal(moved.data.autoCollapseEmptySwimlanes, true);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync(gamma));

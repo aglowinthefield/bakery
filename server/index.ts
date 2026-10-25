@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join, extname, isAbsolute, resolve } from "node:path";
 import { Board } from "./board.js";
 import { Worker } from "./worker.js";
+import { Integration, IntegrationConflictError } from "./integration.js";
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -18,6 +19,7 @@ let board: Board;
 try { board = new Board(join(dataDir, "bakery.sqlite")); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const worker = new Worker(board, dataDir, process.env.BAKERY_PI_BIN ?? "pi");
+const integration = new Integration(board, dataDir);
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 function send(res: ServerResponse, status: number, payload: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
@@ -56,6 +58,12 @@ const server = createServer(async (req, res) => {
       const origin = req.headers.origin;
       if (origin && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
+    if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
+    if (path === "/api/settings" && req.method === "PATCH") {
+      const { confirmRunStart } = await body(req);
+      if (typeof confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
+      send(res, 200, board.updateSettings({ confirmRunStart })); return;
+    }
     if (path === "/api/boards" && req.method === "GET") { send(res, 200, board.listBoards()); return; }
     if (path === "/api/boards" && req.method === "POST") {
       const root = repoRoot((await body(req)).repo);
@@ -76,7 +84,13 @@ const server = createServer(async (req, res) => {
       if (typeof autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
       send(res, 200, board.setAutoCollapseEmptySwimlanes(settingsRoute[1], autoCollapseEmptySwimlanes)); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop))?)?$/);
+    const conflictsRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflicts$/);
+    if (conflictsRoute && req.method === "GET") {
+      const repoBoard = board.getBoard(conflictsRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      send(res, 200, board.listMergeFailures(repoBoard.repo)); return;
+    }
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|approve|approval|withdraw|conflict))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -87,8 +101,12 @@ const server = createServer(async (req, res) => {
         const item = board.getCard(id);
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
+        if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
+        if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
         if (req.method === "POST" && action === "start") { send(res, 202, worker.start(item)); return; }
+        if (req.method === "POST" && action === "approve") { send(res, 200, integration.approve(item)); return; }
+        if (req.method === "POST" && action === "withdraw") { send(res, 200, integration.withdraw(item)); return; }
         if (req.method === "POST" && action === "resolve") {
           if ((await body(req)).acknowledged !== true) throw new Error("Confirm that you inspected the interrupted worktree");
           send(res, 200, board.resolveInterrupted(id)); return;
@@ -115,6 +133,10 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { "Content-Type": mime[extname(target)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff" });
     res.end(readFileSync(target));
   } catch (error) {
+    if (error instanceof IntegrationConflictError) {
+      send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details });
+      return;
+    }
     const message = error instanceof Error ? error.message : "Unknown error";
     send(res, /not found/i.test(message) ? 404 : 400, { error: message });
   }
