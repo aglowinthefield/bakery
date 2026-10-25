@@ -53,6 +53,8 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
     assert.equal(first.autoCollapseEmptySwimlanes, false);
+    assert.equal(first.autoReviewEnabled, false);
+    assert.equal(first.verificationCommand, "");
     assert.equal((await request("/boards", "POST", { repo: alpha })).status, 400);
     assert.equal((await request("/boards", "POST", { repo: "code/beta" })).status, 400);
     const second = (await request("/boards", "POST", { repo: beta })).data;
@@ -62,6 +64,15 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     const settings = await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: true });
     assert.equal(settings.status, 200);
     assert.equal(settings.data.autoCollapseEmptySwimlanes, true);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true, verificationCommand: "" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true })).status, 400);
+    const auto = await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true, verificationCommand: "npm test && npm run build" });
+    assert.equal(auto.status, 200);
+    assert.equal(auto.data.autoReviewEnabled, true);
+    assert.equal(auto.data.verificationCommand, "npm test && npm run build");
+    assert.ok(auto.data.autoReviewEnabledAt);
+    assert.deepEqual((await request(`/boards/${first.id}/cards/nonexistent/auto-review`)).status, 404);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: false, verificationCommand: "npm test && npm run build" })).data.autoReviewEnabled, false);
     assert.equal((await request("/boards")).data.find((item: { id: string }) => item.id === second.id).autoCollapseEmptySwimlanes, false);
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;
     assert.equal(card.repo, realpathSync(alpha));

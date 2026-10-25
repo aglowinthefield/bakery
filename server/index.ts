@@ -6,6 +6,7 @@ import { join, extname, isAbsolute, resolve } from "node:path";
 import { Board } from "./board.js";
 import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
+import { AutoReview } from "./auto-review.js";
 import { parseDiff } from "../src/diff-lines.js";
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
@@ -17,10 +18,11 @@ let lock: number;
 try { lock = openSync(lockPath, "wx", 0o600); writeSync(lock, `${process.pid}\n`); }
 catch { throw new Error(`Bakery already owns ${dataDir}, or has a stale lock at ${lockPath}. Check the recorded PID before removing it.`); }
 let board: Board;
-try { board = new Board(join(dataDir, "bakery.sqlite")); }
+try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverAutoReviews(); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const worker = new Worker(board, dataDir, process.env.BAKERY_PI_BIN ?? "pi");
 const integration = new Integration(board, dataDir);
+const autoReview = new AutoReview(board, integration, process.env.BAKERY_PI_BIN ?? "pi");
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 function send(res: ServerResponse, status: number, payload: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
@@ -85,10 +87,15 @@ const server = createServer(async (req, res) => {
     }
     const settingsRoute = path.match(/^\/api\/boards\/([\w-]+)\/settings$/);
     if (settingsRoute && req.method === "PATCH") {
-      if (!board.getBoard(settingsRoute[1])) { send(res, 404, { error: "Board not found" }); return; }
-      const { autoCollapseEmptySwimlanes } = await body(req);
-      if (typeof autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
-      send(res, 200, board.setAutoCollapseEmptySwimlanes(settingsRoute[1], autoCollapseEmptySwimlanes)); return;
+      const repoBoard = board.getBoard(settingsRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      const input = await body(req);
+      if ("autoReviewEnabled" in input || "verificationCommand" in input) {
+        if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
+        send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled, input.verificationCommand)); return;
+      }
+      if (typeof input.autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
+      send(res, 200, board.setAutoCollapseEmptySwimlanes(repoBoard.id, input.autoCollapseEmptySwimlanes)); return;
     }
     const conflictsRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflicts$/);
     if (conflictsRoute && req.method === "GET") {
@@ -102,7 +109,7 @@ const server = createServer(async (req, res) => {
       if (!repoBoard || card?.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
       board.deleteReviewComment(card.id, commentRoute[3]); send(res, 200, { ok: true }); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -113,6 +120,7 @@ const server = createServer(async (req, res) => {
         const item = board.getCard(id);
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
+        if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
         if (req.method === "GET" && action === "review") { send(res, 200, integration.review(item)); return; }
         if (req.method === "GET" && action === "comments") { send(res, 200, board.listReviewComments(id)); return; }
@@ -179,6 +187,6 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, "127.0.0.1", () => console.log(`Bakery listening on http://127.0.0.1:${port}`));
-const shutdown = () => { server.close(); void worker.shutdown().then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); }); };
+server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); });
+const shutdown = () => { server.close(); void Promise.all([worker.shutdown(), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); }); };
 process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);
