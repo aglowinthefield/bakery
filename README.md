@@ -15,9 +15,9 @@ Open http://127.0.0.1:5173. For a single production server, run `npm run build &
 
 The server binds to loopback. Data and worktrees live under `~/.local/share/bakery/` by default. Override with `BAKERY_DATA_DIR`, `BAKERY_PORT`, or `BAKERY_PI_BIN` for a local test. Do not expose the server on a network: there is no account authentication. The UI is a local operator control surface, not a remote service.
 
-Add a repository by entering its Git root (an absolute path or `~/` path). Bakery keeps a separate board for each repository and stores the canonical root. New cards inherit the selected board's root. Existing cards are grouped by their stored paths when you upgrade.
+Add a repository by entering its Git root (an absolute path or `~/` path). Bakery expands `~` using the server user's home directory, stores the canonical root, and displays the resulting absolute path. Each repository gets a separate board; new cards inherit its root. Existing cards are grouped by their stored paths when you upgrade.
 
-To repair an incorrect path, edit the board. Bakery moves its cards only if none has an attempt, because attempts keep their worktrees and sessions in the original repository. If a card has an attempt, create a new card on the correct board. Removing a board hides it without deleting cards, runs, or worktrees; add the same repository again to restore it.
+To repair an incorrect path, edit the board. Bakery moves its cards only if none has an attempt, because attempts keep their worktrees and sessions in the original repository. If a card has an attempt, create a new card on the correct board. To remove a board, open its edit window and use Remove repository. This hides the board without deleting cards, runs, or worktrees; add the same repository again to restore it.
 
 A repository needs an initial commit containing the files Pi should work on. Git worktrees start from `HEAD`; uncommitted or untracked files in the original checkout do not appear in the card's worktree. Bakery does not stage or commit files for you.
 
