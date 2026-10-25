@@ -7,6 +7,12 @@ function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+// Pi's provider error text may include request details. Keep only the HTTP status in the card transcript.
+function providerFailure(error: unknown): string {
+  const status = typeof error === "string" ? error.match(/\b[45]\d{2}\b/)?.[0] : undefined;
+  return `Provider request failed${status ? ` (HTTP ${status})` : ""}`;
+}
+
 export class Worker {
   private active = new Map<string, ChildProcess>();
   constructor(private board: Board, private dataDir: string, private piBin = "pi") {}
@@ -51,7 +57,7 @@ export class Worker {
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
-    let buffer = "", settled = false, aborted = false, modelError = false, stderr = "";
+    let buffer = "", settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
     let turn = 0, lastWorktreeSnapshot = "";
     const tools = new Map<string, { name: string; finished: boolean; failed: boolean }>();
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -62,7 +68,15 @@ export class Worker {
         try {
           const event = JSON.parse(line);
           if (event.type === "agent_settled") { settled = true; aborted = event.aborted === true; }
-          if (event.type === "message_end" && event.message?.role === "assistant" && event.message.stopReason === "error") modelError = true;
+          if (event.type === "message_end" && event.message?.role === "assistant") {
+            if (event.message.stopReason === "error") {
+              terminalModelError = providerFailure(event.message.errorMessage);
+              this.board.append(run.id, `\n${terminalModelError}; Pi may retry.\n`);
+            } else if (terminalModelError) {
+              terminalModelError = null;
+              this.board.append(run.id, "\nPi recovered and continued after a provider error.\n");
+            }
+          }
           if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") this.board.append(run.id, event.assistantMessageEvent.delta);
           if (event.type === "turn_start") { turn++; tools.clear(); }
           if (event.type === "tool_execution_start" && typeof event.toolCallId === "string") {
@@ -98,18 +112,18 @@ export class Worker {
             } catch { /* A transcript hint must not fail the run if Git is unavailable. */ }
             tools.clear();
           }
-        } catch { modelError = true; }
+        } catch { protocolError = "Invalid Pi event stream"; }
       }
-      if (buffer.length > 1_000_000) { modelError = true; child.kill(); }
+      if (buffer.length > 1_000_000) { protocolError = "Pi event exceeded 1 MB"; child.kill(); }
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
     const timer = setTimeout(() => child.kill("SIGTERM"), 30 * 60 * 1000);
     child.on("error", (error) => { this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
       clearTimeout(timer); this.active.delete(run.id);
-      const ok = code === 0 && settled && !aborted && !modelError;
-      // Stderr stays on disk only as a generic error, never echoed into the browser.
-      this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `Pi exited (${signal ?? code ?? "unknown"}); ${settled ? "settled" : "no settlement event"}${stderr ? "; see server stderr" : ""}`);
+      const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError;
+      // Stderr may contain request details, so only sanitized diagnostics reach the card.
+      this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `Pi exited (${signal ?? code ?? "unknown"}); ${settled ? "settled" : "no settlement event"}${terminalModelError ? `; ${terminalModelError}` : ""}${protocolError ? `; ${protocolError}` : ""}${stderr ? "; stderr logged on server" : ""}`);
       if (stderr) console.error(`Pi diagnostics for run ${run.id}:`, stderr);
     });
     return this.board.getRun(run.id)!;

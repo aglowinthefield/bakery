@@ -69,6 +69,37 @@ test("card transcript groups tool activity by turn without storing tool argument
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a transient provider error followed by successful Pi settlement is Review, while a terminal error is diagnosed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    const errorEvent = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "OpenAI API error (503): SECRET_PROVIDER_DETAIL" } });
+    const successEvent = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } });
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' '${errorEvent}' '${successEvent}' '{"type":"agent_settled","aborted":false}'\necho 'SECRET_STDERR' >&2\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Recover", body: "", repo });
+    board.setStatus(card.id, "ready");
+    const recovered = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(recovered.id)?.status !== "running");
+    assert.equal(board.getRun(recovered.id)?.status, "review");
+    assert.match(board.getRun(recovered.id)!.output, /provider request failed \(HTTP 503\)/i);
+    assert.match(board.getRun(recovered.id)!.output, /recovered and continued/i);
+    assert.doesNotMatch(board.getRun(recovered.id)!.output, /SECRET_PROVIDER_DETAIL|SECRET_STDERR/);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' '${errorEvent}' '{"type":"agent_settled","aborted":false}'\n`);
+    const terminal = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(terminal.id)?.status !== "running");
+    assert.equal(board.getRun(terminal.id)?.status, "failed");
+    assert.match(board.getRun(terminal.id)!.error!, /provider request failed \(HTTP 503\)/i);
+    assert.doesNotMatch(board.getRun(terminal.id)!.error!, /SECRET_PROVIDER_DETAIL/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a Pi settlement requests review; retry uses the same card worktree and session", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
