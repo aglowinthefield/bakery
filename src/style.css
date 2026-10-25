@@ -18,6 +18,13 @@
   --destructive: #cdacac;
   --border: #3d424a;
   --ring: #b4bcc4;
+  --sidebar: #171a1e;
+  --code-background: #171a1e;
+  --diff-add-background: #193529;
+  --diff-add-foreground: #b6e5c5;
+  --diff-remove-background: #3b2528;
+  --diff-remove-foreground: #f0b5b5;
+  --diff-meta-background: #282c34;
   --status-triage: #8b919a;
   --status-ready: #d4ccb4;
   --status-running: #b4bcc4;
@@ -27,7 +34,32 @@
   --status-done: #9aa59d;
   --radius: 0.75rem;
 }
+/* Compline palette by Joshua Blais: https://github.com/joshuablais/compline#palette */
 :root[data-theme="compline"] {
+  --background: #1a1d21;
+  --foreground: #f0efeb;
+  --card: #22262b;
+  --card-foreground: #f0efeb;
+  --popover: #282c34;
+  --popover-foreground: #f0efeb;
+  --primary: #d4ccb4;
+  --primary-foreground: #1a1d21;
+  --secondary: #282c34;
+  --secondary-foreground: #b4c4bc;
+  --muted: #282c34;
+  --muted-foreground: #adb3b9;
+  --accent: #3d424a;
+  --accent-foreground: #f0efeb;
+  --destructive: #cdacac;
+  --border: #676d77;
+  --ring: #b4bcc4;
+  --sidebar: #22262b;
+  --code-background: #1a1d21;
+  --diff-add-background: #29372f;
+  --diff-add-foreground: #b4c4bc;
+  --diff-remove-background: #392e32;
+  --diff-remove-foreground: #d9baba;
+  --diff-meta-background: #282c34;
   --status-triage: #adb3b9;
   --status-ready: #d4ccb4;
   --status-running: #b4bcc4;
@@ -44,6 +76,19 @@
 [data-status="interrupted"] { --lane-status-color: var(--status-interrupted); }
 [data-status="done"] { --lane-status-color: var(--status-done); }
 .lane-status-dot { background-color: var(--lane-status-color); }
+:root[data-theme="compline"] :is(button, input, textarea, select, a):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+:root[data-theme="compline"] [data-change] .hljs-keyword,
+:root[data-theme="compline"] [data-change] .hljs-type { color: #d9baba; }
+:root[data-theme="compline"] [data-change] .hljs-title,
+:root[data-theme="compline"] [data-change] .hljs-built_in { color: #d4ccb4; }
+:root[data-theme="compline"] [data-change] .hljs-string,
+:root[data-theme="compline"] [data-change] .hljs-name { color: #b4c4bc; }
+:root[data-theme="compline"] [data-change] .hljs-number,
+:root[data-theme="compline"] [data-change] .hljs-attr { color: #b4bcc4; }
+:root[data-theme="compline"] [data-change] .hljs-comment { color: #b5b9bb; }
 @theme inline {
   --color-background: var(--background); --color-foreground: var(--foreground);
   --color-card: var(--card); --color-card-foreground: var(--card-foreground);

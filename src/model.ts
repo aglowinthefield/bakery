@@ -24,6 +24,7 @@ export type AutoReviewJob = {
 export type BakerySettings = {
   confirmRunStart: boolean;
   cardDetailsLayout: "dialog" | "side";
+  theme: "default" | "compline";
 };
 export type ReviewComment = {
   id: string;

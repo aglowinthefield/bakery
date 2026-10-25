@@ -79,6 +79,11 @@ function App() {
   const [boardId, setBoardId] = useState<string | null>(null);
   const [settings, setSettings] = useState<BakerySettings | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  useEffect(() => {
+    if (!settings) return;
+    document.documentElement.dataset.theme = settings.theme;
+    localStorage.setItem("bakery-theme", settings.theme);
+  }, [settings?.theme]);
   const [addingRepo, setAddingRepo] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [repoPath, setRepoPath] = useState("");
@@ -215,7 +220,7 @@ function App() {
   };
   return (
     <div className="min-h-screen lg:flex">
-      <aside className="flex flex-col border-b border-border bg-[#171a1e] lg:sticky lg:top-0 lg:h-screen lg:w-[228px] lg:shrink-0 lg:border-r lg:border-b-0">
+      <aside className="flex flex-col border-b border-border bg-[var(--sidebar)] lg:sticky lg:top-0 lg:h-screen lg:w-[228px] lg:shrink-0 lg:border-r lg:border-b-0">
         <div className="flex items-center gap-3 px-6 py-7">
           <div className="grid size-9 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
             <span className="text-xl leading-none">✳</span>
@@ -285,8 +290,8 @@ function App() {
         </div>
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-[#b8c4b8]" /> Local only{" "}
-            <span className="ml-auto font-mono">v0.1</span>
+            <span className="size-1.5 rounded-full bg-[var(--review-status)]" />{" "}
+            Local only <span className="ml-auto font-mono">v0.1</span>
           </div>
         </div>
       </aside>
@@ -480,7 +485,7 @@ function App() {
                     </button>
                   ) : (
                     <>
-                      <div className="mb-5 flex items-center gap-2 px-1">
+                      <div className="mb-2 flex min-h-6 items-center gap-2 px-1">
                         <span
                           aria-hidden="true"
                           className="lane-status-dot size-2.5 shrink-0 rounded-full"
@@ -503,7 +508,7 @@ function App() {
                           </button>
                         )}
                       </div>
-                      <div className="mb-4 px-1 text-xs text-muted-foreground">
+                      <div className="mb-2 px-1 text-[11px] leading-[14px] text-muted-foreground">
                         {column.description}
                       </div>
                       <div className="space-y-3">
@@ -592,6 +597,29 @@ function App() {
               </span>
             </span>
           </label>
+          <fieldset
+            className="mt-6 border-t border-border pt-5 text-sm"
+            disabled={!settings || busy}
+          >
+            <legend className="pt-5 font-medium">Theme</legend>
+            <div className="mt-3 flex gap-5">
+              {(["default", "compline"] as const).map((theme) => (
+                <label
+                  key={theme}
+                  className="flex cursor-pointer items-center gap-2"
+                >
+                  <input
+                    type="radio"
+                    name="theme"
+                    checked={(settings?.theme ?? "default") === theme}
+                    onChange={() => saveSettings({ theme })}
+                    className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  />
+                  {theme === "default" ? "Default" : "Compline"}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <fieldset
             className="mt-6 border-t border-border pt-5 text-sm"
             disabled={!settings || busy}
