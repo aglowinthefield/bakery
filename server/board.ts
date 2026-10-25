@@ -1,0 +1,130 @@
+import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
+
+export type CardStatus = "ready" | "running" | "review" | "failed" | "interrupted" | "done";
+export type RepoBoard = { id: string; repo: string };
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string };
+export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null };
+const now = () => new Date().toISOString();
+
+export class Board {
+  private db: DatabaseSync;
+  constructor(path: string) {
+    this.db = new DatabaseSync(path);
+    this.db.exec(`PRAGMA journal_mode = WAL;
+      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, UNIQUE(cardId, attempt));
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0);`);
+    if (!(this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).some(column => column.name === "archived")) {
+      this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+    }
+    // Preserve old cards and runs. A stored repository path is never reinterpreted against today's cwd.
+    for (const row of this.db.prepare("SELECT DISTINCT repo FROM cards WHERE repo NOT IN (SELECT repo FROM boards)").all() as { repo: string }[]) this.addRepo(row.repo);
+    // After a process restart, never infer success or schedule a second worker.
+    this.db.exec(`UPDATE runs SET status='interrupted', error='Server restarted while this run was active', finishedAt=datetime('now') WHERE status='running';
+      UPDATE cards SET status='interrupted' WHERE status='running';`);
+  }
+  close() { this.db.close(); }
+  listRepos(): string[] { return this.listBoards().map(board => board.repo); }
+  listBoards(): RepoBoard[] { return this.db.prepare("SELECT id, repo FROM boards WHERE archived=0 ORDER BY repo").all() as RepoBoard[]; }
+  getBoard(id: string): RepoBoard | undefined { return this.db.prepare("SELECT id, repo FROM boards WHERE id=? AND archived=0").get(id) as RepoBoard | undefined; }
+  addRepo(repo: string): RepoBoard {
+    const existing = this.db.prepare("SELECT id, repo FROM boards WHERE repo=?").get(repo) as RepoBoard | undefined;
+    if (existing) {
+      this.db.prepare("UPDATE boards SET archived=0 WHERE id=?").run(existing.id);
+      return existing;
+    }
+    const id = randomUUID();
+    this.db.prepare("INSERT INTO boards(id, repo) VALUES (?, ?)").run(id, repo);
+    return this.getBoard(id)!;
+  }
+  renameBoard(id: string, repo: string): RepoBoard {
+    const board = this.getBoard(id);
+    if (!board) throw new Error("Board not found");
+    if (board.repo === repo) return board;
+    if (this.db.prepare("SELECT id FROM boards WHERE repo=?").get(repo)) throw new Error("Repository already has a board");
+    if (this.db.prepare("SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId WHERE cards.repo=? LIMIT 1").get(board.repo)) throw new Error("Cannot change repository after a card has an attempt");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE cards SET repo=?, updatedAt=? WHERE repo=?").run(repo, now(), board.repo);
+      this.db.prepare("UPDATE boards SET repo=? WHERE id=?").run(repo, id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    return this.getBoard(id)!;
+  }
+  archiveBoard(id: string) {
+    const board = this.getBoard(id);
+    if (!board) throw new Error("Board not found");
+    if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status IN ('running', 'interrupted') LIMIT 1").get(board.repo)) throw new Error("Resolve running or interrupted cards before removing this board");
+    this.db.prepare("UPDATE boards SET archived=1 WHERE id=?").run(id);
+  }
+  listCards(repo?: string): Card[] { return (repo === undefined ? this.db.prepare("SELECT * FROM cards ORDER BY createdAt DESC").all() : this.db.prepare("SELECT * FROM cards WHERE repo=? ORDER BY createdAt DESC").all(repo)) as Card[]; }
+  getCard(id: string): Card | undefined { return this.db.prepare("SELECT * FROM cards WHERE id=?").get(id) as Card | undefined; }
+  createCard(input: { title: string; body: string; repo: string }): Card {
+    const id = randomUUID(), time = now();
+    this.addRepo(input.repo);
+    this.db.prepare("INSERT INTO cards VALUES (?, ?, ?, ?, 'ready', 'manual', ?, ?)").run(id, input.title, input.body, input.repo, time, time);
+    return this.getCard(id)!;
+  }
+  updateCard(id: string, input: { title: string; body: string; repo: string }): Card {
+    const card = this.getCard(id);
+    if (!card) throw new Error("Card not found");
+    if (card.status === "running") throw new Error("Cannot edit a running card");
+    if (input.repo !== card.repo) throw new Error("Cannot change a card's repository; create a card on the other board");
+    this.db.prepare("UPDATE cards SET title=?, body=?, updatedAt=? WHERE id=?").run(input.title, input.body, now(), id);
+    return this.getCard(id)!;
+  }
+  setStatus(id: string, status: "ready" | "done"): Card {
+    const card = this.getCard(id);
+    if (!card) throw new Error("Card not found");
+    if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
+    this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
+    return this.getCard(id)!;
+  }
+  resolveInterrupted(id: string): Card {
+    const card = this.getCard(id);
+    if (!card || card.status !== "interrupted") throw new Error("Card is not interrupted");
+    const run = this.listRuns(id)[0];
+    if (run?.pid) {
+      try { process.kill(run.pid, 0); throw new Error(`Process ${run.pid} may still be running; stop and inspect it first`); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    }
+    this.db.prepare("UPDATE cards SET status='failed', updatedAt=? WHERE id=?").run(now(), id);
+    return this.getCard(id)!;
+  }
+  claim(cardId: string): Run {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId);
+      if (!card) throw new Error("Card not found");
+      if (card.status === "running") throw new Error("Card already has an active run");
+      if (card.status === "interrupted") throw new Error("Resolve the interrupted process before retrying");
+      if (card.status === "done") throw new Error("Reopen this card before starting a run");
+      const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
+      const id = randomUUID(), sessionId = `bakery-${cardId}`;
+      this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt) VALUES (?, ?, ?, 'running', ?, ?)").run(id, cardId, attempt, sessionId, now());
+      this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
+      this.db.exec("COMMIT");
+      return this.getRun(id)!;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
+  listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }
+  attach(id: string, pid: number, worktree: string) { this.db.prepare("UPDATE runs SET pid=?, worktree=? WHERE id=? AND status='running'").run(pid, worktree, id); }
+  append(id: string, chunk: string) {
+    // Keep a bounded tail. Store only human-readable text; never raw tool arguments or credentials.
+    const run = this.getRun(id);
+    if (run?.status !== "running") return;
+    this.db.prepare("UPDATE runs SET output=? WHERE id=?").run((run.output + chunk).slice(-60000), id);
+  }
+  finish(id: string, status: "review" | "failed", error: string | null = null) {
+    const run = this.getRun(id);
+    if (!run || run.status !== "running") return;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE runs SET status=?, error=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, now(), id);
+      this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), run.cardId);
+      this.db.exec("COMMIT");
+    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+  }
+}
