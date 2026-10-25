@@ -58,6 +58,8 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${second.id}/cards`)).data.length, 0);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/runs`)).status, 404);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/start`, "POST")).status, 404);
+    assert.equal((await request(`/boards/${second.id}/cards/${card.id}/approve`, "POST")).status, 404);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}/approve`, "POST")).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].id, card.id);
     assert.equal((await request(`/boards/${first.id}`, "PATCH", { repo: beta })).status, 400);
     const moved = await request(`/boards/${first.id}`, "PATCH", { repo: "~/code/gamma" });

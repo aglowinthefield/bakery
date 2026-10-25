@@ -6,6 +6,7 @@ export type RepoBoard = { id: string; repo: string };
 export type BakerySettings = { confirmRunStart: boolean };
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null };
+export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 const now = () => new Date().toISOString();
 
 export class Board {
@@ -16,6 +17,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, UNIQUE(cardId, attempt));
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)));
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
     if (!(this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).some(column => column.name === "archived")) {
@@ -89,8 +91,47 @@ export class Board {
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
+    if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge");
+    if (status === "done" && this.listRuns(id).length) throw new Error("Cards with run work cannot be marked Done without approval and integration");
+    // Recover cards closed by the old status-only action without launching another Pi run.
+    if (status === "ready" && card.status === "done" && this.listRuns(id)[0]?.status === "review" && !this.wasIntegrated(id)) {
+      this.db.prepare("UPDATE cards SET status='review', updatedAt=? WHERE id=?").run(now(), id);
+      return this.getCard(id)!;
+    }
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
     return this.getCard(id)!;
+  }
+  getApproval(cardId: string): Approval | undefined {
+    return this.db.prepare("SELECT * FROM approvals WHERE cardId=? AND merged=0").get(cardId) as Approval | undefined;
+  }
+  wasIntegrated(cardId: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM approvals WHERE cardId=? AND merged=1").get(cardId);
+  }
+  recordApproval(cardId: string, runId: string, candidate: string): Approval {
+    const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
+    if (card?.status !== "review" || run?.id !== runId || run.status !== "review") throw new Error("Only the latest reviewed run can be approved");
+    if (this.getApproval(cardId)) throw new Error("Approval already in progress");
+    this.db.prepare("INSERT INTO approvals(cardId, runId, candidate, merged) VALUES (?, ?, ?, 0) ON CONFLICT(cardId) DO UPDATE SET runId=excluded.runId, candidate=excluded.candidate, preparedHead=NULL, merged=0").run(cardId, runId, candidate);
+    return this.getApproval(cardId)!;
+  }
+  cancelApproval(cardId: string, runId: string, includePrepared = false): void {
+    this.db.prepare(`DELETE FROM approvals WHERE cardId=? AND runId=? AND merged=0 ${includePrepared ? "" : "AND preparedHead IS NULL"}`).run(cardId, runId);
+  }
+  recordPreparedMerge(cardId: string, runId: string, candidate: string, preparedHead: string): void {
+    const approval = this.getApproval(cardId);
+    if (approval?.runId !== runId || approval.candidate !== candidate || this.getCard(cardId)?.status !== "review") throw new Error("Approval state changed");
+    this.db.prepare("UPDATE approvals SET preparedHead=? WHERE cardId=? AND merged=0").run(preparedHead, cardId);
+  }
+  completeApproval(cardId: string, runId: string, candidate: string): Card {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId), run = this.listRuns(cardId)[0], approval = this.getApproval(cardId);
+      if (card?.status !== "review" || run?.id !== runId || run.status !== "review" || approval?.candidate !== candidate || approval.runId !== runId) throw new Error("Approval state changed");
+      this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), cardId);
+      this.db.prepare("UPDATE approvals SET merged=1 WHERE cardId=?").run(cardId);
+      this.db.exec("COMMIT");
+      return this.getCard(cardId)!;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   resolveInterrupted(id: string): Card {
     const card = this.getCard(id);
@@ -111,6 +152,7 @@ export class Board {
       if (card.status === "running") throw new Error("Card already has an active run");
       if (card.status === "interrupted") throw new Error("Resolve the interrupted process before retrying");
       if (card.status === "done") throw new Error("Reopen this card before starting a run");
+      if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry Approve and merge");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       const id = randomUUID(), sessionId = `bakery-${cardId}`;
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt) VALUES (?, ?, ?, 'running', ?, ?)").run(id, cardId, attempt, sessionId, now());
