@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
-const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, autoReviewEnabled: false, autoPickupError: "" };
+const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
 async function fixture(boards = [board]) {
   const requests: { method: string; path: string; input: unknown }[] = [];
@@ -24,6 +24,7 @@ async function fixture(boards = [board]) {
     else if (path === `/api/boards/${board.id}/cards/card-one/runs`) data = [{ id: "run-one", status: "failed", startedBy: "auto" }];
     else if (path === `/api/boards/${board.id}/conflicts`) data = [{ cardId: "card-one", details: "merge conflict" }];
     else if (path === `/api/boards/${board.id}/settings` && req.method === "PATCH") data = { ...board, ...(input as object) };
+    else if (path === `/api/boards/${board.id}/auto-pickup/reset-limit` && req.method === "POST") data = { ...board, autoPickupStarts: 0, autoPickupNextAt: null };
     else { res.writeHead(404); res.end(JSON.stringify({ error: "Not found" })); return; }
     res.end(JSON.stringify(data));
   });
@@ -74,14 +75,27 @@ test("pickup enable needs consent; disable and concurrency changes use settings 
   try {
     assert.notEqual((await f.run("pickup", "on")).code, 0);
     assert.equal(f.requests.filter(r => r.method === "PATCH").length, 0);
-    const enabled = await f.run("pickup", "on", "--concurrency", "2", "--yes");
+    const enabled = await f.run("pickup", "on", "--concurrency", "2", "--limit", "8", "--yes");
     assert.equal(enabled.code, 0, enabled.stderr);
     const disabled = await f.run("pickup", "off");
     assert.equal(disabled.code, 0, disabled.stderr);
     assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [
-      { autoPickupEnabled: true, pickupConcurrency: 2 },
-      { autoPickupEnabled: false, pickupConcurrency: 2 },
+      { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 8 },
+      { autoPickupEnabled: false, pickupConcurrency: 2, pickupDailyLimit: 6 },
     ]);
+  } finally { await f.close(); }
+});
+
+test("pickup shows the rolling limit and requires consent to reset it", async () => {
+  const f = await fixture();
+  try {
+    assert.match((await f.run("pickup")).stdout, /6\/6 starts.*next slot/);
+    assert.match((await f.run("pickup", "reset")).stderr, /--yes/);
+    assert.equal(f.requests.filter(r => r.method === "POST").length, 0);
+    const reset = await f.run("pickup", "reset", "--yes");
+    assert.equal(reset.code, 0, reset.stderr);
+    assert.match(reset.stdout, /0\/6 starts/);
+    assert.equal(f.requests.filter(r => r.method === "POST")[0].path, `/api/boards/${board.id}/auto-pickup/reset-limit`);
   } finally { await f.close(); }
 });
 

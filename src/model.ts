@@ -9,6 +9,9 @@ export type Board = {
   autoReviewEnabledAt: string | null;
   autoPickupEnabled: boolean;
   pickupConcurrency: number;
+  pickupDailyLimit: number;
+  autoPickupStarts: number;
+  autoPickupNextAt: string | null;
   autoPickupEnabledAt: string | null;
   autoPickupError: string;
 };

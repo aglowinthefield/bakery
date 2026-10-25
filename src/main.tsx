@@ -186,6 +186,24 @@ function App() {
       setBusy(false);
     }
   };
+  const resetPickupLimit = () => {
+    if (!currentBoard || !currentBoard.autoPickupEnabled) return;
+    if (
+      !window.confirm(
+        `Reset the ${currentBoard.pickupDailyLimit}-start rolling limit for ${currentBoard.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs will remain in history.`,
+      )
+    )
+      return;
+    void action(async () => {
+      const updated = await api<Board>(
+        `/boards/${currentBoard.id}/auto-pickup/reset-limit`,
+        { method: "POST" },
+      );
+      setBoards((previous) =>
+        previous.map((item) => (item.id === updated.id ? updated : item)),
+      );
+    });
+  };
   const removeBoard = (item: Board) => {
     if (
       !window.confirm(
@@ -397,6 +415,29 @@ function App() {
             <CircleHelp size={13} /> Starting a run may use paid model tokens
           </span>
         </div>
+        {currentBoard?.autoPickupEnabled &&
+          currentBoard.autoPickupStarts >= currentBoard.pickupDailyLimit && (
+            <div
+              role="alert"
+              className="mx-6 mt-5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm lg:mx-10"
+            >
+              <strong>
+                Auto pickup waiting: {currentBoard.autoPickupStarts} /{" "}
+                {currentBoard.pickupDailyLimit} automatic starts in the last 24
+                hours.
+              </strong>{" "}
+              {currentBoard.autoPickupNextAt && (
+                <>Next slot around {date(currentBoard.autoPickupNextAt)}.</>
+              )}
+              <button
+                className="ml-3 underline underline-offset-2"
+                disabled={busy}
+                onClick={resetPickupLimit}
+              >
+                Reset start limit
+              </button>
+            </div>
+          )}
         {currentBoard?.autoPickupError && (
           <div
             role="alert"
@@ -731,10 +772,11 @@ function App() {
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               Automatically start Ready cards in creation order, up to the
-              concurrency limit including manual runs. At most 6 automatic
-              starts in any 24 hours. A failed automatic run or interrupted run
-              pauses pickup. Starting Pi may spend model tokens. Turn off pickup
-              to stop new starts; existing runs continue.
+              concurrency limit including manual runs. The configurable rolling
+              start limit protects against unbounded paid runs; it is not a
+              token budget. A failed automatic run or interrupted run pauses
+              pickup. Starting Pi may spend model tokens. Turn off pickup to
+              stop new starts; existing runs continue.
             </p>
             <label className="mt-4 flex items-center gap-2 text-xs">
               Concurrent runs{" "}
@@ -772,6 +814,71 @@ function App() {
                 ))}
               </select>
             </label>
+            <label className="mt-3 flex items-center gap-2 text-xs">
+              Automatic starts per 24 hours{" "}
+              <select
+                aria-label="Auto pickup daily start limit"
+                value={currentBoard?.pickupDailyLimit ?? 6}
+                disabled={!currentBoard || busy}
+                onChange={(event) => {
+                  if (!currentBoard) return;
+                  const limit = Number(event.target.value);
+                  if (
+                    limit > currentBoard.pickupDailyLimit &&
+                    currentBoard.autoPickupEnabled &&
+                    !window.confirm(
+                      `Raise automatic starts to ${limit} per 24 hours for ${currentBoard.repo}? Ready cards may start immediately and spend model tokens.`,
+                    )
+                  )
+                    return;
+                  void action(async () => {
+                    const updated = await api<Board>(
+                      `/boards/${currentBoard.id}/settings`,
+                      {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          autoPickupEnabled: currentBoard.autoPickupEnabled,
+                          pickupConcurrency: currentBoard.pickupConcurrency,
+                          pickupDailyLimit: limit,
+                        }),
+                      },
+                    );
+                    setBoards((previous) =>
+                      previous.map((item) =>
+                        item.id === updated.id ? updated : item,
+                      ),
+                    );
+                  });
+                }}
+                className="rounded-md border border-border bg-background px-2 py-1"
+              >
+                {Array.from({ length: 24 }, (_, index) => index + 1).map(
+                  (limit) => (
+                    <option key={limit} value={limit}>
+                      {limit}
+                    </option>
+                  ),
+                )}
+              </select>
+            </label>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {currentBoard?.autoPickupStarts ?? 0} /{" "}
+              {currentBoard?.pickupDailyLimit ?? 6} starts in the rolling day.
+              {currentBoard?.autoPickupNextAt &&
+                ` Next slot around ${date(currentBoard.autoPickupNextAt)}.`}
+            </p>
+            {currentBoard?.autoPickupEnabled &&
+              currentBoard.autoPickupStarts >=
+                currentBoard.pickupDailyLimit && (
+                <Button
+                  className="mt-2"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={resetPickupLimit}
+                >
+                  Reset start limit
+                </Button>
+              )}
             <Button
               className="mt-3"
               variant={currentBoard?.autoPickupEnabled ? "outline" : "default"}
@@ -782,7 +889,7 @@ function App() {
                 if (
                   enable &&
                   !window.confirm(
-                    `Enable automatic Pi pickup for ${currentBoard.repo}? Up to ${currentBoard.pickupConcurrency} paid Pi runs can start without another click, up to 6 per 24 hours. Ready cards may start immediately.`,
+                    `Enable automatic Pi pickup for ${currentBoard.repo}? Up to ${currentBoard.pickupConcurrency} paid Pi runs can start without another click, up to ${currentBoard.pickupDailyLimit} automatic starts per rolling 24 hours. Ready cards may start immediately.`,
                   )
                 )
                   return;

@@ -11,15 +11,15 @@ Usage: bakery-cli boards [--json]
        bakery-cli triage CARD_ID [--board ID|PATH]
        bakery-cli runs CARD_ID [--board ID|PATH] [--json]
        bakery-cli conflicts [--board ID|PATH] [--json]
-       bakery-cli pickup [on|off] [--concurrency 1-4] [--board ID|PATH] [--yes]
+       bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-24] [--board ID|PATH] [--yes]
 
 Set BAKERY_URL (or BAKERY_PORT) to use a different local server. --json prints full API data.
---yes is required before enabling pickup or moving a card to Ready on a pickup-enabled board;
+--yes is required before enabling or resetting pickup, or moving a card to Ready on a pickup-enabled board;
 both actions can start paid Pi runs. No command starts Pi directly or approves a merge.`;
 
 function options(argv) {
   const result = { positionals: [], json: false, yes: false };
-  const values = new Set(["board", "title", "body", "concurrency"]);
+  const values = new Set(["board", "title", "body", "concurrency", "limit"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
@@ -84,9 +84,9 @@ async function main() {
   if (opts.help || !command) { console.log(usage); return; }
   const expected = { boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0 };
   if (!(command in expected) && command !== "pickup") throw new Error(`Unknown command: ${command}\n${usage}`);
-  if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off"].includes(args[0])) : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command !== "create" && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create");
-  if (command !== "pickup" && opts.concurrency !== undefined) throw new Error("--concurrency is only valid with pickup");
+  if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined)) throw new Error("--concurrency and --limit are only valid with pickup");
   if (opts.yes && !(command === "ready" || command === "pickup")) throw new Error("--yes is only valid with ready or pickup");
   const origin = serverUrl();
   const boards = await request(origin, "/api/boards");
@@ -115,15 +115,24 @@ async function main() {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));
   } else if (command === "pickup") {
-    if (!args.length) {
-      print(board, opts.json, [`Pickup ${board.autoPickupEnabled ? "on" : "off"}; concurrency ${board.pickupConcurrency}${board.autoPickupError ? `; paused: ${board.autoPickupError}` : ""}`]);
+    const summary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
+    if (!args.length) { print(board, opts.json, [summary(board)]); return; }
+    if (args[0] === "reset") {
+      if (opts.concurrency !== undefined || opts.limit !== undefined) throw new Error("pickup reset does not accept --concurrency or --limit");
+      if (!opts.yes) throw new Error("Resetting the limit can start paid Pi runs immediately. Repeat with --yes to confirm.");
+      const updated = await request(origin, `${path}/auto-pickup/reset-limit`, "POST");
+      print(updated, opts.json, [summary(updated)]);
       return;
     }
     if (args[0] === "on" && !opts.yes) throw new Error("Enabling pickup can start paid Pi runs immediately. Repeat with --yes to confirm.");
     const concurrency = opts.concurrency === undefined ? board.pickupConcurrency : Number(opts.concurrency);
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Concurrency must be an integer from 1 to 4");
-    const updated = await request(origin, `${path}/settings`, "PATCH", { autoPickupEnabled: args[0] === "on", pickupConcurrency: concurrency });
-    print(updated, opts.json, [`Pickup ${updated.autoPickupEnabled ? "on" : "off"}; concurrency ${updated.pickupConcurrency}${updated.autoPickupError ? `; paused: ${updated.autoPickupError}` : ""}`]);
+    const limit = opts.limit === undefined ? (board.pickupDailyLimit ?? 6) : Number(opts.limit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 24) throw new Error("Limit must be an integer from 1 to 24");
+    if (args[0] === "on" && board.autoPickupEnabled && limit > board.pickupDailyLimit && !opts.yes)
+      throw new Error("Raising the limit can start paid Pi runs immediately. Repeat with --yes to confirm.");
+    const updated = await request(origin, `${path}/settings`, "PATCH", { autoPickupEnabled: args[0] === "on", pickupConcurrency: concurrency, pickupDailyLimit: limit });
+    print(updated, opts.json, [summary(updated)]);
   }
 }
 

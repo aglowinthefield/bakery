@@ -249,6 +249,9 @@ test("existing repository boards gain removal support on upgrade", () => {
     const reopened = new Board(path);
     assert.equal(reopened.getBoard(item.id)?.repo, repo);
     assert.equal(reopened.getBoard(item.id)?.autoCollapseEmptySwimlanes, false);
+    assert.equal(reopened.getBoard(item.id)?.pickupDailyLimit, 6);
+    assert.equal(reopened.getBoard(item.id)?.autoPickupStarts, 0);
+    assert.equal(reopened.getBoard(item.id)?.autoPickupNextAt, null);
     assert.equal(reopened.setAutoCollapseEmptySwimlanes(item.id, true).autoCollapseEmptySwimlanes, true);
     reopened.close();
     const persisted = new Board(path);

@@ -22,7 +22,7 @@ export class AutoPickup {
       }
       const candidates = this.board.listAutoPickupCandidates().filter(item => item.board.id === repoBoard.id);
       for (const { card } of candidates) {
-        if (this.board.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || this.board.autoStartsToday(repoBoard.repo) >= 6) break;
+        if (this.board.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || this.board.autoStartsToday(repoBoard.repo) >= repoBoard.pickupDailyLimit) break;
         try {
           this.worker.start(card, "auto");
         } catch (error) {
