@@ -47,6 +47,8 @@ test("Done cards can be multi-selected or all selected and archived into the Arc
     await archive.click();
     await done.getByRole("button", { name: /two card/ }).waitFor();
     assert.deepEqual(requests, [["one", "three"]]);
+    // "two card" was already in Done, so wait for the refreshed total rather than reading it once.
+    await total.filter({ hasText: /^2$/ }).waitFor({ timeout: 5000 }).catch(() => {});
     assert.equal(await total.textContent(), "2", "archived cards are excluded from the total");
     assert.equal(await done.getByRole("checkbox").count(), 0, "selection mode ends after archiving");
 

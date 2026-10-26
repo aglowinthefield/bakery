@@ -141,7 +141,9 @@ test("review comments remain on their original snapshot and feedback persists un
     assert.equal(board.hasDraftReviewComments(card.id, first.id), true);
     board.deleteReviewComment(card.id, stale.id);
     assert.throws(() => board.requestChanges(card.id, first.id, "b".repeat(64)), /current diff|comments/i);
+    assert.deepEqual([board.getCard(card.id)?.attempts, board.getCard(card.id)?.reviewRounds], [1, 0]);
     board.requestChanges(card.id, first.id, fingerprint);
+    assert.equal(board.getCard(card.id)?.reviewRounds, 1);
     assert.equal(board.hasDraftReviewComments(card.id, first.id), false);
     assert.equal(board.hasRequestedChanges(card.id, first.id), true);
     assert.deepEqual(board.getFeedbackForRun(card.id).map(item => item.body), ["Please handle null"]);
@@ -153,6 +155,7 @@ test("review comments remain on their original snapshot and feedback persists un
     const next = board.claim(card.id);
     board.finish(next.id, "review");
     assert.deepEqual(board.getFeedbackForRun(card.id), []);
+    assert.deepEqual([board.listCards(dir)[0]?.attempts, board.listCards(dir)[0]?.reviewRounds], [3, 1]);
     assert.equal(board.listReviewComments(card.id)[0]?.runId, first.id);
     board.close();
     const reopened = new Board(path);

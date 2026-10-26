@@ -48,6 +48,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Settings2,
   ExternalLink,
   Github,
@@ -65,7 +66,7 @@ import {
 import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { api, date } from "./api.js";
-import { AgentBadge } from "./attempts.js";
+import { AgentBadge, reworkSummary } from "./attempts.js";
 import { CardDetails } from "./card-details.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
@@ -977,8 +978,20 @@ function App() {
                           const content = (
                             <>
                               <div className="mb-4 flex items-start justify-between gap-2">
-                                <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
-                                  Manual
+                                <span className="flex flex-wrap items-center gap-1.5">
+                                  <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
+                                    Manual
+                                  </span>
+                                  {item.attempts > 1 && (
+                                    <span
+                                      data-testid="attempt-count"
+                                      title={reworkSummary(item)}
+                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-amber-500"
+                                    >
+                                      <RotateCcw size={10} aria-hidden />
+                                      {item.attempts} attempts
+                                    </span>
+                                  )}
                                 </span>
                                 {!selecting && (
                                   <ArrowUpRight

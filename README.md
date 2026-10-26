@@ -125,6 +125,8 @@ Each attempt in a card's **Attempts** list shows:
 
 The clock on a card counts completed Pi turns across attempts. Older runs show an estimate marked with `~` or `?`.
 
+A card that has run more than once shows an amber attempt count, in every lane including Done and Archive, so cards that needed rework stand out. The **Attempts** list in card details starts with the attempt count and the number of review rounds, meaning reviews that ended in **Request changes**.
+
 Provider errors show only their HTTP status. Pi's stderr goes to the server console, not the board, because it can contain request details.
 
 ## Automation (opt-in)
@@ -179,6 +181,7 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--yes]
 
 - Add `--board ID|PATH` if you have more than one board, and `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
+- `cards` prints each card's ID, status, attempt count, review rounds, and title.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them.
 - The CLI can't approve merges.
 - To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get a `bakery-cli` command on your `PATH`, run `npm link`.
