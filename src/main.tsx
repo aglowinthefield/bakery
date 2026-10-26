@@ -49,6 +49,7 @@ import {
   Plus,
   RefreshCw,
   Settings2,
+  ExternalLink,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -298,6 +299,7 @@ function App() {
   const seenStatuses = useRef(new Map<string, Map<string, Status>>());
   const [selected, setSelected] = useState<string | null>(null);
   const [verificationDraft, setVerificationDraft] = useState("");
+  const [remoteUrlDraft, setRemoteUrlDraft] = useState("");
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Card | null>(null);
   const [error, setError] = useState("");
@@ -615,6 +617,7 @@ function App() {
             onClick={() => {
               setError("");
               setVerificationDraft(currentBoard?.verificationCommand ?? "");
+              setRemoteUrlDraft(currentBoard?.remoteUrl ?? "");
               setShowSettings(true);
             }}
           >
@@ -645,6 +648,18 @@ function App() {
                 ? currentBoard.repo
                 : "Add a Git repository to create its board."}
             </p>
+            {currentBoard?.remoteUrl && (
+              <a
+                href={currentBoard.remoteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Remote repository"
+                className="mt-1 inline-flex max-w-full items-center gap-1.5 break-all text-sm text-primary hover:underline"
+              >
+                <ExternalLink size={13} className="shrink-0" />
+                {currentBoard.remoteUrl.replace(/^https?:\/\//, "")}
+              </a>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -1155,6 +1170,61 @@ function App() {
               full-screen.
             </p>
           </fieldset>
+          <form
+            className="mt-6 border-t border-border pt-5 text-sm"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!currentBoard) return;
+              void action(async () => {
+                const updated = await api<Board>(
+                  `/boards/${currentBoard.id}/settings`,
+                  {
+                    method: "PATCH",
+                    body: JSON.stringify({ remoteUrl: remoteUrlDraft }),
+                  },
+                );
+                setBoards((previous) =>
+                  previous.map((item) =>
+                    item.id === updated.id ? updated : item,
+                  ),
+                );
+                setRemoteUrlDraft(updated.remoteUrl ?? "");
+              });
+            }}
+          >
+            <div className="break-all font-medium">
+              Remote repository ·{" "}
+              {currentBoard?.repo.split("/").at(-1) ?? "select a repository"}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Optional link shown below the board heading, such as the GitHub
+              page. Bakery never pushes to it.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <input
+                type="url"
+                aria-label="Remote repository link"
+                value={remoteUrlDraft}
+                onChange={(event) => setRemoteUrlDraft(event.target.value)}
+                disabled={!currentBoard || busy}
+                placeholder="https://github.com/owner/repo"
+                className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+              />
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={
+                  !currentBoard ||
+                  busy ||
+                  remoteUrlDraft.trim() === (currentBoard.remoteUrl ?? "")
+                }
+              >
+                {remoteUrlDraft.trim() || !currentBoard?.remoteUrl
+                  ? "Save link"
+                  : "Remove link"}
+              </Button>
+            </div>
+          </form>
           <div className="mt-6 border-t border-border pt-5 text-sm">
             <div className="break-all font-medium">
               Unattended review · {currentBoard?.repo ?? "select a repository"}

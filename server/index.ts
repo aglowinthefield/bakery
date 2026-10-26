@@ -132,6 +132,10 @@ const server = createServer(async (req, res) => {
         if (typeof input.icon !== "string" || typeof input.color !== "string") throw new Error("Specify icon and color together");
         send(res, 200, board.setAppearance(repoBoard.id, input.icon, input.color)); return;
       }
+      if ("remoteUrl" in input) {
+        if (Object.keys(input).length !== 1 || typeof input.remoteUrl !== "string") throw new Error("Update remoteUrl as a string, separately from other board settings");
+        send(res, 200, board.setRemoteUrl(repoBoard.id, input.remoteUrl)); return;
+      }
       if ("autoPickupEnabled" in input || "pickupConcurrency" in input || "pickupDailyLimit" in input) {
         if (typeof input.autoPickupEnabled !== "boolean" || !Number.isSafeInteger(input.pickupConcurrency) ||
           ("pickupDailyLimit" in input && !Number.isSafeInteger(input.pickupDailyLimit)))

@@ -14,6 +14,7 @@ export type Board = {
   repo: string;
   icon: RepoIcon;
   color: RepoColor;
+  remoteUrl?: string;
   autoCollapseEmptySwimlanes: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;
