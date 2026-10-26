@@ -34,6 +34,8 @@ test("Done cards can be multi-selected or all selected and archived into the Arc
     const done = page.locator('section[data-status="done"]');
     await done.getByRole("button", { name: /one card/ }).waitFor();
     assert.equal(await page.locator('section[data-status="ready"]').getByRole("button", { name: "Select" }).count(), 0, "only Done offers selection");
+    const total = page.locator("span", { hasText: /^\s*\d+\s+cards$/ }).locator("strong");
+    assert.equal(await total.textContent(), "4");
 
     await done.getByRole("button", { name: "Select" }).click();
     const archive = done.getByRole("button", { name: "Archive" });
@@ -45,6 +47,7 @@ test("Done cards can be multi-selected or all selected and archived into the Arc
     await archive.click();
     await done.getByRole("button", { name: /two card/ }).waitFor();
     assert.deepEqual(requests, [["one", "three"]]);
+    assert.equal(await total.textContent(), "2", "archived cards are excluded from the total");
     assert.equal(await done.getByRole("checkbox").count(), 0, "selection mode ends after archiving");
 
     await page.getByRole("button", { name: "Expand Archive lane" }).click();

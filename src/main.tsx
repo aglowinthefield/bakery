@@ -621,7 +621,7 @@ function App() {
         <div className="flex flex-wrap gap-x-7 gap-y-2 border-b border-border px-6 py-4 text-xs text-muted-foreground lg:px-10">
           <span>
             <strong className="mr-1 font-mono text-foreground">
-              {cards.length}
+              {cards.filter((c) => c.status !== "archived").length}
             </strong>{" "}
             cards
           </span>
