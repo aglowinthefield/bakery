@@ -155,7 +155,7 @@ flowchart LR
   D -. fails or conflicts .-> H
 ```
 
-- Enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
+- It's set per repository. Open the repository's edit (pencil) dialog, enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
 - Bakery only considers runs that reach Review after you enable it. Cards already in Review don't merge.
 - At most 3 automatic merges per repository in any 24 hours. Failed reviews aren't retried.
 - Turning the setting off stops a review in progress from merging.

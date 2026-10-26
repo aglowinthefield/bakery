@@ -598,6 +598,7 @@ function App() {
                     setIconDraft(item.icon);
                     setColorDraft(item.color);
                     setRemoteUrlDraft(item.remoteUrl ?? "");
+                    setVerificationDraft(item.verificationCommand ?? "");
                     setEditingBoard(item);
                   }}
                 >
@@ -649,7 +650,6 @@ function App() {
             className="mt-2 w-full justify-start"
             onClick={() => {
               setError("");
-              setVerificationDraft(currentBoard?.verificationCommand ?? "");
               setShowSettings(true);
             }}
           >
@@ -1194,82 +1194,6 @@ function App() {
             </p>
           </fieldset>
           <div className="mt-6 border-t border-border pt-5 text-sm">
-            <div className="break-all font-medium">
-              Unattended review · {currentBoard?.repo ?? "select a repository"}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              A tool-free Pi reviewer inspects new Review cards; the
-              verification command runs first. At most 3 merges per 24 hours.
-              Findings, errors, or changes require human review. Local merge
-              only, never push. Auto-review alone does not start Ready cards;
-              enable Auto pickup below.
-            </p>
-            <label className="mt-4 block text-xs">
-              Verification command
-              <input
-                aria-label="Auto-review verification command"
-                value={verificationDraft}
-                onChange={(event) => setVerificationDraft(event.target.value)}
-                disabled={busy}
-                placeholder="npm test && npm run build"
-                className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
-              />
-            </label>
-            <Button
-              className="mt-3"
-              variant={currentBoard?.autoReviewEnabled ? "outline" : "default"}
-              disabled={
-                !currentBoard ||
-                busy ||
-                (!currentBoard.autoReviewEnabled && !verificationDraft.trim())
-              }
-              onClick={() => {
-                if (!currentBoard) return;
-                const enable =
-                  !currentBoard.autoReviewEnabled ||
-                  verificationDraft.trim() !== currentBoard.verificationCommand;
-                if (
-                  enable &&
-                  !window.confirm(
-                    `Enable unattended agent review and up to 3 local merges per 24 hours for ${currentBoard.repo}? This may spend model tokens. Only new reviews after enabling are eligible.`,
-                  )
-                )
-                  return;
-                void action(async () => {
-                  const updated = await api<Board>(
-                    `/boards/${currentBoard.id}/settings`,
-                    {
-                      method: "PATCH",
-                      body: JSON.stringify({
-                        autoReviewEnabled: enable,
-                        verificationCommand: verificationDraft,
-                      }),
-                    },
-                  );
-                  setBoards((previous) =>
-                    previous.map((item) =>
-                      item.id === updated.id ? updated : item,
-                    ),
-                  );
-                });
-              }}
-            >
-              {currentBoard?.autoReviewEnabled
-                ? verificationDraft.trim() !== currentBoard.verificationCommand
-                  ? "Save and re-enable"
-                  : "Disable auto-review"
-                : "Enable auto-review"}
-            </Button>
-            {currentBoard?.autoReviewEnabled && (
-              <p className="mt-2 text-xs text-primary">
-                Enabled since{" "}
-                {currentBoard.autoReviewEnabledAt &&
-                  date(currentBoard.autoReviewEnabledAt)}
-                . New reviewed runs can merge without approval.
-              </p>
-            )}
-          </div>
-          <div className="mt-6 border-t border-border pt-5 text-sm">
             <div className="font-medium">
               Auto pickup ·{" "}
               {currentBoard?.repo.split("/").at(-1) ?? "select a repository"}
@@ -1444,6 +1368,11 @@ function App() {
         }}
       >
         <DialogContent
+          onOpenAutoFocus={(event) => {
+            if (!editingBoard) return;
+            event.preventDefault();
+            (event.target as HTMLElement | null)?.focus();
+          }}
           onEscapeKeyDown={(event) => {
             if (
               document.activeElement?.getAttribute("aria-expanded") === "true"
@@ -1658,6 +1587,84 @@ function App() {
                 </Button>
               </div>
             </form>
+          )}
+          {editingBoard && (
+            <div className="mt-8 border-t border-border pt-5 text-sm">
+              <div className="font-medium">Unattended review</div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                A tool-free Pi reviewer inspects new Review cards; the
+                verification command runs first. At most 3 merges per 24 hours.
+                Findings, errors, or changes require human review. Local merge
+                only, never push. Auto-review alone does not start Ready cards;
+                enable Auto pickup in Settings.
+              </p>
+              <label className="mt-4 block text-xs">
+                Verification command
+                <input
+                  aria-label="Auto-review verification command"
+                  value={verificationDraft}
+                  onChange={(event) => setVerificationDraft(event.target.value)}
+                  disabled={busy}
+                  placeholder="npm test && npm run build"
+                  className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+                />
+              </label>
+              <Button
+                className="mt-3"
+                variant={editingBoard.autoReviewEnabled ? "outline" : "default"}
+                disabled={
+                  busy ||
+                  (!editingBoard.autoReviewEnabled && !verificationDraft.trim())
+                }
+                onClick={() => {
+                  const enable =
+                    !editingBoard.autoReviewEnabled ||
+                    verificationDraft.trim() !==
+                      editingBoard.verificationCommand;
+                  if (
+                    enable &&
+                    !window.confirm(
+                      `Enable unattended agent review and up to 3 local merges per 24 hours for ${editingBoard.repo}? This may spend model tokens. Only new reviews after enabling are eligible.`,
+                    )
+                  )
+                    return;
+                  void action(async () => {
+                    const updated = await api<Board>(
+                      `/boards/${editingBoard.id}/settings`,
+                      {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          autoReviewEnabled: enable,
+                          verificationCommand: verificationDraft,
+                        }),
+                      },
+                    );
+                    setBoards((previous) =>
+                      previous.map((item) =>
+                        item.id === updated.id ? updated : item,
+                      ),
+                    );
+                    setEditingBoard(updated);
+                    setVerificationDraft(updated.verificationCommand);
+                  });
+                }}
+              >
+                {editingBoard.autoReviewEnabled
+                  ? verificationDraft.trim() !==
+                    editingBoard.verificationCommand
+                    ? "Save and re-enable"
+                    : "Disable auto-review"
+                  : "Enable auto-review"}
+              </Button>
+              {editingBoard.autoReviewEnabled && (
+                <p className="mt-2 text-xs text-primary">
+                  Enabled since{" "}
+                  {editingBoard.autoReviewEnabledAt &&
+                    date(editingBoard.autoReviewEnabledAt)}
+                  . New reviewed runs can merge without approval.
+                </p>
+              )}
+            </div>
           )}
           {editingBoard && (
             <div className="mt-8 border-t border-border pt-5">
