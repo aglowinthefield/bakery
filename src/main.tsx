@@ -51,6 +51,126 @@ const columns: { id: Status; label: string }[] = [
   { id: "interrupted", label: "Interrupted" },
   { id: "done", label: "Done" },
 ];
+function RepositoryPathInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (path: string) => void;
+}) {
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [focused, setFocused] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const [active, setActive] = useState(-1);
+  useEffect(() => {
+    if (!focused || (!value.startsWith("/") && !value.startsWith("~/"))) {
+      setSuggestions([]);
+      return;
+    }
+    let current = true;
+    const timer = setTimeout(() => {
+      void api<string[]>(`/path-suggestions?path=${encodeURIComponent(value)}`)
+        .then((paths) => {
+          if (current) setSuggestions(paths);
+        })
+        .catch(() => {
+          if (current) setSuggestions([]);
+        });
+    }, 150);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [value, focused]);
+  const visible = focused && !dismissed && suggestions.length > 0;
+  const choose = (path: string) => {
+    onChange(path);
+    setSuggestions([]);
+    setActive(-1);
+    setDismissed(false);
+  };
+  return (
+    <div className="relative min-w-0 flex-1">
+      <input
+        required
+        role="combobox"
+        aria-label="Repository root"
+        aria-autocomplete="list"
+        aria-controls="repository-path-options"
+        aria-expanded={visible}
+        aria-activedescendant={
+          visible && active >= 0
+            ? `repository-path-option-${active}`
+            : undefined
+        }
+        autoComplete="off"
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setSuggestions([]);
+          setActive(-1);
+          setDismissed(false);
+        }}
+        onFocus={() => {
+          setFocused(true);
+          setDismissed(false);
+        }}
+        onBlur={() => {
+          setFocused(false);
+          setActive(-1);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && visible) {
+            event.preventDefault();
+            event.stopPropagation();
+            setDismissed(true);
+            setActive(-1);
+          }
+          if (event.key === "ArrowDown" && visible) {
+            event.preventDefault();
+            setActive((index) => (index + 1) % suggestions.length);
+          }
+          if (event.key === "ArrowUp" && visible) {
+            event.preventDefault();
+            setActive((index) =>
+              index <= 0 ? suggestions.length - 1 : index - 1,
+            );
+          }
+          if (event.key === "Enter" && visible && active >= 0) {
+            event.preventDefault();
+            choose(suggestions[active]);
+          }
+        }}
+        placeholder="~/code/project"
+        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+      />
+      {visible && (
+        <div
+          id="repository-path-options"
+          role="listbox"
+          aria-label="Directory suggestions"
+          className="absolute top-full z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg"
+        >
+          {suggestions.map((path, index) => (
+            <button
+              key={path}
+              id={`repository-path-option-${index}`}
+              role="option"
+              aria-selected={index === active}
+              tabIndex={-1}
+              type="button"
+              className={`block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-accent ${index === active ? "bg-accent" : ""}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => choose(path)}
+            >
+              {path}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardId, setBoardId] = useState<string | null>(null);
@@ -920,7 +1040,14 @@ function App() {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent
+          onEscapeKeyDown={(event) => {
+            if (
+              document.activeElement?.getAttribute("aria-expanded") === "true"
+            )
+              event.preventDefault();
+          }}
+        >
           <DialogTitle>
             {editingBoard ? "Edit repository path" : "Add repository"}
           </DialogTitle>
@@ -963,14 +1090,7 @@ function App() {
               });
             }}
           >
-            <input
-              required
-              aria-label="Repository root"
-              value={repoPath}
-              onChange={(event) => setRepoPath(event.target.value)}
-              placeholder="~/code/project"
-              className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
-            />
+            <RepositoryPathInput value={repoPath} onChange={setRepoPath} />
             <Button disabled={busy} type="submit">
               {editingBoard ? "Save" : "Add"}
             </Button>
