@@ -125,7 +125,7 @@ async function main() {
     if (results.some(item => item.error)) process.exitCode = 1;
   } else if (command === "runs") {
     const runs = await request(origin, `${path}/cards/${cardId(args[0])}/runs`);
-    print(runs, opts.json, runs.map(run => `${run.id}\t${run.status}\t${run.startedBy ?? "manual"}\t${run.startedAt ?? ""}${run.error ? `\t${run.error}` : ""}`));
+    print(runs, opts.json, runs.map(run => `${run.id}\t${run.status}\t${run.startedBy ?? "manual"}\t${run.startedAt ?? ""}\t${run.agent || "-"}${run.error ? `\t${run.error}` : ""}`));
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));

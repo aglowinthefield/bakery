@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { addAgent } from "./agent.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
@@ -16,15 +17,17 @@ const toRepoBoard = (row: BoardRow, starts: string[]): RepoBoard => ({
   autoPickupNextAt: starts.length >= row.pickupDailyLimit
     ? new Date(Date.parse(starts[starts.length - row.pickupDailyLimit]) + 86_400_000).toISOString() : null,
 });
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number };
-export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto" };
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; runAgent: string; reviewAgent: string };
+export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string };
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null };
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string };
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError";
 const now = () => new Date().toISOString();
-const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete
+const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
+  COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
+  COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent
   FROM cards LEFT JOIN runs ON runs.cardId=cards.id`;
 
 export class Board {
@@ -97,6 +100,10 @@ export class Board {
     }
     if (!runColumns.has("turnsIncomplete")) this.db.exec("ALTER TABLE runs ADD COLUMN turnsIncomplete INTEGER NOT NULL DEFAULT 1");
     if (!runColumns.has("startedBy")) this.db.exec("ALTER TABLE runs ADD COLUMN startedBy TEXT NOT NULL DEFAULT 'manual'");
+    // Older runs did not record their agent; they keep an empty label rather than a guess.
+    if (!runColumns.has("agent")) this.db.exec("ALTER TABLE runs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
+    if (!(this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).some(column => column.name === "agent"))
+      this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     const approvalColumns = new Set((this.db.prepare("PRAGMA table_info(approvals)").all() as { name: string }[]).map(column => column.name));
     if (!approvalColumns.has("preparedHead")) this.db.exec("ALTER TABLE approvals ADD COLUMN preparedHead TEXT");
     if (!approvalColumns.has("merged")) this.db.exec("ALTER TABLE approvals ADD COLUMN merged INTEGER NOT NULL DEFAULT 0");
@@ -272,6 +279,10 @@ export class Board {
   finishAutoReview(runId: string, state: "needs_human" | "merged", details: string, fingerprint = ""): void {
     this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=? WHERE runId=? AND state='running'")
       .run(state, details.slice(0, 4000), fingerprint, now(), runId);
+  }
+  recordAutoReviewAgent(runId: string, label: string): void {
+    const job = this.getAutoReviewJob(runId);
+    if (job) this.db.prepare("UPDATE auto_review_jobs SET agent=? WHERE runId=?").run(addAgent(job.agent, label), runId);
   }
   renameBoard(id: string, repo: string): RepoBoard {
     const board = this.getBoard(id);
@@ -502,6 +513,10 @@ export class Board {
   getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
   listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }
   attach(id: string, pid: number, worktree: string) { this.db.prepare("UPDATE runs SET pid=?, worktree=? WHERE id=? AND status='running'").run(pid, worktree, id); }
+  recordAgent(id: string, label: string) {
+    const run = this.getRun(id);
+    if (run?.status === "running") this.db.prepare("UPDATE runs SET agent=? WHERE id=?").run(addAgent(run.agent, label), id);
+  }
   completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
   append(id: string, chunk: string) {
     // Keep a bounded tail. Store only human-readable text; never raw tool arguments or credentials.

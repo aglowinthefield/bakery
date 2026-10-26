@@ -4,13 +4,37 @@ import { date } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import type { Card, Run } from "./model.js";
 
+// Shows which provider/model ran a phase, e.g. "Run: anthropic/claude-sonnet-4-5".
+export function AgentBadge({
+  phase,
+  agent,
+  pending = false,
+}: {
+  phase: string;
+  agent: string;
+  pending?: boolean;
+}) {
+  const text = agent || (pending ? "starting…" : "not recorded");
+  return (
+    <span
+      title={`${phase} agent: ${agent || (pending ? "not reported yet" : "not recorded for this older run")}`}
+      className="min-w-0 max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+    >
+      {phase}: {text}
+    </span>
+  );
+}
+
 const OUTPUT_TAIL_LINES = 40;
 
 export function errorPrompt(
   run: Run,
   card?: Pick<Card, "title" | "repo"> | null,
 ): string {
-  const lines = ["A Bakery agent run failed. Investigate the failure and fix the cause.", ""];
+  const lines = [
+    "A Bakery agent run failed. Investigate the failure and fix the cause.",
+    "",
+  ];
   if (card?.title) lines.push(`Card: ${card.title}`);
   if (card?.repo) lines.push(`Repo: ${card.repo}`);
   lines.push(`Attempt: #${run.attempt} (${run.status})`);
@@ -21,7 +45,13 @@ export function errorPrompt(
   const output = run.output.trim();
   if (output) {
     const tail = output.split("\n").slice(-OUTPUT_TAIL_LINES).join("\n");
-    lines.push("", `Last agent output (up to ${OUTPUT_TAIL_LINES} lines):`, "```", tail, "```");
+    lines.push(
+      "",
+      `Last agent output (up to ${OUTPUT_TAIL_LINES} lines):`,
+      "```",
+      tail,
+      "```",
+    );
   }
   return lines.join("\n");
 }
@@ -91,6 +121,11 @@ export function AttemptList({
                     Auto pickup
                   </span>
                 )}
+                <AgentBadge
+                  phase="Run"
+                  agent={run.agent}
+                  pending={run.status === "running"}
+                />
                 <span className="ml-auto flex items-center gap-1 text-muted-foreground">
                   <Clock3 size={12} /> {date(run.startedAt)}
                 </span>
@@ -113,7 +148,11 @@ export function AttemptList({
                           className="shrink-0"
                           onClick={() => {
                             if (run.error)
-                              void copy(run.id, errorPrompt(run, card), "error");
+                              void copy(
+                                run.id,
+                                errorPrompt(run, card),
+                                "error",
+                              );
                             else if (run.worktree)
                               void copy(run.id, run.worktree, "path");
                           }}

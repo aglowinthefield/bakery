@@ -108,7 +108,7 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     writeFileSync(join(repo, "README.md"), "fixture\n");
     execFileSync("git", ["-C", repo, "add", "README.md"]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"turn_start"}' '{"type":"turn_end"}' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Worked offline."}}' '{"type":"agent_settled","aborted":false}'\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"turn_start"}' '{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-5"}}' '{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-5","stopReason":"stop"}}' '{"type":"turn_end"}' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Worked offline."}}' '{"type":"agent_settled","aborted":false}'\n`);
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Test", body: "No network", repo });
@@ -116,6 +116,8 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     const first = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(first.id)?.status === "review");
     assert.match(board.getRun(first.id)!.output, /Worked offline/);
+    assert.equal(board.getRun(first.id)!.agent, "anthropic/claude-sonnet-4-5");
+    assert.equal(board.getCard(card.id)!.runAgent, "anthropic/claude-sonnet-4-5");
     const fingerprint = "a".repeat(64);
     board.addReviewComment(card.id, first.id, fingerprint, "README.md", 4, "add", "changed", "Add a regression test", 2);
     assert.throws(() => worker.start(board.getCard(card.id)!), /Submit or remove draft review comments/);
