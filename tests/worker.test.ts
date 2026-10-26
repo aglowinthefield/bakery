@@ -184,6 +184,36 @@ test("a conflict retry tells Pi to reconcile only the card branch with current m
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("Pi termination distinguishes Bakery stop and shutdown from an unexplained exit 143", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Exit provenance", body: "", repo });
+    board.setStatus(card.id, "ready");
+    writeFileSync(fakePi, "#!/bin/sh\nexit 143\n");
+    chmodSync(fakePi, 0o755);
+    const external = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(external.id)?.status === "failed");
+    assert.match(board.getRun(external.id)!.error!, /Pi exited \(143\); termination source unknown \(Bakery did not send SIGTERM\)/);
+
+    writeFileSync(fakePi, "#!/bin/sh\nexec sleep 30\n");
+    const stopped = worker.start(board.getCard(card.id)!);
+    worker.stop(stopped.id);
+    await waitFor(() => board.getRun(stopped.id)?.status === "failed");
+    assert.match(board.getRun(stopped.id)!.error!, /Bakery sent SIGTERM: manual stop/);
+
+    const shutdown = worker.start(board.getCard(card.id)!);
+    await worker.shutdown("server received SIGTERM");
+    assert.match(board.getRun(shutdown.id)!.error!, /Bakery sent SIGTERM: server received SIGTERM/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 async function waitFor(predicate: () => boolean) {
   const end = Date.now() + 5000;
   while (!predicate()) {

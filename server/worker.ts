@@ -15,7 +15,11 @@ function providerFailure(error: unknown): string {
 
 export class Worker {
   private active = new Map<string, ChildProcess>();
+  private terminationReasons = new Map<string, string>();
   constructor(private board: Board, private dataDir: string, private piBin = "pi") {}
+  private terminate(id: string, child: ChildProcess, reason: string) {
+    if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
+  }
   start(card: Card, startedBy: "manual" | "auto" = "manual"): Run {
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
@@ -57,6 +61,7 @@ export class Worker {
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
+    const startedAt = Date.now();
     let buffer = "", settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
     let turn = 0, lastWorktreeSnapshot = "";
     const tools = new Map<string, { name: string; finished: boolean; failed: boolean }>();
@@ -114,16 +119,22 @@ export class Worker {
           }
         } catch { protocolError = "Invalid Pi event stream"; }
       }
-      if (buffer.length > 1_000_000) { protocolError = "Pi event exceeded 1 MB"; child.kill(); }
+      if (buffer.length > 1_000_000) { protocolError = "Pi event exceeded 1 MB"; this.terminate(run.id, child, "Pi event exceeded 1 MB"); }
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
-    const timer = setTimeout(() => child.kill("SIGTERM"), 30 * 60 * 1000);
+    const timer = setTimeout(() => this.terminate(run.id, child, "30-minute run timeout"), 30 * 60 * 1000);
     child.on("error", (error) => { this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
       clearTimeout(timer); this.active.delete(run.id);
+      const reason = this.terminationReasons.get(run.id);
+      this.terminationReasons.delete(run.id);
       const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError;
+      // Exit code 143 often means SIGTERM through a shell, but does not identify the sender.
+      const termination = reason ? `; Bakery sent SIGTERM: ${reason}`
+        : signal || code === 143 ? "; termination source unknown (Bakery did not send SIGTERM)" : "";
       // Stderr may contain request details, so only sanitized diagnostics reach the card.
-      this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `Pi exited (${signal ?? code ?? "unknown"}); ${settled ? "settled" : "no settlement event"}${terminalModelError ? `; ${terminalModelError}` : ""}${protocolError ? `; ${protocolError}` : ""}${stderr ? "; stderr logged on server" : ""}`);
+      this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `Pi exited (${signal ?? code ?? "unknown"})${termination}; ${settled ? "settled" : "no settlement event"}${terminalModelError ? `; ${terminalModelError}` : ""}${protocolError ? `; ${protocolError}` : ""}${stderr ? "; stderr logged on server" : ""}`);
+      if (!ok) console.error(`Pi exit for run ${run.id}: pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"} source=${reason ?? "unknown"} elapsedMs=${Date.now() - startedAt}`);
       if (stderr) console.error(`Pi diagnostics for run ${run.id}:`, stderr);
     });
     return this.board.getRun(run.id)!;
@@ -131,13 +142,13 @@ export class Worker {
   stop(id: string) {
     const child = this.active.get(id);
     if (!child) throw new Error("This run is not owned by the current server process");
-    child.kill("SIGTERM");
+    this.terminate(id, child, "manual stop");
   }
-  async shutdown() {
-    await Promise.all([...this.active.values()].map(child => new Promise<void>(resolve => {
+  async shutdown(reason = "server shutdown") {
+    await Promise.all([...this.active].map(([id, child]) => new Promise<void>(resolve => {
       if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
       child.once("close", () => resolve());
-      child.kill("SIGTERM");
+      this.terminate(id, child, reason);
     })));
   }
 }
