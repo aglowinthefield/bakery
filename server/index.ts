@@ -123,6 +123,11 @@ const server = createServer(async (req, res) => {
       const repoBoard = board.getBoard(settingsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       const input = await body(req);
+      if ("icon" in input || "color" in input) {
+        if (Object.keys(input).some(key => key !== "icon" && key !== "color")) throw new Error("Update appearance separately from other board settings");
+        if (typeof input.icon !== "string" || typeof input.color !== "string") throw new Error("Specify icon and color together");
+        send(res, 200, board.setAppearance(repoBoard.id, input.icon, input.color)); return;
+      }
       if ("autoPickupEnabled" in input || "pickupConcurrency" in input || "pickupDailyLimit" in input) {
         if (typeof input.autoPickupEnabled !== "boolean" || !Number.isSafeInteger(input.pickupConcurrency) ||
           ("pickupDailyLimit" in input && !Number.isSafeInteger(input.pickupDailyLimit)))

@@ -1,8 +1,12 @@
+import type { RepoColor, RepoIcon } from "./repo-appearance.js";
+
 export type Status =
   "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done";
 export type Board = {
   id: string;
   repo: string;
+  icon: RepoIcon;
+  color: RepoColor;
   autoCollapseEmptySwimlanes: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;

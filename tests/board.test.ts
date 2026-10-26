@@ -164,6 +164,40 @@ test("repository boards retain cards and keep attempted work in its original rep
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("existing boards gain default appearance without losing settings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-appearance-upgrade-"));
+  const path = join(dir, "board.sqlite");
+  try {
+    const legacy = new DatabaseSync(path);
+    legacy.exec("CREATE TABLE boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0)");
+    legacy.prepare("INSERT INTO boards(id, repo, autoCollapseEmptySwimlanes) VALUES (?, ?, 1)").run("old", dir);
+    legacy.close();
+    const board = new Board(path);
+    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes], ["layout-grid", "violet", true]);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("repository appearance is independent, survives restart, and stays with an archived board", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-appearance-"));
+  const path = join(dir, "board.sqlite");
+  try {
+    const board = new Board(path);
+    const first = board.addRepo(join(dir, "first"));
+    const second = board.addRepo(join(dir, "second"));
+    assert.equal(first.icon, "layout-grid");
+    assert.equal(first.color, "violet");
+    assert.deepEqual([second.icon, second.color], ["layout-grid", "violet"]);
+    assert.deepEqual([board.setAppearance(first.id, "rocket", "coral").icon, board.getBoard(first.id)?.color], ["rocket", "coral"]);
+    assert.deepEqual([board.getBoard(second.id)?.icon, board.getBoard(second.id)?.color], ["layout-grid", "violet"]);
+    board.archiveBoard(first.id);
+    board.close();
+    const reopened = new Board(path);
+    assert.deepEqual([reopened.addRepo(join(dir, "first")).icon, reopened.getBoard(first.id)?.color], ["rocket", "coral"]);
+    reopened.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("edit a board before attempts and remove it without deleting cards", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {

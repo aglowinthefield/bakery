@@ -62,6 +62,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
+    assert.deepEqual([first.icon, first.color], ["layout-grid", "violet"]);
     assert.equal(first.autoCollapseEmptySwimlanes, false);
     assert.equal(first.autoReviewEnabled, false);
     assert.equal(first.verificationCommand, "");
@@ -73,6 +74,15 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards", "POST", { repo: alpha })).status, 400);
     assert.equal((await request("/boards", "POST", { repo: "code/beta" })).status, 400);
     const second = (await request("/boards", "POST", { repo: beta })).data;
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "unknown", color: "coral" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "rocket", color: "red; background:url(x)" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "rocket" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "rocket", color: "coral", autoCollapseEmptySwimlanes: true })).status, 400);
+    const appearance = await request(`/boards/${first.id}/settings`, "PATCH", { icon: "rocket", color: "coral" });
+    assert.equal(appearance.status, 200);
+    assert.deepEqual([appearance.data.icon, appearance.data.color], ["rocket", "coral"]);
+    assert.deepEqual([(await request("/boards")).data.find((item: { id: string }) => item.id === first.id).icon,
+      (await request("/boards")).data.find((item: { id: string }) => item.id === second.id).color], ["rocket", "violet"]);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: "yes" })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", {})).status, 400);
     assert.equal((await request(`/boards/missing/settings`, "PATCH", { autoCollapseEmptySwimlanes: true })).status, 404);
@@ -136,6 +146,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(moved.data.repo, realpathSync(gamma));
     assert.equal(moved.status, 200);
     assert.equal(moved.data.autoCollapseEmptySwimlanes, true);
+    assert.deepEqual([moved.data.icon, moved.data.color], ["rocket", "coral"]);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync(gamma));
     assert.equal((await request(`/boards/${first.id}`, "DELETE")).status, 200);
     assert.equal((await request(`/boards/${first.id}/cards`)).status, 404);
@@ -143,6 +154,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     const restored = await request("/boards", "POST", { repo: gamma });
     assert.equal(restored.data.id, first.id);
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
+    assert.deepEqual([restored.data.icon, restored.data.color], ["rocket", "coral"]);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].id, card.id);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
