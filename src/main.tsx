@@ -569,35 +569,34 @@ function App() {
                   <Pencil size={13} />
                 </button>
               </div>
-              {boardId === item.id && (
-                <ul
-                  aria-label="Card counts"
-                  className="grid grid-cols-4 gap-x-1 gap-y-0.5 px-3 pb-2"
-                >
-                  {columns.map((column) => {
-                    const Icon = column.icon;
-                    const count = cards.filter(
-                      (c) => c.status === column.id,
-                    ).length;
-                    return (
-                      <li
-                        key={column.id}
-                        data-status={column.id}
-                        title={`${count} ${column.label.toLowerCase()}`}
-                        aria-label={`${column.label}: ${count}`}
-                        className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
-                      >
-                        <Icon
-                          size={12}
-                          aria-hidden="true"
-                          className="lane-status-icon shrink-0"
-                        />
-                        <span className="font-mono">{count}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              <ul
+                aria-label="Card counts"
+                className="grid grid-cols-4 gap-x-1 gap-y-0.5 px-3 pb-2"
+              >
+                {columns.map((column) => {
+                  const Icon = column.icon;
+                  const count =
+                    boardId === item.id && (cards.length || !item.cardCounts)
+                      ? cards.filter((c) => c.status === column.id).length
+                      : (item.cardCounts?.[column.id] ?? 0);
+                  return (
+                    <li
+                      key={column.id}
+                      data-status={column.id}
+                      title={`${count} ${column.label.toLowerCase()}`}
+                      aria-label={`${column.label}: ${count}`}
+                      className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
+                    >
+                      <Icon
+                        size={12}
+                        aria-hidden="true"
+                        className="lane-status-icon shrink-0"
+                      />
+                      <span className="font-mono">{count}</span>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           ))}
           <Button

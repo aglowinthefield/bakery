@@ -304,6 +304,12 @@ export class Board {
     if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status IN ('running', 'interrupted') LIMIT 1").get(board.repo)) throw new Error("Resolve running or interrupted cards before removing this board");
     this.db.prepare("UPDATE boards SET archived=1 WHERE id=?").run(id);
   }
+  cardCounts(): Record<string, Partial<Record<CardStatus, number>>> {
+    const counts: Record<string, Partial<Record<CardStatus, number>>> = {};
+    for (const row of this.db.prepare("SELECT repo, status, COUNT(*) AS count FROM cards GROUP BY repo, status").all() as { repo: string; status: CardStatus; count: number }[])
+      (counts[row.repo] ??= {})[row.status] = Number(row.count);
+    return counts;
+  }
   listCards(repo?: string): Card[] { return (repo === undefined
     ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.createdAt DESC`).all()
     : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.createdAt DESC`).all(repo)) as Card[]; }

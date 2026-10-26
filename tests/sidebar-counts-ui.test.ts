@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-test("selected repo in the sidebar shows an icon and card count for every status", async () => {
+test("every repo in the sidebar shows an icon and card count for every status", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
   await server.listen();
   const browser = await chromium.launch();
@@ -15,7 +15,10 @@ test("selected repo in the sidebar shows an icon and card count for every status
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [
+          { id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false },
+          { id: "other", repo: "/tmp/other", autoCollapseEmptySwimlanes: false, cardCounts: { running: 4, failed: 1 } },
+        ],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
         "/api/boards/board/cards": cards,
         "/api/boards/board/conflicts": [],
@@ -24,7 +27,7 @@ test("selected repo in the sidebar shows an icon and card count for every status
       await route.fulfill({ json: data[path] });
     });
     await page.goto(server.resolvedUrls!.local[0]);
-    const nav = page.getByRole("list", { name: "Card counts" });
+    const nav = page.getByRole("button", { name: "repo", exact: true }).locator("xpath=../..").getByRole("list", { name: "Card counts" });
     await nav.locator('[data-status="done"]').getByText("3", { exact: true }).waitFor();
     const repoButton = page.getByRole("button", { name: "repo", exact: true });
     const [repoBox, navBox] = [await repoButton.boundingBox(), await nav.boundingBox()];
@@ -37,6 +40,13 @@ test("selected repo in the sidebar shows an icon and card count for every status
       const iconColor = await row.locator("svg.lane-status-icon").evaluate(el => getComputedStyle(el).color);
       const laneColor = await page.locator(`section[data-status="${status}"] .lane-status-dot`).evaluate(el => getComputedStyle(el).backgroundColor);
       assert.equal(iconColor, laneColor, `${status} icon matches lane color`);
+    }
+    const otherNav = page.getByRole("button", { name: "other", exact: true }).locator("xpath=../..").getByRole("list", { name: "Card counts" });
+    const otherExpected: Record<string, number> = { triage: 0, ready: 0, running: 4, review: 0, failed: 1, interrupted: 0, done: 0, archived: 0 };
+    for (const [status, count] of Object.entries(otherExpected)) {
+      const row = otherNav.locator(`[data-status="${status}"]`);
+      assert.equal((await row.locator("span.font-mono").textContent())?.trim(), String(count), `unselected ${status} count`);
+      assert.equal(await row.locator("svg.lane-status-icon").count(), 1, `unselected ${status} icon`);
     }
   } finally {
     await browser.close();

@@ -25,6 +25,7 @@ export type Board = {
   autoPickupNextAt: string | null;
   autoPickupEnabledAt: string | null;
   autoPickupError: string;
+  cardCounts?: Partial<Record<Status, number>>;
 };
 export type AutoReviewJob = {
   cardId: string;

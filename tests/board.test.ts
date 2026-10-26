@@ -367,3 +367,16 @@ test("restart preserves interrupted work as blocked rather than dispatching it a
     second.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("card counts are grouped by repository and status", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const other = join(dir, "other");
+    const [a] = ["A", "B"].map(title => board.createCard({ title, body: "", repo: dir }));
+    board.setStatus(a!.id, "ready");
+    board.createCard({ title: "C", body: "", repo: other });
+    assert.deepEqual(board.cardCounts(), { [dir]: { triage: 1, ready: 1 }, [other]: { triage: 1 } });
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
