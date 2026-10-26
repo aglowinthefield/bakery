@@ -688,8 +688,7 @@ function App() {
             role="alert"
             className="mx-6 mt-5 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive lg:mx-10"
           >
-            Auto pickup paused: {currentBoard.autoPickupError}. Inspect the run
-            before re-enabling in Settings.
+            Auto pickup paused: {currentBoard.autoPickupError}.
           </div>
         )}
         {error && (

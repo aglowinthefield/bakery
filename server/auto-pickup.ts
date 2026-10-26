@@ -14,10 +14,11 @@ export class AutoPickup {
   shutdown(): void { if (this.timer) clearInterval(this.timer); this.timer = undefined; }
 
   tick(): void {
+    this.board.resumeResolvedAutoPickup();
     for (const repoBoard of this.board.listBoards().filter(item => item.autoPickupEnabled)) {
       const blocker = this.board.autoPickupBlocker(repoBoard);
       if (blocker) {
-        this.board.pauseAutoPickup(repoBoard.id, blocker);
+        this.board.pauseAutoPickup(repoBoard.id, blocker.reason, blocker.kind === "failed_run");
         continue;
       }
       const candidates = this.board.listAutoPickupCandidates().filter(item => item.board.id === repoBoard.id);
