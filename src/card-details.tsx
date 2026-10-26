@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { Check, Copy, Maximize2, Minimize2, Square } from "lucide-react";
 import { api } from "./api.js";
-import { AttemptList } from "./attempts.js";
+import { AgentBadge, AttemptList } from "./attempts.js";
 import { Button } from "./components/ui/button";
 import {
   Dialog,
@@ -318,7 +318,12 @@ export function CardDetails({
                 : autoJobs[0].state === "merged"
                   ? "merged locally"
                   : "needs human review"}
-            </strong>
+            </strong>{" "}
+            <AgentBadge
+              phase="Review"
+              agent={autoJobs[0].agent}
+              pending={autoJobs[0].state === "running"}
+            />
             {autoJobs[0].details && (
               <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
                 {autoJobs[0].details}

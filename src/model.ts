@@ -27,6 +27,7 @@ export type AutoReviewJob = {
   fingerprint: string;
   startedAt: string;
   finishedAt: string | null;
+  agent: string;
 };
 export type BakerySettings = {
   confirmRunStart: boolean;
@@ -69,6 +70,8 @@ export type Card = {
   updatedAt: string;
   turns: number;
   turnsIncomplete: number;
+  runAgent: string;
+  reviewAgent: string;
 };
 export type Run = {
   id: string;
@@ -80,4 +83,5 @@ export type Run = {
   startedAt: string;
   finishedAt: string | null;
   startedBy: "manual" | "auto";
+  agent: string;
 };

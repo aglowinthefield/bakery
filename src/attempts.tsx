@@ -4,6 +4,27 @@ import { date } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import type { Run } from "./model.js";
 
+// Shows which provider/model ran a phase, e.g. "Run: anthropic/claude-sonnet-4-5".
+export function AgentBadge({
+  phase,
+  agent,
+  pending = false,
+}: {
+  phase: string;
+  agent: string;
+  pending?: boolean;
+}) {
+  const text = agent || (pending ? "starting…" : "not recorded");
+  return (
+    <span
+      title={`${phase} agent: ${agent || (pending ? "not reported yet" : "not recorded for this older run")}`}
+      className="min-w-0 max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+    >
+      {phase}: {text}
+    </span>
+  );
+}
+
 export function AttemptList({ runs }: { runs: Run[] }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [copyFeedback, setCopyFeedback] = useState<{
@@ -62,6 +83,11 @@ export function AttemptList({ runs }: { runs: Run[] }) {
                     Auto pickup
                   </span>
                 )}
+                <AgentBadge
+                  phase="Run"
+                  agent={run.agent}
+                  pending={run.status === "running"}
+                />
                 <span className="ml-auto flex items-center gap-1 text-muted-foreground">
                   <Clock3 size={12} /> {date(run.startedAt)}
                 </span>

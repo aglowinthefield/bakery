@@ -110,7 +110,7 @@ async function main() {
     print(card, opts.json, [`${card.id}\t${card.status}\t${card.title ?? ""}`]);
   } else if (command === "runs") {
     const runs = await request(origin, `${path}/cards/${cardId(args[0])}/runs`);
-    print(runs, opts.json, runs.map(run => `${run.id}\t${run.status}\t${run.startedBy ?? "manual"}\t${run.startedAt ?? ""}`));
+    print(runs, opts.json, runs.map(run => `${run.id}\t${run.status}\t${run.startedBy ?? "manual"}\t${run.startedAt ?? ""}\t${run.agent || "-"}`));
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));

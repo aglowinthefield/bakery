@@ -54,6 +54,7 @@ import {
 import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { api, date } from "./api.js";
+import { AgentBadge } from "./attempts.js";
 import { CardDetails } from "./card-details.js";
 import {
   repoColors,
@@ -817,6 +818,22 @@ function App() {
                             <p className="mt-2 line-clamp-2 min-h-9 text-xs leading-relaxed text-muted-foreground">
                               {item.body || "No description yet."}
                             </p>
+                            {(item.runAgent || item.reviewAgent) && (
+                              <div className="mt-3 flex flex-wrap gap-1">
+                                {item.runAgent && (
+                                  <AgentBadge
+                                    phase="Run"
+                                    agent={item.runAgent}
+                                  />
+                                )}
+                                {item.reviewAgent && (
+                                  <AgentBadge
+                                    phase="Review"
+                                    agent={item.reviewAgent}
+                                  />
+                                )}
+                              </div>
+                            )}
                             <div className="mt-5 flex items-center justify-between border-t border-border/70 pt-3 font-mono text-[10px] text-muted-foreground">
                               <span className="flex min-w-0 items-center gap-1 truncate">
                                 <GitBranch size={11} className="shrink-0" />{" "}

@@ -1,6 +1,7 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { agentLabel } from "./agent.js";
 import { Board, type Card, type Run } from "./board.js";
 
 function git(repo: string, ...args: string[]) {
@@ -63,7 +64,7 @@ export class Worker {
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
     const startedAt = Date.now();
     let buffer = "", settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
-    let turn = 0, lastWorktreeSnapshot = "";
+    let turn = 0, lastWorktreeSnapshot = "", lastAgent = "";
     const tools = new Map<string, { name: string; finished: boolean; failed: boolean }>();
     child.stdout?.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf8");
@@ -73,6 +74,10 @@ export class Worker {
         try {
           const event = JSON.parse(line);
           if (event.type === "agent_settled") { settled = true; aborted = event.aborted === true; }
+          if (event.type === "message_start" || event.type === "message_end") {
+            const label = agentLabel(event.message);
+            if (label && label !== lastAgent) { lastAgent = label; this.board.recordAgent(run.id, label); }
+          }
           if (event.type === "message_end" && event.message?.role === "assistant") {
             if (event.message.stopReason === "error") {
               terminalModelError = providerFailure(event.message.errorMessage);
