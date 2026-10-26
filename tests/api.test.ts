@@ -140,6 +140,14 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "triage" })).data.status, "triage");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
+    assert.equal((await request(`/boards/${first.id}/cards/archive`, "POST", { cardIds: [card.id] })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/cards/archive`, "POST", { cardIds: "nope" })).status, 400);
+    const finished = (await request(`/boards/${first.id}/cards`, "POST", { title: "Finished", body: "" })).data;
+    assert.equal((await request(`/boards/${first.id}/cards/${finished.id}/status`, "POST", { status: "done" })).data.status, "done");
+    assert.equal((await request(`/boards/${second.id}/cards/archive`, "POST", { cardIds: [finished.id] })).status, 404);
+    assert.equal((await request(`/boards/${first.id}/cards/archive`, "POST", { cardIds: [finished.id] })).data[0].status, "archived");
+    assert.equal((await request(`/boards/${first.id}/cards/unarchive`, "POST", { cardIds: [finished.id] })).data[0].status, "done");
+    assert.equal((await request(`/boards/${first.id}/cards/archive`, "POST", { cardIds: [finished.id] })).data[0].status, "archived");
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
     assert.equal((await request(`/boards/${second.id}/cards`)).data.length, 0);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/runs`)).status, 404);
@@ -148,7 +156,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/review`)).status, 404);
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/review`)).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/approve`, "POST")).status, 400);
-    assert.equal((await request(`/boards/${first.id}/cards`)).data[0].id, card.id);
+    assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
     assert.equal((await request(`/boards/${first.id}`, "PATCH", { repo: beta })).status, 400);
     const moved = await request(`/boards/${first.id}`, "PATCH", { repo: "~/code/gamma" });
     assert.equal(moved.data.repo, realpathSync(gamma));
@@ -163,7 +171,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(restored.data.id, first.id);
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.deepEqual([restored.data.icon, restored.data.color], ["rocket", "coral"]);
-    assert.equal((await request(`/boards/${first.id}/cards`)).data[0].id, card.id);
+    assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
