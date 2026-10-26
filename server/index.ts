@@ -228,5 +228,5 @@ const server = createServer(async (req, res) => {
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
 server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); });
-const shutdown = () => { server.close(); autoPickup.shutdown(); void Promise.all([worker.shutdown(), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); }); };
-process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); }); };
+process.once("SIGINT", () => shutdown("SIGINT")); process.once("SIGTERM", () => shutdown("SIGTERM"));
