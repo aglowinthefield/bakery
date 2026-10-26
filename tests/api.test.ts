@@ -19,6 +19,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
   const home = mkdtempSync(join(tmpdir(), "bakery-api-"));
   const alpha = join(home, "code", "alpha"), beta = join(home, "code", "beta"), gamma = join(home, "code", "gamma");
   mkdirSync(alpha, { recursive: true }); mkdirSync(beta); mkdirSync(gamma);
+  mkdirSync(join(home, "code", "alpine"));
   for (const repo of [alpha, beta, gamma]) execFileSync("git", ["init", "-q", repo]);
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
@@ -43,6 +44,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       }
     }
     assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
+    assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Fal")).data, ["~/code/alpha/", "~/code/alpine/"]);
+    assert.deepEqual((await request(`/path-suggestions?path=${encodeURIComponent(join(home, "code") + "/al")}`)).data, [alpha + "/", join(home, "code", "alpine") + "/"]);
+    assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Falpha%2F")).data, []);
+    assert.deepEqual((await request("/path-suggestions?path=code%2Fal")).data, []);
+    assert.deepEqual((await request("/path-suggestions?path=~%2Fmissing%2Fa")).data, []);
+    assert.equal((await request(`/path-suggestions?path=${"a".repeat(1025)}`)).status, 400);
     assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" });
     assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { cardDetailsLayout: "drawer" })).status, 400);
