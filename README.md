@@ -196,6 +196,18 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--yes]
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
 - Each repository can have an optional `http` or `https` remote link, such as its GitHub page. Set it with the pencil button next to the repository (Edit repository). It appears below the board heading. Bakery only links to it and never pushes there.
 
+### Pi models
+
+Bakery starts Pi for three kinds of runs. Each can use its own model and thinking level:
+
+- **Card runs**: normal runs and retries.
+- **Conflict fixes**: runs that repair a merge conflict.
+- **Agent review**: the reviewer used by [unattended review](#unattended-review).
+
+Set global defaults in **Settings → Pi models**. To override them for one repository, use **Pi models** in its Edit repository dialog. A blank field inherits: the repository value comes first, then the global value, then the default in your Pi settings. Model and thinking level inherit separately, so a repository can change only the model and keep the global thinking level.
+
+A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-codex/gpt-5.5`. Bakery passes it as `--model`, and the thinking level as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). It only passes flags you set. The model field suggests the models `pi --list-models` reports. Bakery caches that list for 10 minutes. A change applies to runs that start after you save it. Retries keep their Pi session but use the current model.
+
 ## Server, data, and restarts
 
 - The server listens only on `127.0.0.1` and has no authentication. Don't expose it on a network.

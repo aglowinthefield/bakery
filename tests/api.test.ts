@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { emptyAgentModels } from "../server/agent-models.js";
 
 async function freePort(): Promise<number> {
   const listener = createServer();
@@ -55,17 +56,17 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code")}`)).status, 400);
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha/subfolder")}`)).status, 400);
     assert.equal((await request(`/path-suggestions?path=${"a".repeat(1025)}`)).status, 400);
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" });
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", agentModels: emptyAgentModels() });
     assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { notifyOnReview: "true" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { cardDetailsLayout: "drawer" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { theme: "unknown" })).status, 400);
-    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" });
-    assert.deepEqual((await request("/settings", "PATCH", { notifyOnReview: true })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "dialog", theme: "default" });
-    assert.deepEqual((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default" });
-    assert.deepEqual((await request("/settings", "PATCH", { theme: "compline" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline" });
-    assert.deepEqual((await request("/settings", "PATCH", { theme: "light" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light" });
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light" });
+    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { notifyOnReview: true })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "dialog", theme: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { theme: "compline" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { theme: "light" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", agentModels: emptyAgentModels() });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
@@ -180,6 +181,70 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.deepEqual([restored.data.icon, restored.data.color], ["rocket", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+      await new Promise(resolve => child.once("close", resolve));
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Pi model settings validate per phase and the model list comes from pi --list-models", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bakery-api-models-"));
+  const repo = join(home, "repo"), fakePi = join(home, "pi-fake"), calls = join(home, "calls.txt");
+  execFileSync("git", ["init", "-q", repo]);
+  writeFileSync(fakePi, `#!/bin/sh
+echo "$@" >> '${calls}'
+[ -f '${home}/fail' ] && { echo "billing error" >&2; exit 1; }
+printf '%s\\n' 'provider      model              context  max-out  thinking  images' 'anthropic     claude-sonnet-4-5  200K     64K      yes       yes' 'openai-codex  gpt-5.5            400K     128K     yes       yes'
+`);
+  chmodSync(fakePi, 0o755);
+  const port = await freePort();
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stderr?.on("data", chunk => { output += chunk.toString(); });
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    async function request(path: string, method = "GET", input?: unknown) {
+      const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
+      return { status: response.status, data: await response.json() };
+    }
+    const deadline = Date.now() + 5000;
+    while (true) {
+      try { await fetch(`${url}/api/boards`); break; }
+      catch {
+        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    writeFileSync(join(home, "fail"), "");
+    const failed = await request("/models");
+    assert.equal(failed.status, 200);
+    assert.deepEqual(failed.data.models, []);
+    assert.match(failed.data.error, /Could not list Pi models/);
+    rmSync(join(home, "fail"));
+    assert.deepEqual((await request("/models")).data, { models: ["anthropic/claude-sonnet-4-5", "openai-codex/gpt-5.5"] });
+    assert.deepEqual((await request("/models")).data.models.length, 2);
+    assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), ["--list-models", "--list-models"], "successful lists are cached");
+
+    for (const agentModels of [{ work: { model: "--help", thinking: "" } }, { work: { model: "a b" } }, { review: { thinking: "huge" } }, { deploy: {} }, "anthropic/x"])
+      assert.equal((await request("/settings", "PATCH", { agentModels })).status, 400, JSON.stringify(agentModels));
+    const global = { work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, conflict: { model: "", thinking: "" }, review: { model: "", thinking: "high" } };
+    assert.deepEqual((await request("/settings", "PATCH", { agentModels: global })).data.agentModels, global);
+    const board = (await request("/boards", "POST", { repo })).data;
+    assert.deepEqual(board.agentModels, emptyAgentModels());
+    assert.equal((await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: {}, autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { conflict: { model: "-x" } } })).status, 400);
+    const updated = await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { conflict: { model: " openai-codex/gpt-5.5 ", thinking: "xhigh" } } });
+    assert.equal(updated.status, 200);
+    assert.deepEqual(updated.data.agentModels, { ...emptyAgentModels(), conflict: { model: "openai-codex/gpt-5.5", thinking: "xhigh" } });
+    assert.deepEqual((await request("/boards")).data.find((item: { id: string }) => item.id === board.id).agentModels, updated.data.agentModels);
+    assert.deepEqual((await request("/settings")).data.agentModels, global);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");

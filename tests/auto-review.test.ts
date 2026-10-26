@@ -278,3 +278,23 @@ test("changing the work during verification blocks auto-merge and restarting doe
     reopened.close();
   } finally { item.close(); }
 });
+
+test("the agent reviewer uses the repository's review model before the prompt", async () => {
+  const item = fixture();
+  try {
+    const argsFile = join(item.dir, "args.txt");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Check manually"}')}EVENTS\n`);
+    item.board.updateSettings({ agentModels: { work: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, conflict: { model: "", thinking: "" }, review: { model: "anthropic/claude-haiku-4-5", thinking: "low" } } });
+    item.board.setAgentModels(item.repoBoard.id, { review: { model: "openai-codex/gpt-5.5" } });
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const { run } = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getAutoReviewJob(run.id)?.state, "needs_human");
+    const args = readFileSync(argsFile, "utf8").split("\n");
+    const separator = args.indexOf("--");
+    assert.deepEqual(args.slice(separator - 4, separator), ["--model", "openai-codex/gpt-5.5", "--thinking", "low"]);
+    assert.ok(args.includes("--no-tools"));
+    assert.match(args[separator + 1], /independent reviewer/);
+  } finally { item.close(); }
+});

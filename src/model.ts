@@ -1,3 +1,4 @@
+import type { AgentModels } from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
 
 export type Status =
@@ -26,6 +27,7 @@ export type Board = {
   autoPickupNextAt: string | null;
   autoPickupEnabledAt: string | null;
   autoPickupError: string;
+  agentModels?: AgentModels;
   cardCounts?: Partial<Record<Status, number>>;
 };
 export type AutoReviewJob = {
@@ -43,6 +45,7 @@ export type BakerySettings = {
   notifyOnReview: boolean;
   cardDetailsLayout: "dialog" | "side";
   theme: "default" | "compline" | "light";
+  agentModels?: AgentModels;
 };
 export type ReviewComment = {
   id: string;

@@ -251,3 +251,34 @@ test("draining refuses new runs and resolves only after active Pi runs finish on
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("card runs and conflict repairs pass their resolved Pi model and thinking level before the prompt", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), argsFile = join(dir, "args.txt");
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+    const card = board.createCard({ title: "Models", body: "", repo });
+    board.setStatus(card.id, "ready");
+    const args = () => readFileSync(argsFile, "utf8").split("\n").slice(0, -1);
+    const unset = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(unset.id)?.status === "review");
+    assert.deepEqual(args().slice(0, 5), ["--mode", "json", "--session-id", unset.sessionId, "--"]);
+    board.updateSettings({ agentModels: { work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, conflict: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, review: { model: "", thinking: "" } } });
+    board.setAgentModels(board.listBoards()[0].id, { conflict: { model: "openai-codex/gpt-5.5", thinking: "xhigh" } });
+    const work = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(work.id)?.status === "review");
+    assert.deepEqual(args().slice(0, 9), ["--mode", "json", "--session-id", work.sessionId, "--model", "anthropic/claude-sonnet-4-5", "--thinking", "medium", "--"]);
+    board.recordMergeFailure(card.id, ["README.md"], "conflict");
+    const conflict = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(conflict.id)?.status === "review");
+    assert.deepEqual(args().slice(0, 9), ["--mode", "json", "--session-id", conflict.sessionId, "--model", "openai-codex/gpt-5.5", "--thinking", "xhigh", "--"]);
+    assert.match(args().slice(9).join("\n"), /merge-conflict repair attempt/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

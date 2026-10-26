@@ -1,19 +1,20 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { addAgent } from "./agent.js";
+import { parseAgentModels, resolveAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string };
-export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light" };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels };
+export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light"; agentModels: AgentModels };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string };
 const toRepoBoard = (row: BoardRow, starts: string[]): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
   autoReviewEnabledAt: row.autoReviewEnabledAt, pickupConcurrency: row.pickupConcurrency,
   pickupDailyLimit: row.pickupDailyLimit, autoPickupEnabledAt: row.autoPickupEnabledAt, autoPickupError: row.autoPickupError,
   autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
-  autoPickupStarts: starts.length,
+  autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels),
   autoPickupNextAt: starts.length >= row.pickupDailyLimit
     ? new Date(Date.parse(starts[starts.length - row.pickupDailyLimit]) + 86_400_000).toISOString() : null,
 });
@@ -23,7 +24,7 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string };
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels";
 const now = () => new Date().toISOString();
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COUNT(runs.id) AS attempts,
@@ -39,14 +40,14 @@ export class Board {
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'layout-grid', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'layout-grid', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0, agentModels TEXT NOT NULL DEFAULT '{}');
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT);
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
-      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)));
+      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
@@ -60,14 +61,16 @@ export class Board {
       const schema = (this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='settings'").get() as { sql: string }).sql;
       if (!["'default'", "'compline'", "'light'"].every(value => schema.includes(value))) {
         this.db.exec(`BEGIN IMMEDIATE;
-          CREATE TABLE settings_new (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)));
-          INSERT INTO settings_new SELECT id, confirmRunStart, cardDetailsLayout, CASE WHEN theme='dark' THEN 'default' ELSE theme END, ${settingsColumns.has("notifyOnReview") ? "notifyOnReview" : "0"} FROM settings;
+          CREATE TABLE settings_new (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
+          INSERT INTO settings_new SELECT id, confirmRunStart, cardDetailsLayout, CASE WHEN theme='dark' THEN 'default' ELSE theme END, ${settingsColumns.has("notifyOnReview") ? "notifyOnReview" : "0"}, ${settingsColumns.has("agentModels") ? "agentModels" : "'{}'"} FROM settings;
           DROP TABLE settings;
           ALTER TABLE settings_new RENAME TO settings;
           COMMIT;`);
       }
     }
-    if (!(this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).some(column => column.name === "notifyOnReview")) this.db.exec("ALTER TABLE settings ADD COLUMN notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1))");
+    const migratedSettings = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
+    if (!migratedSettings.has("notifyOnReview")) this.db.exec("ALTER TABLE settings ADD COLUMN notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1))");
+    if (!migratedSettings.has("agentModels")) this.db.exec("ALTER TABLE settings ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("icon")) this.db.exec("ALTER TABLE boards ADD COLUMN icon TEXT NOT NULL DEFAULT 'layout-grid'");
@@ -89,6 +92,7 @@ export class Board {
       this.db.prepare("UPDATE boards SET autoPickupResumeOnResolution=1 WHERE autoPickupEnabled=0 AND autoPickupError=?")
         .run("An automatic run failed; inspect it before re-enabling pickup");
     }
+    if (!boardColumns.has("agentModels")) this.db.exec("ALTER TABLE boards ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
 
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
@@ -124,12 +128,13 @@ export class Board {
   }
   close() { this.db.close(); }
   getSettings(): BakerySettings {
-    const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme FROM settings WHERE id=1").get() as { confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"] };
-    return { confirmRunStart: row.confirmRunStart === 1, notifyOnReview: row.notifyOnReview === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme };
+    const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme, agentModels FROM settings WHERE id=1").get() as { confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"]; agentModels: string };
+    return { confirmRunStart: row.confirmRunStart === 1, notifyOnReview: row.notifyOnReview === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme, agentModels: parseAgentModels(row.agentModels) };
   }
   updateSettings(settings: Partial<BakerySettings>): BakerySettings {
     const current = this.getSettings();
-    this.db.prepare("UPDATE settings SET confirmRunStart=?, notifyOnReview=?, cardDetailsLayout=?, theme=? WHERE id=1").run((settings.confirmRunStart ?? current.confirmRunStart) ? 1 : 0, (settings.notifyOnReview ?? current.notifyOnReview) ? 1 : 0, settings.cardDetailsLayout ?? current.cardDetailsLayout, settings.theme ?? current.theme);
+    const agentModels = settings.agentModels ? validateAgentModels(settings.agentModels) : current.agentModels;
+    this.db.prepare("UPDATE settings SET confirmRunStart=?, notifyOnReview=?, cardDetailsLayout=?, theme=?, agentModels=? WHERE id=1").run((settings.confirmRunStart ?? current.confirmRunStart) ? 1 : 0, (settings.notifyOnReview ?? current.notifyOnReview) ? 1 : 0, settings.cardDetailsLayout ?? current.cardDetailsLayout, settings.theme ?? current.theme, JSON.stringify(agentModels));
     return this.getSettings();
   }
   listRepos(): string[] { return this.listBoards().map(board => board.repo); }
@@ -171,6 +176,16 @@ export class Board {
     }
     this.db.prepare("UPDATE boards SET remoteUrl=? WHERE id=?").run(value, id);
     return this.getBoard(id)!;
+  }
+  setAgentModels(id: string, agentModels: unknown): RepoBoard {
+    if (!this.getBoard(id)) throw new Error("Board not found");
+    this.db.prepare("UPDATE boards SET agentModels=? WHERE id=?").run(JSON.stringify(validateAgentModels(agentModels)), id);
+    return this.getBoard(id)!;
+  }
+  /** Repository choice per field, then the global default; empty fields leave Pi's own default. */
+  agentModelFor(repo: string, phase: AgentPhase): AgentModel {
+    const row = this.db.prepare("SELECT agentModels FROM boards WHERE repo=?").get(repo) as { agentModels: string } | undefined;
+    return resolveAgentModel(phase, row && parseAgentModels(row.agentModels), this.getSettings().agentModels);
   }
   setAutoCollapseEmptySwimlanes(id: string, enabled: boolean): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");
