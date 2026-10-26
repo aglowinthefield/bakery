@@ -1,64 +1,240 @@
 # Bakery
 
-A local board per Git repository for Pi work. Boards and manual cards are stored in SQLite. Starting a card creates a dedicated Git worktree and runs Pi there. A successful Pi settlement moves the card to Review, not Done. Approving reviewed work commits its changes and merges into the local `main` branch before marking the card Done. Bakery does not push, open PRs, deploy, or write to an issue tracker.
+Bakery is a local kanban board that hands coding tasks to Pi agents, one Git worktree per card. Nothing reaches your `main` branch until you approve it.
 
-## Run
+Bakery never pushes, opens PRs, deploys, or writes to an issue tracker.
 
-Requires Node 24, Git, and `pi` on your PATH with a configured provider. From this directory:
+```mermaid
+flowchart LR
+  you([You]) -->|browser| ui[Board UI]
+  you -->|terminal| cli[bakery-cli]
+  ui --> server
+  cli --> server
+  server[Bakery server<br/>127.0.0.1:4317] --> db[(SQLite)]
+  server -->|one per card| wt[Git worktree<br/>branch bakery/CARD_ID]
+  server -->|spawns| pi[pi agent]
+  pi -->|edits| wt
+  wt -->|Approve and merge| main[local main]
+```
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Card lifecycle](#card-lifecycle)
+- [Reviewing and merging](#reviewing-and-merging)
+- [Watching a run](#watching-a-run)
+- [Automation (opt-in)](#automation-opt-in)
+- [CLI](#cli)
+- [Boards and lanes](#boards-and-lanes)
+- [Server, data, and restarts](#server-data-and-restarts)
+- [Safety](#safety)
+- [Development](#development)
+
+## Quick start
+
+You need Node 24, Git, and `pi` on your `PATH` with a configured provider.
 
 ```sh
 npm install
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. For a single production server, run `npm run build && npm start`, then open http://127.0.0.1:4317.
+Open http://127.0.0.1:5173.
 
-In `npm run dev`, a server code change (including Bakery approving a card into its own checkout) does not interrupt running Pi agents. The server stops starting new runs, waits for active ones to finish, then restarts. New run requests are refused in the meantime, and auto pickup resumes after the restart. Stopping `npm run dev` itself still stops active runs. If the server exits on its own, the dev supervisor restarts it after 1s, backing off to 30s while it keeps failing, or immediately on the next file change.
+To run a single production server instead, run `npm run build && npm start` and open http://127.0.0.1:4317.
 
-For local scripts, use `npm run bakery -- boards` or `npm run bakery -- cards`. Other commands: `create --title "..." --body "..."`, `ready CARD_ID`, `triage CARD_ID`, `start CARD_ID... --yes`, `runs CARD_ID`, `conflicts`, and `pickup [on|off|reset] [--concurrency 2] [--limit 6]`. Add `--board ID|PATH` if you have more than one repository, or `--json` for complete machine-readable API responses. The package also exposes the `bakery-cli` bin when linked (`npm link`). `BAKERY_URL` or `BAKERY_PORT` selects a different local server. The CLI talks to the running server's HTTP API, **not SQLite**, so its changes use the same guards as the UI. `start` runs Pi on one or more Ready, Review or Failed cards with the same checks as the GUI; a retry reuses the card's worktree and Pi session, and `runs` shows each attempt's error. `start`, `ready` on a board with auto pickup, and `pickup on` require `--yes`: each may start paid Pi runs. The CLI does not approve merges.
+Then:
 
-The server binds to loopback. Data and worktrees live under `~/.local/share/bakery/` by default. Override with `BAKERY_DATA_DIR`, `BAKERY_PORT`, or `BAKERY_PI_BIN` for a local test. Do not expose the server on a network: there is no account authentication. The UI is a local operator control surface, not a remote service.
+1. Add a repository by entering its Git root, either an absolute path or a `~/` path. The repository needs at least one commit, because worktrees start from `HEAD`.
+2. Create a card. New cards start in **Triage**.
+3. Move the card to **Ready**, then start it. Starting a run uses paid model tokens.
+4. When Pi finishes, the card moves to **Review**. Read the diff, then **Approve and merge** or **Request changes**.
 
-Add a repository by entering its Git root (an absolute path or `~/` path). Bakery expands `~` using the server user's home directory, stores the canonical root, and displays the resulting absolute path. Each repository gets a separate board; new cards inherit its root. Existing cards are grouped by their stored paths when you upgrade.
+Uncommitted or untracked files in your checkout don't appear in card worktrees.
 
-To repair an incorrect path, edit the board. Bakery moves its cards only if none has an attempt, because attempts keep their worktrees and sessions in the original repository. If a card has an attempt, create a new card on the correct board. To remove a board, open its edit window and use Remove repository. This hides the board without deleting cards, runs, or worktrees; add the same repository again to restore it.
+## Card lifecycle
 
-Lanes without active cards can be collapsed by hand, including Done when it contains completed cards. Each board has an Auto-collapse setting that persists across restarts. Manual expand or collapse choices last until the page reloads or that board's Auto-collapse setting changes; a lane with active cards always stays open.
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Triage
+  Triage --> Ready: approve
+  Ready --> Running: start
+  Running --> Review: Pi finished
+  Running --> Failed: error or stop
+  Running --> Interrupted: server died
+  Interrupted --> Failed: release
+  Failed --> Running: run again
+  Review --> Running: request changes
+  Review --> Done: approve and merge
+  Done --> Archived: archive
+```
 
-A repository needs an initial commit containing the files Pi should work on. Git worktrees start from `HEAD`; uncommitted or untracked files in the original checkout do not appear in the card's worktree. Starting a run does not stage or commit files for you.
+- **A finished run only reaches Review.** Only your approval, or unattended review, moves a card to Done.
+- **Stop** and the 30-minute timeout both end a run as Failed.
+- **Mark done** closes a Triage or Ready card that never ran. An unrun Ready card can also go back to Triage.
+- **Retries reuse the card's worktree and Pi session**, so Pi continues where it left off.
+- **Interrupted** cards can't be retried until you check the worktree and release the card. Bakery first confirms that the recorded PID is no longer running. A PID reused by an unrelated process also blocks release.
+- **Reopen** returns a Done card to Review when its work was left unmerged in the worktree. If the card was already merged, it returns to Ready.
+- **Restore to Done** brings an archived card back. **Archive** only changes the lane. Runs, worktrees, branches, and history stay.
+- Only Done cards can be archived. To archive several at once, use **Select** in the Done lane.
 
-New manual cards enter Triage. Move a card to Ready to approve it for work; existing Ready cards remain Ready on upgrade. You can move an unstarted Ready card back to Triage. Creating a board or card does not start Pi by default. Moving a card to Ready allows opt-in automatic pickup for that repository, or you can start a run explicitly; either can use paid model tokens. Review and Failed cards can also be retried explicitly. In Settings, turn on "Confirm before starting a run" if you want a confirmation dialog. This preference defaults off and persists in Bakery's SQLite database. Settings also lets you choose Popup or Side panel for card details. The side panel is resizable on desktop and full-screen on small screens; Expand review makes either layout full-screen. Read the output and inspect the file-by-file Review diff before using **Approve and merge**. It shows card changes since the branch's shared commit with `main`, including unignored worktree files, without presenting unrelated newer `main` work as deletions. Added lines are green, deleted lines red, and common code formats are syntax-highlighted. Refresh it after editing; approval refuses to proceed if the worktree or `main` changed since that diff loaded. Binary files need inspection in the worktree. To request revisions, select a code line, write a comment, and use **Request changes**. Draft comments do not go to Pi and must be submitted or removed before approval. Requesting changes does not start Pi: click **Run again** when ready to send the feedback in the next attempt. Comments are tied to that review snapshot and kept as history on later diffs, where their old line positions may no longer match. Diffs over 200 files or 2 MB cannot be loaded for approval in Bakery; split or reduce them before retrying. Approval stages all unignored worktree changes, commits them on the card branch, reconciles that branch with the current local `main` in a temporary worktree, checks for Git conflicts and whitespace errors, then fast-forwards `main`. Unrelated local edits on `main` stay in place; Git refuses a merge that would overwrite them. Manual approval does **not** run tests, CI, or push. If approval fails, the card stays in Review and its worktree remains. A merge conflict shows the conflicting files and recovery steps in the card's Review window, with Git output behind a details control. It clears the pending approval. Use **Fix conflict with Pi** to start a new attempt in the card worktree with the conflicting files and current `main` tip in its prompt, or resolve the branch yourself. For this repair, Pi may merge `main` into the card branch and commit the resolution there; it must not change `main`. Review the repaired work before approving again. The action starts Pi and may spend model tokens. The conflict notice survives reloads and failed repair attempts. It hides while Pi works and clears after the run reaches Review, you dismiss it, retry approval, or merge successfully; the card and worktree remain. For other failures that leave a pending approval, use **Withdraw approval** to unlock revision. Withdrawal never removes Git commits or worktrees. If Bakery already moved `main`, it refuses withdrawal and asks you to inspect the result. Only an unrun Triage or Ready card can be closed with **Mark done**. The agent is instructed not to stage, commit, push, or publish during its run, but that instruction is **not a sandbox**: only start agents on repositories you trust.
+## Reviewing and merging
 
-Only one server may own a data directory. If a crash leaves `server.lock` and its recorded PID is no longer running, the next server takes over the lock and logs that it did. A lock held by a running PID, or one without a PID, still blocks startup. After an unexpected server restart, an active card becomes Interrupted and cannot be retried until you inspect its worktree and release it in the GUI. Bakery checks that the recorded PID is not alive before releasing it. This is conservative: an unrelated process that reused the PID also blocks release. Normal Stop ends the child process and marks the attempt Failed. Runs have a 30-minute timeout. Each attempt records the agent (`provider/model`, for example `anthropic/claude-…` or `openai-codex/gpt-…`) that Pi reported for its assistant messages, and an unattended agent review records its reviewer's agent the same way. Board cards show the latest Run and Review agents; the Attempts list, the Agent review panel, and `bakery-cli runs` show them per phase. Runs from before this was recorded show "not recorded". In a card's Attempts list, the latest attempt opens by default; older attempts start closed, and each can be toggled. The clock on each card counts completed Pi turns across attempts and updates on the board's existing poll without extra model calls. Older runs lack stored turn events; Bakery estimates their count from visible transcript markers and marks it with `~` or `?` when no marker remains. These estimates can be inaccurate. Output is a bounded tail of assistant text and per-turn activity summaries (tool counts, reported failures, and changed worktree filenames). Provider request failures appear in the transcript with their HTTP status but not raw provider details. If Pi recovers and finishes, the card proceeds to Review; a final provider failure appears in the run error and leaves the card Failed. Stderr stays in the server console to avoid exposing request data in the board. Bakery derives these from Pi's existing events and Git without extra model calls; it does not store tool arguments or results in the card transcript. Pi's own session holds the full conversation.
+The Review diff shows what the card changed since its branch split from `main`, including unignored files the agent didn't commit. Newer work on `main` doesn't show up as deletions.
 
-To clear finished work off the board, use **Select** in the Done lane, tick cards or **Select all**, then **Archive**. A single Done card also has **Archive** in its details. Archived cards move to the Archive lane, which starts collapsed. Archiving only changes the card's lane: runs, worktrees, branches, and history stay as they are. Only Done cards can be archived, and a batch that includes any other card is rejected without changes. Open an archived card and use **Restore to Done** to bring it back; an archived card cannot be reopened or run until restored.
+To request revisions:
 
-If an older card was marked Done while its reviewed work was left in a worktree, use **Reopen**. Bakery returns it to Review so you can inspect and approve that work without starting Pi again. An already integrated Done card reopens to Ready.
+1. Select a line, write a comment, and add it as a draft.
+2. Click **Request changes** to submit the drafts. This does not start Pi.
+3. Click **Run again** when you're ready. Pi gets your comments in its prompt.
 
-The server's periodic tick also reconciles cards in Review or Failed whose current, clean Bakery worktree branch was explicitly merged into local `main` outside Bakery. It records the merge commit separately from Bakery approvals, clears any stale conflict notice, and marks the card Done. Mere ancestry (an unchanged branch), a merge that leaves the result tree unchanged, a pending Bakery approval, or a dirty worktree does not qualify. This reconciliation does not start Pi, run verification, change Git history, or require auto-review to be enabled; inspect and test external merges yourself before making them.
+Drafts must be submitted or removed before you can approve. Comments stay as history on later diffs, where their line positions may have moved.
 
-## Unattended review (opt-in)
+When you approve:
 
-Select a repository, open Settings, enter its verification command, and explicitly enable auto-review. It is **off by default for every repository**. For Bakery itself, use `npm test && npm run build`. Bakery only considers runs that finish in Review **after** that repository was enabled; existing Review cards never merge just because you turned it on. Ready cards still require a manual start unless you separately enable automatic pickup. The local server must stay running. A separate Pi invocation sees the bounded diff without tools or MCP; it may spend model tokens, but cannot edit files through Pi tools. The verification command runs on the card worktree before review and on the tentative merged checkout before changing `main`. An ambiguous verdict, reviewer finding, failing verification, changed diff, conflict, or restart leaves the card for human review with a visible reason. No failed review is retried automatically. At most **three** auto-merges per repository in any 24 hours; Bakery never pushes. Disabling the setting prevents a reviewer already running from merging. Verification scripts themselves execute locally with your permissions, so only configure commands from repositories you trust.
+```mermaid
+flowchart TD
+  A[Approve and merge] --> B{Worktree or main changed<br/>since the diff loaded?}
+  B -->|yes| R[Refuse: refresh the diff]
+  B -->|no| C[Commit all unignored changes<br/>on the card branch]
+  C --> D[Merge with current main<br/>in a temporary worktree]
+  D --> E{Conflicts or<br/>whitespace errors?}
+  E -->|yes| F[Card stays in Review<br/>and shows the conflicting files]
+  F --> G[Fix conflict with Pi,<br/>or resolve it yourself]
+  G --> A
+  E -->|no| H[Fast-forward main]
+  H --> I[Done]
+```
 
-## Automatic Ready-card pickup (opt-in)
+- Manual approval doesn't run tests or CI, and doesn't push.
+- Your own uncommitted edits on `main` stay in place. Git refuses a merge that would overwrite them.
+- **Fix conflict with Pi** starts a new attempt in the card's worktree. Pi may merge `main` into the card branch and commit there, but must not touch `main`.
+- After a conflict fix, you review the result again before it merges.
+- If approval fails in another way, **Withdraw approval** unlocks the card for revision. It never removes commits or worktrees. If `main` has already moved, Bakery refuses and asks you to inspect.
+- Diffs over 200 files or 2 MB can't be approved in Bakery. Binary files need checking in the worktree.
+- If you merge a card's branch into `main` yourself, Bakery notices on its next tick and marks the card Done. This only applies when the worktree is clean and the merge actually changed `main`.
 
-Settings lets you enable automatic pickup per repository and select 1–4 concurrent runs (default **2**). It is **off by default**. The server starts the oldest Ready cards first, counting manually started runs against the same concurrency limit. A per-repository rolling 24-hour automatic-start limit defaults to **six** and can be set to 1–99 in Settings. Reaching the limit leaves pickup enabled but waiting; the board shows the count, next eligible time, and a confirmed **Reset start limit** action. Resetting starts a new accounting window without deleting run history and may immediately start paid Pi runs. The server pauses pickup on a failed automatic run, an interrupted card, or a startup error; a paused board shows its reason in the UI. A failure pause automatically resumes once every failed automatic card from that enablement is integrated (Done) and no card remains interrupted; explicit disables and other pause reasons still require manual re-enabling. Resuming can immediately start eligible Ready cards within the existing concurrency and rolling start limits. Turning off pickup stops new starts, not already running Pi processes. Restart recovery never starts an interrupted attempt again. The Pi worktree/Review lifecycle is the same as a manually started run; auto-review remains a separate opt-in. Enabling pickup can immediately start paid Pi runs. The local server must stay running, and these limits are run counts, **not** token or cost budgets.
+## Watching a run
 
-## Verification
+Each attempt in a card's **Attempts** list shows:
+
+- The agent that ran it as `provider/model`, for example `anthropic/claude-…` or `openai-codex/gpt-…`. The board card shows the latest run and review agents.
+- A transcript: assistant text, plus one line per turn with tool counts, failures, and changed files. Tool arguments and results aren't stored. Pi's own session has the full conversation.
+- The worktree path, with **Copy path**. Failed attempts have **Copy error** instead, which copies a prompt you can paste into an agent: card, repo, worktree, error, and the end of the output.
+
+The clock on a card counts completed Pi turns across attempts. Older runs show an estimate marked with `~` or `?`.
+
+Provider errors show only their HTTP status. Pi's stderr goes to the server console, not the board, because it can contain request details.
+
+## Automation (opt-in)
+
+Both features are off by default and set per repository in **Settings**. Both can start paid Pi runs, and both need the server to keep running. Their limits count runs, not tokens or cost.
+
+### Automatic pickup
+
+The server starts the oldest Ready cards for you.
+
+- **Concurrency:** 1 to 4 runs at once (default 2). Manually started runs count toward it.
+- **Daily limit:** 1 to 99 automatic starts in any rolling 24 hours (default 6). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
+- **Pauses:** pickup pauses on a failed automatic run, an interrupted card, or a startup error, and the board shows why. After a failure, pickup resumes on its own once every failed automatic card is merged and nothing is interrupted. Other pauses need you to turn it back on.
+- Turning pickup off stops new starts. Runs already in progress keep going.
+
+### Unattended review
+
+Bakery reviews and merges finished cards without you.
+
+```mermaid
+flowchart LR
+  A[Run reaches Review] --> B[Verification command<br/>on the card worktree]
+  B --> C[Separate Pi reviewer<br/>reads the diff, no tools]
+  C --> D[Verification command<br/>on the tentative merge]
+  D --> E[Fast-forward main]
+  B -. fails .-> H[Left for human review,<br/>with the reason]
+  C -. finding or unclear verdict .-> H
+  D -. fails or conflicts .-> H
+```
+
+- Enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
+- Bakery only considers runs that reach Review after you enable it. Cards already in Review don't merge.
+- At most 3 automatic merges per repository in any 24 hours. Failed reviews aren't retried.
+- Turning the setting off stops a review in progress from merging.
+- The verification command runs locally with your permissions.
+
+## CLI
+
+The CLI talks to the running server's HTTP API, so it goes through the same checks as the UI.
+
+```sh
+npm run bakery -- boards
+npm run bakery -- cards
+npm run bakery -- create --title "..." --body "..."
+npm run bakery -- ready CARD_ID [--yes]
+npm run bakery -- triage CARD_ID
+npm run bakery -- start CARD_ID... --yes
+npm run bakery -- runs CARD_ID
+npm run bakery -- conflicts
+npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--yes]
+```
+
+- Add `--board ID|PATH` if you have more than one board, and `--json` for full API responses.
+- Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
+- `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them.
+- The CLI can't approve merges.
+- To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get a `bakery-cli` command on your `PATH`, run `npm link`.
+
+## Boards and lanes
+
+- Bakery expands `~`, stores the canonical Git root, and shows the absolute path.
+- To fix a board's path, edit the board. Its cards move only if none has run yet, because attempts keep their worktrees in the original repository.
+- **Remove repository** hides a board without deleting anything. Add the same repository again to restore it.
+- Lanes without active cards can be collapsed. A board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
+- In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
+
+## Server, data, and restarts
+
+- The server listens only on `127.0.0.1` and has no authentication. Don't expose it on a network.
+- Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, and `BAKERY_PI_BIN` to use a different `pi` binary.
+- Only one server can own a data directory, which it locks with `server.lock`. If the PID in the lock is no longer running, the next server takes over the lock.
+- **Stop** ends a run and marks it Failed. Runs time out after 30 minutes.
+
+In `npm run dev`, code changes don't kill running agents. This matters because approving a Bakery card changes Bakery's own server code:
+
+```mermaid
+sequenceDiagram
+  participant S as dev supervisor
+  participant B as Bakery server
+  participant P as running Pi agents
+  Note over S: server file changes,<br/>for example after a merge
+  S->>B: drain
+  B->>B: refuse new runs, pause pickup
+  P-->>B: finish on their own
+  B->>S: drained
+  S->>B: restart with the new code
+```
+
+If the server crashes, the supervisor restarts it after 1 second, backing off to 30 seconds while it keeps failing. A file change restarts it immediately. Stopping `npm run dev` stops running agents.
+
+## Safety
+
+- Pi is told not to commit, push, or publish during a run. **That instruction isn't a sandbox.** Only run agents on repositories you trust.
+- Verification commands for unattended review run with your permissions.
+- Every run, retry, pickup, and review can spend model tokens. Bakery doesn't track tokens or cost.
+
+## Development
 
 ```sh
 npm test
-npm run build
-npm run format:check
+npm run build          # runs format:check, tsc, and vite build
+npm run format         # fixes formatting in the covered frontend files
 ```
 
-`npm run build` runs the formatter check before TypeScript and Vite. `npm run format` fixes the board, card details, review, and attempts modules. The check covers those frontend modules as they are split out; it does not yet cover every server or test file. Consistent formatting reduces broad same-line edits, but cannot prevent two branches from editing the same import.
+The formatter check covers the board, card details, review, attempts, API, and model modules. It doesn't cover server or test files yet.
 
-Tests launch a fake offline Pi command and exercise local Git integration in temporary repositories. They do not call a model, test live provider auth, or run tests in repositories you add to Bakery. Manual approval is your verification decision; it does not run checks. Unattended review uses the configured repository command before and after its tentative merge. External CI and token/cost budgets are not implemented.
+Tests use a fake offline `pi` and temporary Git repositories. They don't call a model or touch repositories you've added to Bakery.
 
-## Next slices
+### Next
 
-- Read-only Linear source adapter, keyed by Linear issue ID, with manual import into the same local card model. No Linear writes.
-- Better interrupted-process identity checks beyond PID liveness.
-- External CI before approval, token/cost budgets, and automatic card creation; pickup and review remain separate per-repository opt-ins.
+- Read-only Linear import into local cards, keyed by issue ID. Bakery won't write to Linear.
+- Better process identity checks for interrupted runs, beyond PID liveness.
+- External CI before approval, token and cost budgets, and automatic card creation.
