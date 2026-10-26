@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-test("sidebar shows an icon and card count for every status", async () => {
+test("selected repo in the sidebar shows an icon and card count for every status", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
   await server.listen();
   const browser = await chromium.launch();
@@ -24,8 +24,12 @@ test("sidebar shows an icon and card count for every status", async () => {
       await route.fulfill({ json: data[path] });
     });
     await page.goto(server.resolvedUrls!.local[0]);
-    const nav = page.getByRole("navigation", { name: "Card counts" });
+    const nav = page.getByRole("list", { name: "Card counts" });
     await nav.locator('[data-status="done"]').getByText("3", { exact: true }).waitFor();
+    const repoButton = page.getByRole("button", { name: "repo", exact: true });
+    const [repoBox, navBox] = [await repoButton.boundingBox(), await nav.boundingBox()];
+    assert.ok(repoBox && navBox && navBox.y >= repoBox.y + repoBox.height - 1, "counts sit below the repo name");
+    assert.ok(await repoButton.locator("xpath=../..").locator('[aria-label="Card counts"]').count() === 1, "counts live in the repo's selection area");
     const expected: Record<string, number> = { triage: 0, ready: 2, running: 0, review: 1, failed: 0, interrupted: 0, done: 3, archived: 0 };
     for (const [status, count] of Object.entries(expected)) {
       const row = nav.locator(`[data-status="${status}"]`);

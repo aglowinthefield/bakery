@@ -535,36 +535,69 @@ function App() {
           {boards.map((item) => (
             <div
               key={item.id}
-              className={`flex items-center rounded-lg ${boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
+              className={`rounded-lg ${boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
             >
-              <button
-                onClick={() => {
-                  setBoardId(item.id);
-                  localStorage.setItem("bakery-board", item.id);
-                  setSelected(null);
-                  setCards([]);
-                  setMergeConflicts([]);
-                }}
-                className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
-                title={item.repo}
-              >
-                <RepoBadge board={item} />
-                <span className="truncate">{item.repo.split("/").at(-1)}</span>
-              </button>
-              <button
-                aria-label={`Edit ${item.repo}`}
-                title="Edit repository"
-                className="mr-2 p-1 text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  setError("");
-                  setRepoPath(item.repo);
-                  setIconDraft(item.icon);
-                  setColorDraft(item.color);
-                  setEditingBoard(item);
-                }}
-              >
-                <Pencil size={13} />
-              </button>
+              <div className="flex items-center">
+                <button
+                  onClick={() => {
+                    setBoardId(item.id);
+                    localStorage.setItem("bakery-board", item.id);
+                    setSelected(null);
+                    setCards([]);
+                    setMergeConflicts([]);
+                  }}
+                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
+                  title={item.repo}
+                >
+                  <RepoBadge board={item} />
+                  <span className="truncate">
+                    {item.repo.split("/").at(-1)}
+                  </span>
+                </button>
+                <button
+                  aria-label={`Edit ${item.repo}`}
+                  title="Edit repository"
+                  className="mr-2 p-1 text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    setError("");
+                    setRepoPath(item.repo);
+                    setIconDraft(item.icon);
+                    setColorDraft(item.color);
+                    setEditingBoard(item);
+                  }}
+                >
+                  <Pencil size={13} />
+                </button>
+              </div>
+              {boardId === item.id && (
+                <ul
+                  aria-label="Card counts"
+                  className="grid grid-cols-4 gap-x-1 gap-y-0.5 px-3 pb-2"
+                >
+                  {columns.map((column) => {
+                    const Icon = column.icon;
+                    const count = cards.filter(
+                      (c) => c.status === column.id,
+                    ).length;
+                    return (
+                      <li
+                        key={column.id}
+                        data-status={column.id}
+                        title={`${count} ${column.label.toLowerCase()}`}
+                        aria-label={`${column.label}: ${count}`}
+                        className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
+                      >
+                        <Icon
+                          size={12}
+                          aria-hidden="true"
+                          className="lane-status-icon shrink-0"
+                        />
+                        <span className="font-mono">{count}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           ))}
           <Button
@@ -589,39 +622,6 @@ function App() {
             <Settings2 size={15} /> Settings
           </Button>
         </div>
-        {currentBoard && (
-          <nav aria-label="Card counts" className="px-4 pt-6">
-            <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground">
-              Cards
-            </div>
-            <ul className="grid grid-cols-2 gap-1 lg:grid-cols-1">
-              {columns.map((column) => {
-                const Icon = column.icon;
-                const count = cards.filter(
-                  (c) => c.status === column.id,
-                ).length;
-                return (
-                  <li
-                    key={column.id}
-                    data-status={column.id}
-                    title={`${count} ${column.label.toLowerCase()}`}
-                    className={`flex items-center gap-2.5 rounded-md px-3 py-1 text-sm ${count ? "" : "opacity-50"}`}
-                  >
-                    <Icon
-                      size={14}
-                      aria-hidden="true"
-                      className="lane-status-icon shrink-0"
-                    />
-                    <span className="truncate text-muted-foreground">
-                      {column.label}
-                    </span>
-                    <span className="ml-auto font-mono text-xs">{count}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </nav>
-        )}
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="size-1.5 rounded-full bg-status-review" /> Local
