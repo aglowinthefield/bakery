@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, extname, isAbsolute, resolve } from "node:path";
@@ -75,6 +75,29 @@ const server = createServer(async (req, res) => {
         cardDetailsLayout: "cardDetailsLayout" in input ? input.cardDetailsLayout as "dialog" | "side" : undefined,
         theme: "theme" in input ? input.theme as "default" | "compline" | "light" : undefined,
       })); return;
+    }
+    if (path === "/api/path-suggestions" && req.method === "GET") {
+      const input = new URL(req.url ?? "/", "http://localhost").searchParams.get("path") ?? "";
+      if (input.length > 1024) throw new Error("Path is too long");
+      if (!input.startsWith("/") && !input.startsWith("~/")) { send(res, 200, []); return; }
+      const slash = input.lastIndexOf("/");
+      const parent = input.slice(0, slash + 1);
+      const prefix = input.slice(slash + 1);
+      const directory = parent.startsWith("~/") ? join(homedir(), parent.slice(2)) : parent;
+      let suggestions: string[] = [];
+      try {
+        suggestions = readdirSync(directory, { withFileTypes: true })
+          .filter(entry => {
+            if (!entry.name.startsWith(prefix) || (!prefix.startsWith(".") && entry.name.startsWith("."))) return false;
+            if (entry.isDirectory()) return true;
+            try { return entry.isSymbolicLink() && statSync(join(directory, entry.name)).isDirectory(); }
+            catch { return false; }
+          })
+          .map(entry => parent + entry.name + "/")
+          .sort((a, b) => a.localeCompare(b))
+          .slice(0, 20);
+      } catch { /* Missing or unreadable directories have no suggestions. */ }
+      send(res, 200, suggestions); return;
     }
     if (path === "/api/boards" && req.method === "GET") { send(res, 200, board.listBoards()); return; }
     if (path === "/api/boards" && req.method === "POST") {

@@ -26,6 +26,7 @@ test("repository icon and color picker updates navigation and heading after save
     });
     const badges = page.locator("aside button[title='/tmp/example'] svg, header h1 svg");
     await page.goto(server.resolvedUrls!.local[0]);
+    await badges.first().waitFor();
     assert.equal(await badges.count(), 2);
     const initial = await badges.first().evaluate(el => el.innerHTML);
     await page.getByRole("button", { name: "Edit /tmp/example" }).click();
@@ -39,13 +40,14 @@ test("repository icon and color picker updates navigation and heading after save
     assert.notEqual(await badges.first().evaluate(el => el.innerHTML), initial);
     assert.equal(await badges.first().evaluate(el => getComputedStyle(el.parentElement!).color), "rgb(251, 113, 133)");
     await page.reload();
+    await badges.first().waitFor();
     assert.equal(await badges.count(), 2);
     assert.equal(await badges.last().evaluate(el => getComputedStyle(el.parentElement!).color), "rgb(251, 113, 133)");
     assert.notEqual(await badges.last().evaluate(el => el.innerHTML), initial);
     await page.getByRole("button", { name: "Edit /tmp/example" }).click();
     await page.getByRole("button", { name: "Icon: ghost" }).click();
     await page.getByRole("button", { name: "Color: amber" }).click();
-    await page.getByRole("textbox", { name: "Repository root" }).fill("/tmp/renamed");
+    await page.getByRole("combobox", { name: "Repository root" }).fill("/tmp/renamed");
     await page.getByRole("button", { name: "Save repository" }).click();
     await page.waitForFunction(() => document.querySelector("header h1")?.textContent?.includes("renamed"));
     assert.deepEqual([board.repo, board.icon, board.color], ["/tmp/renamed", "ghost", "amber"]);

@@ -182,9 +182,6 @@ export function CardDetails({
     >
       <DialogContent
         showOverlay={!side || expandedDetails || smallScreen}
-        onInteractOutside={(event) => {
-          if (side && !expandedDetails && !smallScreen) event.preventDefault();
-        }}
         overlayClassName={side ? "bg-black/25 backdrop-blur-none" : undefined}
         style={
           side && !expandedDetails
@@ -393,6 +390,10 @@ export function CardDetails({
                 !settings ||
                 (card.status === "review" &&
                   (approvalPending ||
+                    autoJobs.some(
+                      (item) =>
+                        item.cardId === card.id && item.state === "running",
+                    ) ||
                     currentComments.some(
                       (item) =>
                         item.runId === runs[0]?.id && item.state === "draft",

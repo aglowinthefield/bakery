@@ -68,6 +68,21 @@ test("new opt-in reviews run a separate tool-free reviewer and verify before loc
   } finally { item.close(); }
 });
 
+test("a run cannot be claimed while agent review is active, but can start after it finishes", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    item.board.beginAutoReview(current.card.id, current.run.id);
+    assert.throws(() => item.board.claim(current.card.id), /Agent review is in progress/);
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    assert.equal(item.board.listRuns(current.card.id).length, 1);
+    item.board.finishAutoReview(current.run.id, "needs_human", "Needs human review");
+    assert.equal(item.board.claim(current.card.id).attempt, 2);
+  } finally { item.close(); }
+});
+
 test("card text edits during review leave the candidate for a human", async () => {
   const item = fixture();
   try {
