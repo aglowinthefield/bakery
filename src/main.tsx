@@ -33,46 +33,14 @@ import type {
   Status,
 } from "./model.js";
 
-const columns: {
-  id: Status;
-  label: string;
-  description: string;
-}[] = [
-  {
-    id: "triage",
-    label: "Triage",
-    description: "Awaiting approval for work",
-  },
-  {
-    id: "ready",
-    label: "Ready",
-    description: "Can start a Pi run",
-  },
-  {
-    id: "running",
-    label: "Running",
-    description: "Pi is working",
-  },
-  {
-    id: "review",
-    label: "Review",
-    description: "Inspect, then approve and merge",
-  },
-  {
-    id: "failed",
-    label: "Failed",
-    description: "Needs another attempt",
-  },
-  {
-    id: "interrupted",
-    label: "Interrupted",
-    description: "Inspect the process",
-  },
-  {
-    id: "done",
-    label: "Done",
-    description: "Merged or closed without a run",
-  },
+const columns: { id: Status; label: string }[] = [
+  { id: "triage", label: "Triage" },
+  { id: "ready", label: "Ready" },
+  { id: "running", label: "Running" },
+  { id: "review", label: "Review" },
+  { id: "failed", label: "Failed" },
+  { id: "interrupted", label: "Interrupted" },
+  { id: "done", label: "Done" },
 ];
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
@@ -548,9 +516,6 @@ function App() {
                             <ChevronDown size={16} />
                           </button>
                         )}
-                      </div>
-                      <div className="mb-2 px-1 text-[11px] leading-[14px] text-muted-foreground">
-                        {column.description}
                       </div>
                       <div className="space-y-3">
                         {laneCards.map((item) => (
