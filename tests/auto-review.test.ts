@@ -11,7 +11,7 @@ import { AutoReview, reviewerVerdict } from "../server/auto-review.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 const settle = (verdict: string) => [
-  JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: verdict }] } }),
+  JSON.stringify({ type: "message_end", message: { role: "assistant", provider: "openai-codex", model: "gpt-5.5", stopReason: "end_turn", content: [{ type: "text", text: verdict }] } }),
   JSON.stringify({ type: "agent_settled", aborted: false }), "",
 ].join("\n");
 function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and correct"}') {
@@ -61,6 +61,8 @@ test("new opt-in reviews run a separate tool-free reviewer and verify before loc
     await item.auto.tick();
     assert.equal(item.board.getCard(current.card.id)?.status, "done");
     assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "merged");
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.agent, "openai-codex/gpt-5.5");
+    assert.equal(item.board.getCard(current.card.id)?.reviewAgent, "openai-codex/gpt-5.5");
     assert.equal(item.board.autoReviewMergesToday(item.repo), 1);
     assert.match(readFileSync(join(item.repo, "README.md"), "utf8"), new RegExp(current.card.id));
     assert.equal(item.board.getCard(old.card.id)?.status, "review");
