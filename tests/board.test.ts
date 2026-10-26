@@ -41,19 +41,19 @@ test("existing Ready cards stay Ready when the database opens", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("run confirmation preference defaults off and persists across restarts", () => {
+test("settings default to notifications off and persist across restarts", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
-    assert.deepEqual(first.getSettings(), { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" });
-    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true, cardDetailsLayout: "dialog", theme: "default" });
-    assert.deepEqual(first.updateSettings({ cardDetailsLayout: "side" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "default" });
-    assert.deepEqual(first.updateSettings({ theme: "compline" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "compline" });
+    assert.deepEqual(first.getSettings(), { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" });
+    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" });
+    assert.deepEqual(first.updateSettings({ cardDetailsLayout: "side" }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default" });
+    assert.deepEqual(first.updateSettings({ theme: "compline", notifyOnReview: true }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline" });
     first.close();
     const second = new Board(path);
-    assert.deepEqual(second.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "compline" });
-    assert.deepEqual(second.updateSettings({ theme: "light" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "light" });
-    assert.deepEqual(second.updateSettings({ theme: "default" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "default" });
+    assert.deepEqual(second.getSettings(), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline" });
+    assert.deepEqual(second.updateSettings({ theme: "light" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light" });
+    assert.deepEqual(second.updateSettings({ theme: "default" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default" });
     second.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -67,7 +67,7 @@ test("existing settings databases gain the Default theme without losing preferen
     legacy.exec("INSERT INTO settings VALUES (1, 1, 'side')");
     legacy.close();
     const board = new Board(path);
-    assert.deepEqual(board.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "default" });
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default" });
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -80,8 +80,8 @@ test("a Compline database can save Light without losing its preferences", () => 
     old.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL, cardDetailsLayout TEXT NOT NULL, theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline'))); INSERT INTO settings VALUES (1, 1, 'side', 'compline')");
     old.close();
     const board = new Board(path);
-    assert.deepEqual(board.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "compline" });
-    assert.deepEqual(board.updateSettings({ theme: "light" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "light" });
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "compline" });
+    assert.deepEqual(board.updateSettings({ theme: "light" }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "light" });
     board.close();
     const reopened = new Board(path);
     assert.equal(reopened.getSettings().theme, "light");
@@ -97,7 +97,7 @@ test("an older Dark preference maps to the unchanged Default palette", () => {
     old.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL, cardDetailsLayout TEXT NOT NULL, theme TEXT NOT NULL DEFAULT 'dark' CHECK(theme IN ('dark', 'light'))); INSERT INTO settings VALUES (1, 1, 'side', 'dark')");
     old.close();
     const board = new Board(path);
-    assert.deepEqual(board.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "default" });
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default" });
     assert.equal(board.updateSettings({ theme: "compline" }).theme, "compline");
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }

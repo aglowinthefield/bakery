@@ -1,4 +1,10 @@
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowUpRight,
@@ -255,6 +261,7 @@ function App() {
   const [iconDraft, setIconDraft] = useState<RepoIcon>("layout-grid");
   const [colorDraft, setColorDraft] = useState<RepoColor>("violet");
   const [cards, setCards] = useState<Card[]>([]);
+  const seenStatuses = useRef(new Map<string, Map<string, Status>>());
   const [selected, setSelected] = useState<string | null>(null);
   const [verificationDraft, setVerificationDraft] = useState("");
   const [creating, setCreating] = useState(false);
@@ -299,6 +306,43 @@ function App() {
           api<Board[]>("/boards"),
         ]);
         if (!current) return;
+        const previous = seenStatuses.current.get(boardId);
+        if (
+          previous &&
+          settings?.notifyOnReview &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
+          for (const card of next) {
+            if (
+              card.status !== "review" ||
+              !previous.has(card.id) ||
+              previous.get(card.id) === "review"
+            )
+              continue;
+            try {
+              const notice = new Notification("Card ready for review", {
+                body: card.title,
+                tag: `review-${card.id}`,
+              });
+              notice.onclick = () => {
+                window.focus();
+                setBoardId(boardId);
+                localStorage.setItem("bakery-board", boardId);
+                setSelected(card.id);
+                notice.close();
+              };
+            } catch {
+              setError(
+                "The browser could not show a Review notification. Check its notification settings.",
+              );
+            }
+          }
+        }
+        seenStatuses.current.set(
+          boardId,
+          new Map(next.map((card) => [card.id, card.status])),
+        );
         setCards(next);
         setMergeConflicts(conflicts);
         setBoards(nextBoards);
@@ -313,7 +357,7 @@ function App() {
       current = false;
       clearTimeout(timer);
     };
-  }, [boardId, refreshKey]);
+  }, [boardId, refreshKey, settings?.notifyOnReview]);
   const currentBoard = boards.find((item) => item.id === boardId);
   const card = cards.find((item) => item.id === selected);
   const saveSettings = (patch: Partial<BakerySettings>) => {
@@ -810,6 +854,41 @@ function App() {
               <span className="mt-1 block text-xs text-muted-foreground">
                 When off, Start Pi run launches immediately and may use paid
                 model tokens.
+              </span>
+            </span>
+          </label>
+          <label className="mt-6 flex items-start gap-3 border-t border-border pt-5 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1 accent-primary"
+              checked={settings?.notifyOnReview ?? false}
+              disabled={!settings || busy || !("Notification" in window)}
+              onChange={async (event) => {
+                if (!event.target.checked) {
+                  saveSettings({ notifyOnReview: false });
+                  return;
+                }
+                try {
+                  const permission = await Notification.requestPermission();
+                  if (permission === "granted")
+                    saveSettings({ notifyOnReview: true });
+                  else
+                    setError(
+                      "Browser notification permission was not granted. Allow notifications for Bakery in your browser to enable them.",
+                    );
+                } catch {
+                  setError(
+                    "The browser could not request notification permission.",
+                  );
+                }
+              }}
+            />
+            <span>
+              Notify when a card enters Review
+              <span className="mt-1 block text-xs text-muted-foreground">
+                Browser notifications appear while this board page is open. Your
+                browser must allow notifications. Cards already in Review when
+                you open the page do not trigger one.
               </span>
             </span>
           </label>
