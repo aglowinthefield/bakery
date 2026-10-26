@@ -20,6 +20,8 @@ test("repository icon and color picker updates navigation and heading after save
         board = { ...board, ...route.request().postDataJSON() };
         await route.fulfill({ json: board });
       } else if (path === "/api/boards") await route.fulfill({ json: [board] });
+      else if (path === "/api/repository-root") await route.fulfill({ json: { root: new URL(route.request().url()).searchParams.get("path") } });
+      else if (path === "/api/path-suggestions") await route.fulfill({ json: [] });
       else if (path === "/api/settings") await route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
       else if (path.endsWith("/cards") || path.endsWith("/conflicts")) await route.fulfill({ json: [] });
       else throw new Error(`Unexpected API request: ${path}`);

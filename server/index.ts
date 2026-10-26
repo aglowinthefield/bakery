@@ -101,6 +101,9 @@ const server = createServer(async (req, res) => {
       } catch { /* Missing or unreadable directories have no suggestions. */ }
       send(res, 200, suggestions); return;
     }
+    if (path === "/api/repository-root" && req.method === "GET") {
+      send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
+    }
     if (path === "/api/boards" && req.method === "GET") { send(res, 200, board.listBoards()); return; }
     if (path === "/api/boards" && req.method === "POST") {
       const root = repoRoot((await body(req)).repo);
