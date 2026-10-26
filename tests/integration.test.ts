@@ -11,7 +11,7 @@ import { Integration, IntegrationConflictError } from "../server/integration.js"
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 }
-function fixture() {
+function fixture(title = "Review work") {
   const dir = mkdtempSync(join(tmpdir(), "bakery-integrate-"));
   const repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
@@ -20,7 +20,7 @@ function fixture() {
   git(repo, "add", "README.md");
   git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
   const board = new Board(join(dir, "board.sqlite"));
-  const card = board.createCard({ title: "Review work", body: "", repo });
+  const card = board.createCard({ title, body: "", repo });
   board.setStatus(card.id, "ready");
   const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
   git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
@@ -53,6 +53,21 @@ test("approval commits reviewed work, reconciles with newer main, and only then 
     assert.equal(git(item.worktree, "status", "--porcelain"), "");
     assert.deepEqual(item.board.listMergeFailures(item.repo), []);
     assert.equal(item.board.setStatus(item.card.id, "ready").status, "ready");
+    assert.equal(git(item.repo, "log", "-1", "--format=%s"), "Merge card: Review work");
+    assert.equal(git(item.repo, "log", "-1", "--format=%b"), `Card: ${item.card.id}\nBranch: bakery/${item.card.id}`);
+  } finally { item.close(); }
+});
+
+test("merge commit subject truncates long titles and keeps shell text literal", () => {
+  const title = "Fix `rm -rf $HOME` && \"quotes\"; $(whoami)\n" + "x".repeat(100);
+  const item = fixture(title);
+  try {
+    writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
+    assert.equal(item.approve(item.card).status, "done");
+    const subject = git(item.repo, "log", "-1", "--format=%s");
+    assert.equal([...subject].length, 72);
+    assert.ok(subject.startsWith("Merge card: Fix `rm -rf $HOME` && \"quotes\"; $(whoami) xxx"));
+    assert.ok(subject.endsWith("x…"));
   } finally { item.close(); }
 });
 

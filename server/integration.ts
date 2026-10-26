@@ -35,6 +35,15 @@ function isAncestor(repo: string, ancestor: string, descendant: string) {
   }
 }
 
+// The title is user text. It reaches Git only as an argv entry, never through a shell.
+export function mergeMessage(card: Pick<Card, "id" | "title">): string[] {
+  const prefix = "Merge card: ", limit = 72 - prefix.length;
+  const title = card.title.replace(/\s+/g, " ").trim() || "(untitled)";
+  const chars = [...title];
+  const subject = prefix + (chars.length > limit ? chars.slice(0, limit - 1).join("").trimEnd() + "…" : title);
+  return ["-m", subject, "-m", `Card: ${card.id}\nBranch: bakery/${card.id}`];
+}
+
 export class Integration {
   private reconciliationErrors = new Set<string>();
   constructor(private board: Board, private dataDir: string) {}
@@ -158,7 +167,7 @@ export class Integration {
     try {
       git(repo, "worktree", "add", "--detach", scratch, base);
       try {
-        git(scratch, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-ff", "--no-edit", approved.candidate);
+        git(scratch, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-ff", "--no-edit", ...mergeMessage(card), approved.candidate);
       } catch (error) {
         // No integration was published. Read the scratch index before removing it so the UI can name the conflicts.
         let files: string[] = [];
