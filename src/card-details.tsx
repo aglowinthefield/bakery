@@ -693,7 +693,7 @@ export function CardDetails({
             }
           />
         )}
-        {runs.length > 0 && <AttemptList key={card?.id} runs={runs} />}
+        {runs.length > 0 && <AttemptList key={card?.id} runs={runs} card={card} />}
       </DialogContent>
     </Dialog>
   );
