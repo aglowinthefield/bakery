@@ -833,7 +833,7 @@ function App() {
                 }}
                 className="rounded-md border border-border bg-background px-2 py-1"
               >
-                {Array.from({ length: 24 }, (_, index) => index + 1).map(
+                {Array.from({ length: 99 }, (_, index) => index + 1).map(
                   (limit) => (
                     <option key={limit} value={limit}>
                       {limit}
