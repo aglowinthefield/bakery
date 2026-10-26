@@ -21,6 +21,8 @@ async function fixture(boards = [board]) {
     else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = [{ id: "card-one", title: "Make an improvement", status: "triage" }];
     else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
     else if (path === `/api/boards/${board.id}/cards/card-one/status` && req.method === "POST") data = { id: "card-one", status: (input as { status: string }).status };
+    else if (/^\/api\/boards\/board-one\/cards\/card-(one|two)\/start$/.test(path) && req.method === "POST") data = { id: `run-${path.split("/")[5]}`, attempt: 2, status: "running" };
+    else if (path === `/api/boards/${board.id}/cards/card-three/start` && req.method === "POST") { res.writeHead(400); res.end(JSON.stringify({ error: "Move this card to Ready before starting a run" })); return; }
     else if (path === `/api/boards/${board.id}/cards/card-one/runs`) data = [{ id: "run-one", status: "failed", startedBy: "auto" }];
     else if (path === `/api/boards/${board.id}/conflicts`) data = [{ cardId: "card-one", details: "merge conflict" }];
     else if (path === `/api/boards/${board.id}/settings` && req.method === "PATCH") data = { ...board, ...(input as object) };
@@ -106,5 +108,23 @@ test("ambiguous boards require a selector and bad card ids fail before mutation"
     assert.match((await f.run("cards", "--board", board.repo)).stdout, /card-one/);
     assert.notEqual((await f.run("ready", "../evil", "--board", board.id, "--yes")).code, 0);
     assert.equal(f.requests.filter(r => r.method === "POST").length, 0);
+  } finally { await f.close(); }
+});
+
+test("start needs consent, starts each card independently, and reports refusals", async () => {
+  const f = await fixture();
+  try {
+    const unconfirmed = await f.run("start", "card-one", "card-two");
+    assert.notEqual(unconfirmed.code, 0);
+    assert.match(unconfirmed.stderr, /2 runs uses paid Pi.*--yes/);
+    assert.equal(f.requests.filter(r => r.method === "POST").length, 0);
+    assert.notEqual((await f.run("start", "../evil", "--yes")).code, 0);
+    assert.equal(f.requests.filter(r => r.method === "POST").length, 0);
+    const started = await f.run("start", "card-one", "card-three", "card-two", "--yes");
+    assert.equal(started.code, 1);
+    assert.match(started.stdout, /card-one\tattempt #2\trunning/);
+    assert.match(started.stdout, /card-three\terror\tBakery 400: Move this card to Ready/);
+    assert.match(started.stdout, /card-two\tattempt #2\trunning/);
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.path), ["card-one", "card-three", "card-two"].map(id => `/api/boards/${board.id}/cards/${id}/start`));
   } finally { await f.close(); }
 });

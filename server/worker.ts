@@ -16,11 +16,14 @@ function providerFailure(error: unknown): string {
 export class Worker {
   private active = new Map<string, ChildProcess>();
   private terminationReasons = new Map<string, string>();
+  private draining = false;
+  private idleWaiters: (() => void)[] = [];
   constructor(private board: Board, private dataDir: string, private piBin = "pi") {}
   private terminate(id: string, child: ChildProcess, reason: string) {
     if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
   start(card: Card, startedBy: "manual" | "auto" = "manual"): Run {
+    if (this.draining) throw new Error("Bakery is waiting for active runs to finish before restarting to load code changes; start this run after the restart");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
     const root = git(card.repo, "rev-parse", "--show-toplevel");
@@ -126,6 +129,7 @@ export class Worker {
     child.on("error", (error) => { this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
       clearTimeout(timer); this.active.delete(run.id);
+      if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
       const reason = this.terminationReasons.get(run.id);
       this.terminationReasons.delete(run.id);
       const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError;
@@ -143,6 +147,13 @@ export class Worker {
     const child = this.active.get(id);
     if (!child) throw new Error("This run is not owned by the current server process");
     this.terminate(id, child, "manual stop");
+  }
+  get activeCount() { return this.active.size; }
+  /** Refuse new runs and resolve once every active Pi child has exited on its own. */
+  drain(): Promise<void> {
+    this.draining = true;
+    if (!this.active.size) return Promise.resolve();
+    return new Promise(resolve => this.idleWaiters.push(resolve));
   }
   async shutdown(reason = "server shutdown") {
     await Promise.all([...this.active].map(([id, child]) => new Promise<void>(resolve => {

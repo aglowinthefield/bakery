@@ -596,6 +596,38 @@ export function CardDetails({
               Reopen
             </Button>
           )}
+          {card?.status === "done" && (
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() =>
+                action(() =>
+                  api(`/boards/${boardId}/cards/archive`, {
+                    method: "POST",
+                    body: JSON.stringify({ cardIds: [card.id] }),
+                  }),
+                )
+              }
+            >
+              Archive
+            </Button>
+          )}
+          {card?.status === "archived" && (
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() =>
+                action(() =>
+                  api(`/boards/${boardId}/cards/unarchive`, {
+                    method: "POST",
+                    body: JSON.stringify({ cardIds: [card.id] }),
+                  }),
+                )
+              }
+            >
+              Restore to Done
+            </Button>
+          )}
         </div>
         {card?.status === "interrupted" && (
           <div className="mt-4 rounded-lg border border-primary/30 bg-primary/10 p-3 text-xs text-primary">
@@ -669,7 +701,9 @@ export function CardDetails({
             }
           />
         )}
-        {runs.length > 0 && <AttemptList key={card?.id} runs={runs} />}
+        {runs.length > 0 && (
+          <AttemptList key={card?.id} runs={runs} card={card} />
+        )}
       </DialogContent>
     </Dialog>
   );

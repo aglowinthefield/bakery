@@ -28,6 +28,7 @@
   --status-failed: #cdacac;
   --status-interrupted: #c6ad89;
   --status-done: #9aa59d;
+  --status-archived: #aba5bd;
   --diff-add: #193529;
   --diff-add-foreground: #b6e5c5;
   --diff-remove: #3b2528;
@@ -72,6 +73,7 @@
   --status-failed: #9d3038;
   --status-interrupted: #926621;
   --status-done: #626b72;
+  --status-archived: #5e5675;
   --diff-add: #e1f2e6;
   --diff-add-foreground: #184a30;
   --diff-remove: #fae6e7;
@@ -118,6 +120,7 @@
   --status-failed: #d9baba;
   --status-interrupted: #c9b597;
   --status-done: #99a49c;
+  --status-archived: #b1abc2;
   --syntax-keyword: #d9baba;
   --syntax-entity: #d4ccb4;
   --syntax-constant: #b4bcc4;
@@ -133,7 +136,9 @@
 [data-status="failed"] { --lane-status-color: var(--status-failed); }
 [data-status="interrupted"] { --lane-status-color: var(--status-interrupted); }
 [data-status="done"] { --lane-status-color: var(--status-done); }
+[data-status="archived"] { --lane-status-color: var(--status-archived); }
 .lane-status-dot { background-color: var(--lane-status-color); }
+.lane-status-icon { color: var(--lane-status-color); }
 @theme inline {
   --color-background: var(--background); --color-foreground: var(--foreground);
   --color-card: var(--card); --color-card-foreground: var(--card-foreground);
@@ -147,7 +152,7 @@
   --color-status-triage: var(--status-triage); --color-status-ready: var(--status-ready);
   --color-status-running: var(--status-running); --color-status-review: var(--status-review);
   --color-status-failed: var(--status-failed); --color-status-interrupted: var(--status-interrupted);
-  --color-status-done: var(--status-done);
+  --color-status-done: var(--status-done); --color-status-archived: var(--status-archived);
   --color-diff-add: var(--diff-add); --color-diff-add-foreground: var(--diff-add-foreground);
   --color-diff-remove: var(--diff-remove); --color-diff-remove-foreground: var(--diff-remove-foreground);
   --radius-sm: calc(var(--radius) * .55); --radius-md: calc(var(--radius) * .75); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) * 1.35);

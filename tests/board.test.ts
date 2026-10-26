@@ -25,6 +25,27 @@ test("manual cards persist and only one active attempt may be claimed", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("only Done cards on the same board archive, atomically, and restore to Done", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const [a, b, open] = ["A", "B", "Open"].map(title => board.createCard({ title, body: "", repo: dir }));
+    const other = board.createCard({ title: "Other", body: "", repo: join(dir, "other") });
+    for (const card of [a, b, other]) board.setStatus(card.id, "done");
+    assert.throws(() => board.setArchived(dir, [a.id, open.id], true), /Only Done/);
+    assert.throws(() => board.setArchived(dir, [a.id, other.id], true), /not found on this board/);
+    assert.throws(() => board.setArchived(dir, [], true), /between 1 and 500/);
+    assert.equal(board.getCard(a.id)?.status, "done", "a rejected batch changes nothing");
+    assert.deepEqual(board.setArchived(dir, [a.id, b.id, a.id], true).map(card => card.status), ["archived", "archived"]);
+    assert.throws(() => board.setStatus(a.id, "ready"), /Restore this archived card/);
+    assert.throws(() => board.claim(a.id), /Restore this archived card/);
+    assert.throws(() => board.setArchived(dir, [a.id], true), /Only Done/);
+    assert.equal(board.setArchived(dir, [a.id], false)[0].status, "done");
+    assert.throws(() => board.setArchived(dir, [a.id], false), /Only archived/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("existing Ready cards stay Ready when the database opens", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {
