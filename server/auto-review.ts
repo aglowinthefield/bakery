@@ -23,23 +23,32 @@ function execute(command: string, args: string[], cwd: string, timeoutMs: number
 }
 
 export function reviewerVerdict(stream: string): { verdict: "approve" | "needs_human"; reason: string } {
-  let text: string | undefined, settled = false, aborted = false, complete = false, messages = 0;
+  let text: string | undefined, settled = false, aborted = false, stopReason: string | undefined, errorMessage: string | undefined, messages = 0;
   for (const line of stream.split("\n").filter(Boolean)) {
-    const event = JSON.parse(line) as { type?: string; aborted?: boolean; message?: { role?: string; stopReason?: string; content?: { type: string; text?: string }[] } };
+    const event = JSON.parse(line) as { type?: string; aborted?: boolean; message?: { role?: string; stopReason?: string; errorMessage?: string; content?: { type: string; text?: string }[] } };
     if (event.type === "agent_settled") { settled = true; aborted = event.aborted === true; }
     if (event.type === "message_end" && event.message?.role === "assistant") {
       messages++;
-      complete = event.message.stopReason === "end_turn";
+      stopReason = event.message.stopReason;
+      errorMessage = event.message.errorMessage;
       text = event.message.content?.filter(part => part.type === "text").map(part => part.text ?? "").join("");
     }
   }
-  if (!settled || aborted || !complete || messages !== 1 || !text) throw new Error("Agent review did not settle with one complete verdict");
-  const answer: unknown = JSON.parse(text.trim());
+  // Pi normalizes provider stop reasons (Anthropic end_turn, OpenAI stop, ...) to "stop" for a finished reply.
+  const unsettled = (detail: string) => new Error(`Agent review did not settle with one complete verdict: ${detail}`);
+  if (!settled) throw unsettled("Pi never reported agent_settled");
+  if (aborted) throw unsettled("the review was aborted");
+  if (messages !== 1) throw unsettled(`expected 1 assistant message, got ${messages}`);
+  if (stopReason !== "stop") throw unsettled(`stop reason was ${JSON.stringify(stopReason ?? null)}${errorMessage ? ` (${errorMessage.slice(0, 500)})` : ""}`);
+  if (!text?.trim()) throw unsettled("the reply had no text");
+  let answer: unknown;
+  try { answer = JSON.parse(text.trim()); }
+  catch { throw new Error(`Agent review reply was not a JSON object: ${JSON.stringify(text.trim().slice(0, 300))}`); }
   if (!answer || typeof answer !== "object" || Array.isArray(answer)) throw new Error("Agent review verdict must be a JSON object");
   const fields = answer as Record<string, unknown>;
   if (Object.keys(fields).sort().join(",") !== "reason,verdict" ||
     (fields.verdict !== "approve" && fields.verdict !== "needs_human") ||
-    typeof fields.reason !== "string" || !fields.reason.trim() || fields.reason.length > 2000) throw new Error("Agent review verdict is invalid or ambiguous");
+    typeof fields.reason !== "string" || !fields.reason.trim() || fields.reason.length > 2000) throw new Error(`Agent review verdict is invalid or ambiguous: ${JSON.stringify(text.trim().slice(0, 300))}`);
   return { verdict: fields.verdict, reason: fields.reason };
 }
 

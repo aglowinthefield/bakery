@@ -11,7 +11,7 @@ import { AutoReview, reviewerVerdict } from "../server/auto-review.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 const settle = (verdict: string) => [
-  JSON.stringify({ type: "message_end", message: { role: "assistant", provider: "openai-codex", model: "gpt-5.5", stopReason: "end_turn", content: [{ type: "text", text: verdict }] } }),
+  JSON.stringify({ type: "message_end", message: { role: "assistant", provider: "openai-codex", model: "gpt-5.5", stopReason: "stop", content: [{ type: "text", text: verdict }] } }),
   JSON.stringify({ type: "agent_settled", aborted: false }), "",
 ].join("\n");
 function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and correct"}') {
@@ -40,12 +40,12 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
 
 test("strict agent verdict rejects missing settlement, invalid JSON, and ambiguous formats", () => {
   assert.deepEqual(reviewerVerdict(settle('{"verdict":"approve","reason":"Looks correct"}')), { verdict: "approve", reason: "Looks correct" });
-  assert.throws(() => reviewerVerdict(settle('```json\n{"verdict":"approve","reason":"fine"}\n```')), /Unexpected token|JSON/);
-  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine","extra":true}')), /invalid or ambiguous/);
-  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"aborted":false', '"aborted":true')), /did not settle/);
-  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"stopReason":"end_turn"', '"stopReason":"length"')), /did not settle/);
-  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"agent_settled"', '"message_end"')), /did not settle/);
-  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"agent_settled"', '"message_end"') + settle('{"verdict":"approve","reason":"fine"}')), /did not settle/);
+  assert.throws(() => reviewerVerdict(settle('```json\n{"verdict":"approve","reason":"fine"}\n```')), /not a JSON object: "```json/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine","extra":true}')), /invalid or ambiguous: .*extra/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"aborted":false', '"aborted":true')), /did not settle.*aborted/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"stopReason":"stop"', '"stopReason":"length"')), /did not settle.*stop reason was "length"/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"agent_settled"', '"message_end"')), /did not settle.*never reported agent_settled/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"agent_settled"', '"message_end"') + settle('{"verdict":"approve","reason":"fine"}')), /did not settle.*got 2/);
 });
 
 test("new opt-in reviews run a separate tool-free reviewer and verify before local merge", async () => {
