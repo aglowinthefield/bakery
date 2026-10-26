@@ -18,7 +18,7 @@ async function fixture(boards: object[] = [board]) {
     res.setHeader("content-type", "application/json");
     let data: unknown;
     if (path === "/api/boards") data = boards;
-    else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = [{ id: "card-one", title: "Make an improvement", status: "triage" }];
+    else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = [{ id: "card-one", title: "Make an improvement", status: "triage", attempts: 3, reviewRounds: 2 }];
     else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
     else if (path === `/api/boards/${board.id}/cards/card-one/status` && req.method === "POST") data = { id: "card-one", status: (input as { status: string }).status };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|two)\/start$/.test(path) && req.method === "POST") data = { id: `run-${path.split("/")[5]}`, attempt: 2, status: "running" };
@@ -51,7 +51,7 @@ test("lists boards, cards, runs and conflicts through the HTTP API", async () =>
   const f = await fixture();
   try {
     assert.match((await f.run("boards")).stdout, /bakery-project/);
-    assert.match((await f.run("cards")).stdout, /card-one.*Make an improvement/);
+    assert.match((await f.run("cards")).stdout, /card-one\ttriage\tattempts:3\treview-rounds:2\tMake an improvement/);
     const runs = JSON.parse((await f.run("runs", "card-one", "--json")).stdout);
     assert.equal(runs.cardId, "card-one");
     assert.deepEqual(runs.runs.map((run: { id: string }) => run.id), ["run-two", "run-one"]);

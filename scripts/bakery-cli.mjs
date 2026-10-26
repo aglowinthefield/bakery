@@ -118,7 +118,7 @@ async function main() {
   const path = `/api/boards/${encodeURIComponent(board.id)}`;
   if (command === "cards") {
     const cards = await request(origin, `${path}/cards`);
-    print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\t${item.title}`));
+    print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
   } else if (command === "create") {
     if (!opts.title?.trim()) throw new Error("create requires --title TITLE");
     const card = await request(origin, `${path}/cards`, "POST", { title: opts.title, body: opts.body ?? "" });

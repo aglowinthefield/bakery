@@ -48,6 +48,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Settings2,
   ExternalLink,
   Github,
@@ -65,7 +66,15 @@ import {
 import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { api, date } from "./api.js";
-import { AgentBadge } from "./attempts.js";
+import {
+  agentPhases,
+  emptyAgentModels,
+  thinkingLevels,
+  type AgentModels,
+  type AgentPhase,
+  type ThinkingLevel,
+} from "../server/agent-models.js";
+import { AgentBadge, reworkSummary } from "./attempts.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
 import { markdownToPlainText } from "./markdown.js";
@@ -293,6 +302,123 @@ function RepositoryPathInput({
         </div>
       )}
     </div>
+  );
+}
+const phaseLabels: Record<AgentPhase, string> = {
+  work: "Card runs",
+  conflict: "Conflict fixes",
+  review: "Agent review",
+};
+// Shared across dialogs; listing spawns Pi, so only ask once a model field is used.
+let modelList: Promise<{ models: string[]; error?: string }> | undefined;
+function AgentModelFields({
+  scope,
+  value,
+  inherited,
+  disabled,
+  onSave,
+}: {
+  scope: string;
+  value: AgentModels;
+  inherited?: AgentModels;
+  disabled: boolean;
+  onSave: (next: AgentModels) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [models, setModels] = useState<string[]>([]);
+  const [modelError, setModelError] = useState("");
+  const loadModels = () => {
+    modelList ??= api<{ models: string[]; error?: string }>("/models").catch(
+      (err) => ({ models: [], error: String(err) }),
+    );
+    void modelList.then((result) => {
+      if (result.error) modelList = undefined;
+      setModels(result.models);
+      setModelError(result.error ?? "");
+    });
+  };
+  const inheritedLabel = (text: string) =>
+    inherited ? `Global: ${text || "Pi default"}` : "Pi default";
+  const changed = JSON.stringify(draft) !== JSON.stringify(value);
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave({
+          work: { ...draft.work, model: draft.work.model.trim() },
+          conflict: { ...draft.conflict, model: draft.conflict.model.trim() },
+          review: { ...draft.review, model: draft.review.model.trim() },
+        });
+      }}
+    >
+      <datalist id={`${scope}-models`}>
+        {models.map((model) => (
+          <option key={model} value={model} />
+        ))}
+      </datalist>
+      {agentPhases.map((phase) => (
+        <div
+          key={phase}
+          className="mt-3 grid grid-cols-[7rem_minmax(0,1fr)_auto] items-center gap-2 text-xs"
+        >
+          <span>{phaseLabels[phase]}</span>
+          <input
+            aria-label={`${phaseLabels[phase]} model`}
+            list={`${scope}-models`}
+            value={draft[phase].model}
+            onFocus={loadModels}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                [phase]: { ...draft[phase], model: event.target.value },
+              })
+            }
+            disabled={disabled}
+            placeholder={inheritedLabel(inherited?.[phase].model ?? "")}
+            className="min-w-0 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+          />
+          <select
+            aria-label={`${phaseLabels[phase]} thinking`}
+            value={draft[phase].thinking}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                [phase]: {
+                  ...draft[phase],
+                  thinking: event.target.value as ThinkingLevel | "",
+                },
+              })
+            }
+            disabled={disabled}
+            className="rounded-md border border-border bg-background px-2 py-1"
+          >
+            <option value="">
+              {inherited
+                ? `Inherit (${inheritedLabel(inherited[phase].thinking)})`
+                : "Inherit (Pi default)"}
+            </option>
+            {thinkingLevels.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+        </div>
+      ))}
+      {modelError && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Model suggestions unavailable. {modelError}
+        </p>
+      )}
+      <Button
+        type="submit"
+        variant="outline"
+        className="mt-3"
+        disabled={disabled || !changed}
+      >
+        Save models
+      </Button>
+    </form>
   );
 }
 function App() {
@@ -618,6 +744,7 @@ function App() {
               <div className="flex items-center">
                 <button
                   onClick={() => {
+                    if (boardId === item.id) return;
                     setBoardId(item.id);
                     localStorage.setItem("bakery-board", item.id);
                     setSelected(null);
@@ -1049,8 +1176,20 @@ function App() {
                           const content = (
                             <>
                               <div className="mb-4 flex items-start justify-between gap-2">
-                                <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
-                                  Manual
+                                <span className="flex flex-wrap items-center gap-1.5">
+                                  <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
+                                    Manual
+                                  </span>
+                                  {item.attempts > 1 && (
+                                    <span
+                                      data-testid="attempt-count"
+                                      title={reworkSummary(item)}
+                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-amber-500"
+                                    >
+                                      <RotateCcw size={10} aria-hidden />
+                                      {item.attempts} attempts
+                                    </span>
+                                  )}
                                 </span>
                                 {!selecting && (
                                   <ArrowUpRight
@@ -1265,6 +1404,23 @@ function App() {
               full-screen.
             </p>
           </fieldset>
+          <div className="mt-6 border-t border-border pt-5 text-sm">
+            <div className="font-medium">Pi models</div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Model and thinking level for each kind of Pi run. Blank fields use
+              Pi's own default. A repository can override these in its edit
+              dialog.
+            </p>
+            {settings && (
+              <AgentModelFields
+                key={JSON.stringify(settings.agentModels)}
+                scope="global"
+                value={settings.agentModels ?? emptyAgentModels()}
+                disabled={busy}
+                onSave={(agentModels) => saveSettings({ agentModels })}
+              />
+            )}
+          </div>
           <div className="mt-6 border-t border-border pt-5 text-sm">
             <div className="font-medium">
               Auto pickup ·{" "}
@@ -1775,6 +1931,39 @@ function App() {
                   . New reviewed runs can merge without approval.
                 </p>
               )}
+            </div>
+          )}
+          {editingBoard && (
+            <div className="mt-8 border-t border-border pt-5 text-sm">
+              <div className="font-medium">Pi models</div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Overrides for this repository's Pi runs. Blank fields inherit
+                the global setting from Settings.
+              </p>
+              <AgentModelFields
+                key={`${editingBoard.id}-${JSON.stringify(editingBoard.agentModels)}`}
+                scope="repository"
+                value={editingBoard.agentModels ?? emptyAgentModels()}
+                inherited={settings?.agentModels ?? emptyAgentModels()}
+                disabled={busy}
+                onSave={(agentModels) =>
+                  void action(async () => {
+                    const updated = await api<Board>(
+                      `/boards/${editingBoard.id}/settings`,
+                      {
+                        method: "PATCH",
+                        body: JSON.stringify({ agentModels }),
+                      },
+                    );
+                    setBoards((previous) =>
+                      previous.map((item) =>
+                        item.id === updated.id ? updated : item,
+                      ),
+                    );
+                    setEditingBoard(updated);
+                  })
+                }
+              />
             </div>
           )}
           {editingBoard && (

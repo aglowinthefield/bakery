@@ -1,4 +1,5 @@
 import type { UsageFields } from "./usage.js";
+import type { AgentModels } from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
 
 export type Status =
@@ -30,6 +31,7 @@ export type Board = {
   pickupCostBudget?: number | null;
   cost24h?: number;
   autoPickupBudgetReached?: boolean;
+  agentModels?: AgentModels;
   cardCounts?: Partial<Record<Status, number>>;
 };
 export type AutoReviewJob = {
@@ -47,6 +49,7 @@ export type BakerySettings = {
   notifyOnReview: boolean;
   cardDetailsLayout: "dialog" | "side";
   theme: "default" | "compline" | "light";
+  agentModels?: AgentModels;
 };
 export type ReviewComment = {
   id: string;
@@ -83,6 +86,8 @@ export type Card = {
   updatedAt: string;
   turns: number;
   turnsIncomplete: number;
+  attempts: number;
+  reviewRounds: number;
   runAgent: string;
   reviewAgent: string;
   usageIncomplete?: number;

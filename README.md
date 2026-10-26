@@ -126,6 +126,8 @@ Each attempt in a card's **Attempts** list shows:
 
 The clock on a card counts completed Pi turns across attempts. Older runs show an estimate marked with `~` or `?`.
 
+A card that has run more than once shows an amber attempt count, in every lane including Done and Archive, so cards that needed rework stand out. The **Attempts** list in card details starts with the attempt count and the number of review rounds, meaning reviews that ended in **Request changes**.
+
 Provider errors show only their HTTP status. Pi's stderr goes to the server console, not the board, because it can contain request details.
 
 ## Automation (opt-in)
@@ -183,6 +185,7 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 
 
 - Add `--board ID|PATH` if you have more than one board, and `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
+- `cards` prints each card's ID, status, attempt count, review rounds, and title.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
@@ -197,6 +200,18 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 
 - Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
 - Each repository can have an optional `http` or `https` remote link, such as its GitHub page. Set it with the pencil button next to the repository (Edit repository). It appears below the board heading. Bakery only links to it and never pushes there.
+
+### Pi models
+
+Bakery starts Pi for three kinds of runs. Each can use its own model and thinking level:
+
+- **Card runs**: normal runs and retries.
+- **Conflict fixes**: runs that repair a merge conflict.
+- **Agent review**: the reviewer used by [unattended review](#unattended-review).
+
+Set global defaults in **Settings → Pi models**. To override them for one repository, use **Pi models** in its Edit repository dialog. A blank field inherits: the repository value comes first, then the global value, then the default in your Pi settings. Model and thinking level inherit separately, so a repository can change only the model and keep the global thinking level.
+
+A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-codex/gpt-5.5`. Bakery passes it as `--model`, and the thinking level as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). It only passes flags you set. The model field suggests the models `pi --list-models` reports. Bakery caches that list for 10 minutes. A change applies to runs that start after you save it. Retries keep their Pi session but use the current model.
 
 ## Server, data, and restarts
 

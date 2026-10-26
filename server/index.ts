@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, extname, isAbsolute, resolve } from "node:path";
 import { Board } from "./board.js";
@@ -10,6 +10,7 @@ import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
+import { parseModelList, validateAgentModels } from "./agent-models.js";
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -20,11 +21,26 @@ const lock = acquireLock(lockPath);
 let board: Board;
 try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
-const worker = new Worker(board, dataDir, process.env.BAKERY_PI_BIN ?? "pi");
+const piBin = process.env.BAKERY_PI_BIN ?? "pi";
+const worker = new Worker(board, dataDir, piBin);
 const integration = new Integration(board, dataDir);
-const autoReview = new AutoReview(board, integration, process.env.BAKERY_PI_BIN ?? "pi");
+const autoReview = new AutoReview(board, integration, piBin);
 const autoPickup = new AutoPickup(board, worker);
 const port = Number(process.env.BAKERY_PORT ?? 4317);
+// Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
+// and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
+let modelCache: { models: string[]; at: number } | undefined, modelRequest: Promise<{ models: string[]; error?: string }> | undefined;
+function listModels(): Promise<{ models: string[]; error?: string }> {
+  if (modelCache && Date.now() - modelCache.at < 10 * 60_000) return Promise.resolve({ models: modelCache.models });
+  return modelRequest ??= new Promise<{ models: string[]; error?: string }>(resolve => {
+    execFile(piBin, ["--list-models"], { timeout: 20_000, maxBuffer: 4_000_000, encoding: "utf8" }, (error, stdout) => {
+      modelRequest = undefined;
+      if (error) { resolve({ models: [], error: `Could not list Pi models: ${error.killed ? "timed out" : error.message.split("\n")[0].slice(0, 300)}` }); return; }
+      modelCache = { models: parseModelList(stdout), at: Date.now() };
+      resolve({ models: modelCache.models });
+    });
+  });
+}
 function send(res: ServerResponse, status: number, payload: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
   res.end(JSON.stringify(payload));
@@ -65,7 +81,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
-      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input)) throw new Error("Specify a setting to update");
+      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("agentModels" in input)) throw new Error("Specify a setting to update");
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("notifyOnReview" in input && typeof input.notifyOnReview !== "boolean") throw new Error("notifyOnReview must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
@@ -75,8 +91,10 @@ const server = createServer(async (req, res) => {
         notifyOnReview: "notifyOnReview" in input ? input.notifyOnReview as boolean : undefined,
         cardDetailsLayout: "cardDetailsLayout" in input ? input.cardDetailsLayout as "dialog" | "side" : undefined,
         theme: "theme" in input ? input.theme as "default" | "compline" | "light" : undefined,
+        agentModels: "agentModels" in input ? validateAgentModels(input.agentModels) : undefined,
       })); return;
     }
+    if (path === "/api/models" && req.method === "GET") { send(res, 200, await listModels()); return; }
     if (path === "/api/path-suggestions" && req.method === "GET") {
       const input = new URL(req.url ?? "/", "http://localhost").searchParams.get("path") ?? "";
       if (input.length > 1024) throw new Error("Path is too long");
@@ -131,6 +149,10 @@ const server = createServer(async (req, res) => {
         if (Object.keys(input).some(key => key !== "icon" && key !== "color")) throw new Error("Update appearance separately from other board settings");
         if (typeof input.icon !== "string" || typeof input.color !== "string") throw new Error("Specify icon and color together");
         send(res, 200, board.setAppearance(repoBoard.id, input.icon, input.color)); return;
+      }
+      if ("agentModels" in input) {
+        if (Object.keys(input).length !== 1) throw new Error("Update agentModels separately from other board settings");
+        send(res, 200, board.setAgentModels(repoBoard.id, input.agentModels)); return;
       }
       if ("remoteUrl" in input) {
         if (Object.keys(input).length !== 1 || typeof input.remoteUrl !== "string") throw new Error("Update remoteUrl as a string, separately from other board settings");

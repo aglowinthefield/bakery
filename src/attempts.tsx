@@ -23,6 +23,16 @@ export function CostBadge({
   );
 }
 
+const plural = (count: number, word: string) =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
+// Plain-language rework count, e.g. "3 attempts · 2 review rounds (Request changes)".
+export function reworkSummary(
+  card: Pick<Card, "attempts" | "reviewRounds">,
+): string {
+  return `${plural(card.attempts, "attempt")} · ${plural(card.reviewRounds, "review round")} (Request changes)`;
+}
+
 // Shows which provider/model ran a phase, e.g. "Run: anthropic/claude-sonnet-4-5".
 export function AgentBadge({
   phase,
@@ -81,7 +91,7 @@ export function AttemptList({
 }: {
   runs: Run[];
   card?:
-    | (Pick<Card, "title" | "repo"> &
+    | (Pick<Card, "title" | "repo" | "reviewRounds"> &
         Partial<Pick<Card, "cost" | "usageIncomplete">>)
     | null;
 }) {
@@ -126,6 +136,15 @@ export function AttemptList({
           </span>
         )}
       </div>
+      <p
+        data-testid="rework-summary"
+        className="-mt-2 mb-4 text-xs text-muted-foreground"
+      >
+        {reworkSummary({
+          attempts: runs.length,
+          reviewRounds: card?.reviewRounds ?? 0,
+        })}
+      </p>
       <div className="space-y-4">
         {runs.map((run, index) => {
           const open = expanded[run.id] ?? index === 0;

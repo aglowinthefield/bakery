@@ -2,6 +2,7 @@ import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
+import { piModelArgs } from "./agent-models.js";
 import { Board, type Card, type Run } from "./board.js";
 
 function git(repo: string, ...args: string[]) {
@@ -61,7 +62,8 @@ export class Worker {
     const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${feedbackPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
     let child: ChildProcess;
     try {
-      child = spawn(this.piBin, ["--mode", "json", "--session-id", run.sessionId, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+      const models = piModelArgs(this.board.agentModelFor(card.repo, conflict ? "conflict" : "work"));
+      child = spawn(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
