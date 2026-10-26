@@ -402,6 +402,8 @@ export class Board {
       if (card.status === "done") throw new Error("Reopen this card before starting a run");
       if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
       if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry Approve and merge");
+      if (this.db.prepare("SELECT 1 FROM auto_review_jobs WHERE cardId=? AND state='running' LIMIT 1").get(cardId))
+        throw new Error("Agent review is in progress; wait for its result before running Pi again");
       const repoBoard = this.listBoards().find(item => item.repo === card.repo);
       if (repoBoard?.autoPickupEnabled && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
         throw new Error(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);

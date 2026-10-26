@@ -71,6 +71,40 @@ test("changed files open their own patches and focus the heading without changin
   } finally { await page.close(); }
 });
 
+test("Run again is unavailable while agent review is running and returns when it ends", async () => {
+  const page = await browser.newPage();
+  let reviewState: "running" | "needs_human" = "running";
+  let starts = 0;
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/start")) { starts++; await route.fulfill({ status: 500, json: { error: "Unexpected start" } }); return; }
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
+      "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
+      "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/comments": [],
+      "/api/boards/board/cards/card/auto-review": [{ cardId: "card", runId: "run", state: reviewState, details: "", fingerprint: "", startedAt: "2026-01-01", finishedAt: null }],
+      "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [] },
+    };
+    assert.ok(path in data, `Unexpected API request: ${path}`);
+    await route.fulfill({ json: data[path] });
+  });
+  try {
+    await page.goto(url);
+    await page.getByRole("button", { name: /Review card/ }).click();
+    const runAgain = page.getByRole("button", { name: "Run again" });
+    await page.getByText("Agent review: checking").waitFor();
+    assert.equal(await runAgain.isDisabled(), true);
+    reviewState = "needs_human";
+    await page.getByText("Agent review: needs human review").waitFor();
+    assert.equal(await runAgain.isEnabled(), true);
+    assert.equal(starts, 0);
+  } finally { await page.close(); }
+});
+
 test("a request failure remains visible after closing card details", async () => {
   const page = await browser.newPage();
   let resolveStart!: () => void;
