@@ -50,6 +50,8 @@ import {
   RefreshCw,
   Settings2,
   ExternalLink,
+  Github,
+  Gitlab,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -72,6 +74,7 @@ import {
   type RepoColor,
   type RepoIcon,
 } from "./repo-appearance.js";
+import { describeRemote, type RemoteHost } from "./remote-link.js";
 import type {
   BakerySettings,
   Board,
@@ -99,6 +102,35 @@ const columns: { id: Status; label: string; icon: LucideIcon }[] = [
   { id: "done", label: "Done", icon: CircleCheck },
   { id: "archived", label: "Archive", icon: Archive },
 ];
+const remoteIcons: Record<RemoteHost, LucideIcon> = {
+  github: Github,
+  gitlab: Gitlab,
+  other: Globe2,
+};
+
+function RemoteLink({ url }: { url: string }) {
+  const remote = describeRemote(url);
+  const Icon = remoteIcons[remote.host];
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={url}
+      aria-label={`Remote repository: ${remote.label}`}
+      className="group mt-3 inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Icon size={13} className="shrink-0" aria-hidden="true" />
+      <span className="truncate font-mono text-foreground">{remote.label}</span>
+      <ExternalLink
+        size={12}
+        className="shrink-0 opacity-60 group-hover:opacity-100"
+        aria-hidden="true"
+      />
+    </a>
+  );
+}
+
 const appearanceIcons: Record<RepoIcon, LucideIcon> = {
   "layout-grid": LayoutGrid,
   rocket: Rocket,
@@ -649,16 +681,7 @@ function App() {
                 : "Add a Git repository to create its board."}
             </p>
             {currentBoard?.remoteUrl && (
-              <a
-                href={currentBoard.remoteUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Remote repository"
-                className="mt-1 inline-flex max-w-full items-center gap-1.5 break-all text-sm text-primary hover:underline"
-              >
-                <ExternalLink size={13} className="shrink-0" />
-                {currentBoard.remoteUrl.replace(/^https?:\/\//, "")}
-              </a>
+              <RemoteLink url={currentBoard.remoteUrl} />
             )}
           </div>
           <div className="flex items-center gap-2">

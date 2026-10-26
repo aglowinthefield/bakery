@@ -41,7 +41,9 @@ test("remote repository link is saved in settings and listed below the board hea
     await link.waitFor();
     assert.equal(await link.getAttribute("href"), "https://github.com/owner/example");
     assert.equal(await link.getAttribute("target"), "_blank");
-    assert.match((await link.textContent()) ?? "", /^github\.com\/owner\/example$/);
+    assert.equal((await link.textContent())?.trim(), "owner/example");
+    assert.equal(await link.getAttribute("title"), "https://github.com/owner/example");
+    assert.equal(await link.locator("svg.lucide-github").count(), 1);
     const pathBox = await page.locator("header p").filter({ hasText: "/tmp/example" }).boundingBox();
     const linkBox = await link.boundingBox();
     assert.ok(pathBox && linkBox && linkBox.y >= pathBox.y + pathBox.height - 1, "link sits below the heading and path");
