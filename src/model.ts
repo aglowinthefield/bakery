@@ -1,7 +1,14 @@
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
 
 export type Status =
-  "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done";
+  | "triage"
+  | "ready"
+  | "running"
+  | "review"
+  | "failed"
+  | "interrupted"
+  | "done"
+  | "archived";
 export type Board = {
   id: string;
   repo: string;

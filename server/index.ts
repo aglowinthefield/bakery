@@ -159,6 +159,14 @@ const server = createServer(async (req, res) => {
       if (!repoBoard || card?.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
       board.deleteReviewComment(card.id, commentRoute[3]); send(res, 200, { ok: true }); return;
     }
+    const archiveRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/(archive|unarchive)$/);
+    if (archiveRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(archiveRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      const { cardIds } = await body(req);
+      if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
+      send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
+    }
     const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
