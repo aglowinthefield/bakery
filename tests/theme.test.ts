@@ -62,7 +62,7 @@ test("database theme still loads when browser storage rejects writes", async () 
   } finally { await page.close(); }
 });
 
-test("theme picker changes board and open review immediately, then loads the saved palette before rendering", async () => {
+test("theme picker changes board and reopened review, then loads the saved palette before rendering", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   let theme: "default" | "light" = "default";
   let failPatch = false;
@@ -119,6 +119,9 @@ test("theme picker changes board and open review immediately, then loads the sav
     await page.getByRole("radio", { name: "Light" }).check();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
+    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.locator('[data-change="add"]').waitFor();
     const light = await palette();
     assert.equal(light.background, "rgb(245, 243, 238)");
     assert.equal(light.add, "rgb(225, 242, 230)");
@@ -138,10 +141,17 @@ test("theme picker changes board and open review immediately, then loads the sav
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("radio", { name: "Default" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
+    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.locator('[data-change="add"]').waitFor();
     assert.deepEqual(await palette(), dark);
     failPatch = true;
+    await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("radio", { name: "Light" }).check();
     await page.getByRole("alert").filter({ hasText: "Save rejected" }).waitFor();
+    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.locator('[data-change="add"]').waitFor();
     assert.deepEqual(await palette(), dark);
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
   } finally { releasePatch(); await page.close(); }
