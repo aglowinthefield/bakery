@@ -55,6 +55,7 @@ import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { api, date } from "./api.js";
 import { CardDetails } from "./card-details.js";
+import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
   repoIcons,
@@ -815,7 +816,8 @@ function App() {
                               {item.title}
                             </div>
                             <p className="mt-2 line-clamp-2 min-h-9 text-xs leading-relaxed text-muted-foreground">
-                              {item.body || "No description yet."}
+                              {markdownToPlainText(item.body) ||
+                                "No description yet."}
                             </p>
                             <div className="mt-5 flex items-center justify-between border-t border-border/70 pt-3 font-mono text-[10px] text-muted-foreground">
                               <span className="flex min-w-0 items-center gap-1 truncate">

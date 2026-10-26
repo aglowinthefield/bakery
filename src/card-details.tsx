@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { Check, Copy, Maximize2, Minimize2, Square } from "lucide-react";
 import { api } from "./api.js";
 import { AttemptList } from "./attempts.js";
+import { Markdown } from "./markdown-view.js";
 import { Button } from "./components/ui/button";
 import {
   Dialog,
@@ -293,9 +294,16 @@ export function CardDetails({
             </>
           )}
         </Button>
-        <p className="mt-6 whitespace-pre-wrap text-sm leading-6 text-foreground/80">
-          {card?.body || "No description."}
-        </p>
+        {card?.body?.trim() ? (
+          <Markdown
+            source={card.body}
+            className="mt-6 text-sm leading-6 text-foreground/80"
+          />
+        ) : (
+          <p className="mt-6 text-sm leading-6 text-foreground/80">
+            No description.
+          </p>
+        )}
         {card?.status === "failed" && runs[0]?.error && (
           <div
             role="alert"
