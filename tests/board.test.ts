@@ -194,7 +194,7 @@ test("existing boards gain default appearance without losing settings", () => {
     legacy.prepare("INSERT INTO boards(id, repo, autoCollapseEmptySwimlanes) VALUES (?, ?, 1)").run("old", dir);
     legacy.close();
     const board = new Board(path);
-    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes], ["layout-grid", "violet", true]);
+    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes, board.getBoard("old")?.remoteUrl], ["layout-grid", "violet", true, ""]);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -211,10 +211,14 @@ test("repository appearance is independent, survives restart, and stays with an 
     assert.deepEqual([second.icon, second.color], ["layout-grid", "violet"]);
     assert.deepEqual([board.setAppearance(first.id, "rocket", "coral").icon, board.getBoard(first.id)?.color], ["rocket", "coral"]);
     assert.deepEqual([board.getBoard(second.id)?.icon, board.getBoard(second.id)?.color], ["layout-grid", "violet"]);
+    assert.equal(board.setRemoteUrl(first.id, "https://github.com/o/first").remoteUrl, "https://github.com/o/first");
+    assert.throws(() => board.setRemoteUrl(first.id, "file:///etc/passwd"), /http/);
+    assert.equal(board.getBoard(second.id)?.remoteUrl, "");
     board.archiveBoard(first.id);
     board.close();
     const reopened = new Board(path);
     assert.deepEqual([reopened.addRepo(join(dir, "first")).icon, reopened.getBoard(first.id)?.color], ["rocket", "coral"]);
+    assert.equal(reopened.getBoard(first.id)?.remoteUrl, "https://github.com/o/first");
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

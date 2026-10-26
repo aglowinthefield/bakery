@@ -91,6 +91,14 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.deepEqual([appearance.data.icon, appearance.data.color], ["rocket", "coral"]);
     assert.deepEqual([(await request("/boards")).data.find((item: { id: string }) => item.id === first.id).icon,
       (await request("/boards")).data.find((item: { id: string }) => item.id === second.id).color], ["rocket", "violet"]);
+    assert.equal(first.remoteUrl, "");
+    for (const remoteUrl of ["javascript:alert(1)", "github.com/owner/repo", `https://example.com/${"x".repeat(500)}`, 42])
+      assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: "https://github.com/o/r", autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: " https://github.com/o/r " })).data.remoteUrl, "https://github.com/o/r");
+    assert.deepEqual((await request("/boards")).data.map((item: { id: string; remoteUrl: string }) => [item.id, item.remoteUrl]).sort(),
+      [[first.id, "https://github.com/o/r"], [second.id, ""]].sort());
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: "" })).data.remoteUrl, "");
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: "yes" })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", {})).status, 400);
     assert.equal((await request(`/boards/missing/settings`, "PATCH", { autoCollapseEmptySwimlanes: true })).status, 404);

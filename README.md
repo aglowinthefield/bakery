@@ -191,6 +191,7 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--yes]
 - Lanes without active cards can be collapsed. A board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
 - Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
+- Each repository can have an optional `http` or `https` remote link, such as its GitHub page, set in **Settings**. It appears below the board heading. Bakery only links to it and never pushes there.
 
 ## Server, data, and restarts
 
