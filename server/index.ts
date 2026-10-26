@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, extname, isAbsolute, resolve } from "node:path";
@@ -8,16 +8,15 @@ import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
+import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 chmodSync(dataDir, 0o700);
-// Exclusive, fail-closed ownership of the local board. Inspect a stale lock before removing it.
+// Exclusive ownership of the local board; a lock left by a dead server is taken over.
 const lockPath = join(dataDir, "server.lock");
-let lock: number;
-try { lock = openSync(lockPath, "wx", 0o600); writeSync(lock, `${process.pid}\n`); }
-catch { throw new Error(`Bakery already owns ${dataDir}, or has a stale lock at ${lockPath}. Check the recorded PID before removing it.`); }
+const lock = acquireLock(lockPath);
 let board: Board;
 try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
@@ -246,5 +245,13 @@ const server = createServer(async (req, res) => {
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
 server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); });
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); }); };
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
+// The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
+// integrating one card into this checkout does not kill other cards' Pi runs.
+process.on("message", (message: unknown) => {
+  if ((message as { type?: unknown } | null)?.type !== "drain") return;
+  autoPickup.shutdown();
+  process.send?.({ type: "draining", activeRuns: worker.activeCount });
+  void worker.drain().then(() => process.send?.({ type: "drained" }));
+});
 process.once("SIGINT", () => shutdown("SIGINT")); process.once("SIGTERM", () => shutdown("SIGTERM"));
