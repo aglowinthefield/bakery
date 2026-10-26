@@ -103,7 +103,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/repository-root" && req.method === "GET") {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
-    if (path === "/api/boards" && req.method === "GET") { send(res, 200, board.listBoards()); return; }
+    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {} }))); return; }
     if (path === "/api/boards" && req.method === "POST") {
       const root = repoRoot((await body(req)).repo);
       if (board.listBoards().some(item => item.repo === root)) throw new Error("Repository already has a board");
