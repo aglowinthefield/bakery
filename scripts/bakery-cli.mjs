@@ -9,13 +9,15 @@ Usage: bakery-cli boards [--json]
        bakery-cli create --title TITLE [--body BODY] [--board ID|PATH] [--json]
        bakery-cli ready CARD_ID [--board ID|PATH] [--yes]
        bakery-cli triage CARD_ID [--board ID|PATH]
+       bakery-cli start CARD_ID... [--board ID|PATH] --yes
        bakery-cli runs CARD_ID [--board ID|PATH] [--json]
        bakery-cli conflicts [--board ID|PATH] [--json]
        bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--board ID|PATH] [--yes]
 
 Set BAKERY_URL (or BAKERY_PORT) to use a different local server. --json prints full API data.
---yes is required before enabling or resetting pickup, or moving a card to Ready on a pickup-enabled board;
-both actions can start paid Pi runs. No command starts Pi directly or approves a merge.`;
+start runs Pi on Ready, Review or Failed cards (a retry reuses the card's worktree and Pi session).
+--yes is required before start, enabling or resetting pickup, or moving a card to Ready on a pickup-enabled
+board; each can start paid Pi runs. No command approves a merge.`;
 
 function options(argv) {
   const result = { positionals: [], json: false, yes: false };
@@ -83,11 +85,15 @@ async function main() {
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
   const expected = { boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0 };
-  if (!(command in expected) && command !== "pickup") throw new Error(`Unknown command: ${command}\n${usage}`);
-  if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (!(command in expected) && command !== "pickup" && command !== "start") throw new Error(`Unknown command: ${command}\n${usage}`);
+  if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "start" ? !args.length : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command !== "create" && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create");
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined)) throw new Error("--concurrency and --limit are only valid with pickup");
-  if (opts.yes && !(command === "ready" || command === "pickup")) throw new Error("--yes is only valid with ready or pickup");
+  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start")) throw new Error("--yes is only valid with ready, start or pickup");
+  if (command === "start") {
+    args.forEach(cardId);
+    if (!opts.yes) throw new Error(`Starting ${args.length === 1 ? "a run" : `${args.length} runs`} uses paid Pi. Repeat with --yes to confirm.`);
+  }
   const origin = serverUrl();
   const boards = await request(origin, "/api/boards");
   if (command === "boards") {
@@ -108,9 +114,18 @@ async function main() {
     if (command === "ready" && board.autoPickupEnabled && !opts.yes) throw new Error("Auto pickup is enabled: Ready may start paid Pi immediately. Repeat with --yes to confirm.");
     const card = await request(origin, `${path}/cards/${cardId(args[0])}/status`, "POST", { status: command });
     print(card, opts.json, [`${card.id}\t${card.status}\t${card.title ?? ""}`]);
+  } else if (command === "start") {
+    // Each card starts independently so one refusal does not block the others.
+    const results = [];
+    for (const id of args) {
+      try { results.push({ cardId: id, run: await request(origin, `${path}/cards/${id}/start`, "POST") }); }
+      catch (error) { results.push({ cardId: id, error: error instanceof Error ? error.message : String(error) }); }
+    }
+    print(results, opts.json, results.map(item => item.run ? `${item.cardId}\tattempt #${item.run.attempt}\t${item.run.status}` : `${item.cardId}\terror\t${item.error}`));
+    if (results.some(item => item.error)) process.exitCode = 1;
   } else if (command === "runs") {
     const runs = await request(origin, `${path}/cards/${cardId(args[0])}/runs`);
-    print(runs, opts.json, runs.map(run => `${run.id}\t${run.status}\t${run.startedBy ?? "manual"}\t${run.startedAt ?? ""}\t${run.agent || "-"}`));
+    print(runs, opts.json, runs.map(run => `${run.id}\t${run.status}\t${run.startedBy ?? "manual"}\t${run.startedAt ?? ""}\t${run.agent || "-"}${run.error ? `\t${run.error}` : ""}`));
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));

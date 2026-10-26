@@ -7,7 +7,7 @@
     "bakery-cli": "./scripts/bakery-cli.mjs"
   },
   "scripts": {
-    "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
+    "dev": "concurrently -k \"node scripts/dev-server.mjs\" \"vite --host 127.0.0.1\"",
     "build": "npm run format:check && tsc -b && vite build",
     "start": "tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",

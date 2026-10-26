@@ -7,7 +7,15 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Archive,
   ArrowUpRight,
+  CircleCheck,
+  CirclePause,
+  CircleX,
+  Eye,
+  Inbox,
+  ListTodo,
+  LoaderCircle,
   ChevronDown,
   ChevronRight,
   CircleHelp,
@@ -79,14 +87,15 @@ function cacheTheme(theme: BakerySettings["theme"]) {
   }
 }
 
-const columns: { id: Status; label: string }[] = [
-  { id: "triage", label: "Triage" },
-  { id: "ready", label: "Ready" },
-  { id: "running", label: "Running" },
-  { id: "review", label: "Review" },
-  { id: "failed", label: "Failed" },
-  { id: "interrupted", label: "Interrupted" },
-  { id: "done", label: "Done" },
+const columns: { id: Status; label: string; icon: LucideIcon }[] = [
+  { id: "triage", label: "Triage", icon: Inbox },
+  { id: "ready", label: "Ready", icon: ListTodo },
+  { id: "running", label: "Running", icon: LoaderCircle },
+  { id: "review", label: "Review", icon: Eye },
+  { id: "failed", label: "Failed", icon: CircleX },
+  { id: "interrupted", label: "Interrupted", icon: CirclePause },
+  { id: "done", label: "Done", icon: CircleCheck },
+  { id: "archived", label: "Archive", icon: Archive },
 ];
 const appearanceIcons: Record<RepoIcon, LucideIcon> = {
   "layout-grid": LayoutGrid,
@@ -293,6 +302,12 @@ function App() {
   const [error, setError] = useState("");
   const [mergeConflicts, setMergeConflicts] = useState<MergeConflict[]>([]);
   const [busy, setBusy] = useState(false);
+  const [selectingDone, setSelectingDone] = useState(false);
+  const [doneSelection, setDoneSelection] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setSelectingDone(false);
+    setDoneSelection(new Set());
+  }, [boardId]);
   const [manualCollapse, setManualCollapse] = useState<
     Record<string, Partial<Record<Status, boolean>>>
   >({});
@@ -471,6 +486,28 @@ function App() {
     });
   };
   const active = cards.filter((item) => item.status === "running").length;
+  const doneIds = cards
+    .filter((item) => item.status === "done")
+    .map((item) => item.id);
+  // Polling can move cards out of Done; only act on cards still there.
+  const selectedDone = doneIds.filter((id) => doneSelection.has(id));
+  const toggleDoneSelection = (id: string) =>
+    setDoneSelection((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  const archiveSelected = () => {
+    if (!boardId || selectedDone.length === 0) return;
+    void action(async () => {
+      await api(`/boards/${boardId}/cards/archive`, {
+        method: "POST",
+        body: JSON.stringify({ cardIds: selectedDone }),
+      });
+      setSelectingDone(false);
+      setDoneSelection(new Set());
+    });
+  };
   const toggleLane = (status: Status, collapsed: boolean) => {
     if (!boardId) return;
     setManualCollapse((previous) => ({
@@ -551,6 +588,39 @@ function App() {
             <Settings2 size={15} /> Settings
           </Button>
         </div>
+        {currentBoard && (
+          <nav aria-label="Card counts" className="px-4 pt-6">
+            <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground">
+              Cards
+            </div>
+            <ul className="grid grid-cols-2 gap-1 lg:grid-cols-1">
+              {columns.map((column) => {
+                const Icon = column.icon;
+                const count = cards.filter(
+                  (c) => c.status === column.id,
+                ).length;
+                return (
+                  <li
+                    key={column.id}
+                    data-status={column.id}
+                    title={`${count} ${column.label.toLowerCase()}`}
+                    className={`flex items-center gap-2.5 rounded-md px-3 py-1 text-sm ${count ? "" : "opacity-50"}`}
+                  >
+                    <Icon
+                      size={14}
+                      aria-hidden="true"
+                      className="lane-status-icon shrink-0"
+                    />
+                    <span className="truncate text-muted-foreground">
+                      {column.label}
+                    </span>
+                    <span className="ml-auto font-mono text-xs">{count}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
+        )}
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="size-1.5 rounded-full bg-status-review" /> Local
@@ -593,7 +663,7 @@ function App() {
         <div className="flex flex-wrap gap-x-7 gap-y-2 border-b border-border px-6 py-4 text-xs text-muted-foreground lg:px-10">
           <span>
             <strong className="mr-1 font-mono text-foreground">
-              {cards.length}
+              {cards.filter((c) => c.status !== "archived").length}
             </strong>{" "}
             cards
           </span>
@@ -735,13 +805,19 @@ function App() {
           <div className="flex min-h-[500px] min-w-max gap-4">
             {columns.map((column) => {
               const laneCards = cards.filter((c) => c.status === column.id);
-              const collapsible = !laneCards.some((c) => c.status !== "done");
+              const collapsible = laneCards.every(
+                (c) => c.status === "done" || c.status === "archived",
+              );
               const override = boardId
                 ? manualCollapse[boardId]?.[column.id]
                 : undefined;
               const collapsed =
                 collapsible &&
-                (override ?? currentBoard?.autoCollapseEmptySwimlanes ?? false);
+                (override ??
+                  (column.id === "archived" ||
+                    (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
+              const selecting =
+                column.id === "done" && selectingDone && laneCards.length > 0;
               return (
                 <section
                   key={column.id}
@@ -782,6 +858,20 @@ function App() {
                         <span className="ml-auto rounded-md bg-secondary px-2 py-0.5 font-mono text-xs text-muted-foreground">
                           {laneCards.length}
                         </span>
+                        {column.id === "done" &&
+                          laneCards.length > 0 &&
+                          !selecting && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectingDone(true);
+                                setDoneSelection(new Set());
+                              }}
+                              className="rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              Select
+                            </button>
+                          )}
                         {collapsible && (
                           <button
                             type="button"
@@ -794,70 +884,149 @@ function App() {
                           </button>
                         )}
                       </div>
+                      {selecting && (
+                        <div
+                          role="toolbar"
+                          aria-label="Done card selection"
+                          className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs"
+                        >
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              className="accent-primary"
+                              checked={selectedDone.length === doneIds.length}
+                              ref={(element) => {
+                                if (element)
+                                  element.indeterminate =
+                                    selectedDone.length > 0 &&
+                                    selectedDone.length < doneIds.length;
+                              }}
+                              onChange={(event) =>
+                                setDoneSelection(
+                                  new Set(event.target.checked ? doneIds : []),
+                                )
+                              }
+                            />
+                            Select all
+                          </label>
+                          <span className="text-muted-foreground">
+                            {selectedDone.length} selected
+                          </span>
+                          <div className="ml-auto flex gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={busy}
+                              onClick={() => {
+                                setSelectingDone(false);
+                                setDoneSelection(new Set());
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              size="sm"
+                              disabled={busy || selectedDone.length === 0}
+                              onClick={archiveSelected}
+                            >
+                              Archive
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                       <div className="space-y-3">
-                        {laneCards.map((item) => (
-                          <button
-                            key={item.id}
-                            onClick={() => {
-                              setSelected(item.id);
-                            }}
-                            className="group w-full rounded-xl border border-border/80 bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <div className="mb-4 flex items-start justify-between gap-2">
-                              <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
-                                Manual
-                              </span>
-                              <ArrowUpRight
-                                size={15}
-                                className="text-muted-foreground group-hover:text-primary"
-                              />
-                            </div>
-                            <div className="text-[14px] font-medium leading-snug text-foreground">
-                              {item.title}
-                            </div>
-                            <p className="mt-2 line-clamp-2 min-h-9 text-xs leading-relaxed text-muted-foreground">
-                              {item.body || "No description yet."}
-                            </p>
-                            {(item.runAgent || item.reviewAgent) && (
-                              <div className="mt-3 flex flex-wrap gap-1">
-                                {item.runAgent && (
-                                  <AgentBadge
-                                    phase="Run"
-                                    agent={item.runAgent}
-                                  />
-                                )}
-                                {item.reviewAgent && (
-                                  <AgentBadge
-                                    phase="Review"
-                                    agent={item.reviewAgent}
+                        {laneCards.map((item) => {
+                          const content = (
+                            <>
+                              <div className="mb-4 flex items-start justify-between gap-2">
+                                <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
+                                  Manual
+                                </span>
+                                {!selecting && (
+                                  <ArrowUpRight
+                                    size={15}
+                                    className="text-muted-foreground group-hover:text-primary"
                                   />
                                 )}
                               </div>
-                            )}
-                            <div className="mt-5 flex items-center justify-between border-t border-border/70 pt-3 font-mono text-[10px] text-muted-foreground">
-                              <span className="flex min-w-0 items-center gap-1 truncate">
-                                <GitBranch size={11} className="shrink-0" />{" "}
-                                {item.repo.split("/").at(-1)}
-                              </span>
-                              <span
-                                className="flex items-center gap-1"
-                                title={
-                                  item.turnsIncomplete
-                                    ? "Estimated from older transcripts; may be inaccurate. New turns are counted exactly."
-                                    : "Completed Pi turns across all attempts"
-                                }
+                              <div className="text-[14px] font-medium leading-snug text-foreground">
+                                {item.title}
+                              </div>
+                              <p className="mt-2 line-clamp-2 min-h-9 text-xs leading-relaxed text-muted-foreground">
+                                {item.body || "No description yet."}
+                              </p>
+                              {(item.runAgent || item.reviewAgent) && (
+                                <div className="mt-3 flex flex-wrap gap-1">
+                                  {item.runAgent && (
+                                    <AgentBadge
+                                      phase="Run"
+                                      agent={item.runAgent}
+                                    />
+                                  )}
+                                  {item.reviewAgent && (
+                                    <AgentBadge
+                                      phase="Review"
+                                      agent={item.reviewAgent}
+                                    />
+                                  )}
+                                </div>
+                              )}
+                              <div className="mt-5 flex items-center justify-between border-t border-border/70 pt-3 font-mono text-[10px] text-muted-foreground">
+                                <span className="flex min-w-0 items-center gap-1 truncate">
+                                  <GitBranch size={11} className="shrink-0" />{" "}
+                                  {item.repo.split("/").at(-1)}
+                                </span>
+                                <span
+                                  className="flex items-center gap-1"
+                                  title={
+                                    item.turnsIncomplete
+                                      ? "Estimated from older transcripts; may be inaccurate. New turns are counted exactly."
+                                      : "Completed Pi turns across all attempts"
+                                  }
+                                >
+                                  <Clock3 size={11} />{" "}
+                                  {item.turnsIncomplete
+                                    ? item.turns
+                                      ? `~${item.turns}`
+                                      : "?"
+                                    : item.turns}
+                                </span>
+                                <span>{date(item.createdAt)}</span>
+                              </div>
+                            </>
+                          );
+                          const cardClass =
+                            "group block w-full rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+                          if (selecting) {
+                            const checked = doneSelection.has(item.id);
+                            return (
+                              <label
+                                key={item.id}
+                                className={`${cardClass} relative cursor-pointer focus-within:ring-2 focus-within:ring-ring ${checked ? "border-primary/60" : "border-border/80"}`}
                               >
-                                <Clock3 size={11} />{" "}
-                                {item.turnsIncomplete
-                                  ? item.turns
-                                    ? `~${item.turns}`
-                                    : "?"
-                                  : item.turns}
-                              </span>
-                              <span>{date(item.createdAt)}</span>
-                            </div>
-                          </button>
-                        ))}
+                                <input
+                                  type="checkbox"
+                                  className="absolute top-4 right-4 size-4 accent-primary"
+                                  aria-label={`Select ${item.title}`}
+                                  checked={checked}
+                                  onChange={() => toggleDoneSelection(item.id)}
+                                />
+                                {content}
+                              </label>
+                            );
+                          }
+                          return (
+                            <button
+                              key={item.id}
+                              onClick={() => {
+                                setSelected(item.id);
+                              }}
+                              className={`${cardClass} border-border/80`}
+                            >
+                              {content}
+                            </button>
+                          );
+                        })}
                         {laneCards.length === 0 && (
                           <div className="rounded-xl border border-dashed border-border/60 px-4 py-10 text-center text-xs text-muted-foreground">
                             Nothing here yet.

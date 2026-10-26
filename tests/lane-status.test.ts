@@ -3,7 +3,8 @@ import { after, before, test } from "node:test";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 
-const statuses = ["triage", "ready", "running", "review", "failed", "interrupted", "done"];
+const statuses = ["triage", "ready", "running", "review", "failed", "interrupted", "done", "archived"];
+const labels: Record<string, string> = { archived: "Archive" };
 let server: ViteDevServer;
 let browser: Browser;
 
@@ -32,13 +33,15 @@ test("each lane keeps its label and a readable status dot in both palettes and w
     await page.getByRole("heading", { name: "Triage" }).waitFor();
     assert.equal(await page.getByText("Can start a Pi run", { exact: true }).count(), 0, "lane captions do not take space below headings");
     assert.equal(await page.getByRole("button", { name: /ready card/ }).isVisible(), true);
+    assert.equal(await page.getByRole("button", { name: /archived card/ }).count(), 0, "Archive starts collapsed");
+    await page.getByRole("button", { name: "Expand Archive lane" }).click();
     let defaultColors: string[] = [];
     for (const theme of ["default", "compline"]) {
       await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
       const colors = new Set<string>();
       for (const status of statuses) {
         const lane = page.locator(`section[data-status="${status}"]`);
-        assert.equal(await lane.getByRole("heading", { name: status[0].toUpperCase() + status.slice(1), exact: true }).isVisible(), true);
+        assert.equal(await lane.getByRole("heading", { name: labels[status] ?? status[0].toUpperCase() + status.slice(1), exact: true }).isVisible(), true);
         const { dot, surface } = await lane.evaluate(element => {
           const dot = element.querySelector(".lane-status-dot")!;
           return { dot: getComputedStyle(dot).backgroundColor, surface: getComputedStyle(document.body).backgroundColor };

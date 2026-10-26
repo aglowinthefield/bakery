@@ -223,3 +223,31 @@ async function waitFor(predicate: () => boolean) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
 }
+
+test("draining refuses new runs and resolves only after active Pi runs finish on their own", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(fakePi, `#!/bin/sh\nsleep 0.5\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+    const card = board.createCard({ title: "Long run", body: "", repo });
+    const other = board.createCard({ title: "Queued", body: "", repo });
+    board.setStatus(card.id, "ready"); board.setStatus(other.id, "ready");
+    const run = worker.start(board.getCard(card.id)!);
+    let drained = false;
+    const drain = worker.drain().then(() => { drained = true; });
+    assert.throws(() => worker.start(board.getCard(other.id)!), /waiting for active runs to finish before restarting/);
+    assert.equal(board.listRuns(other.id).length, 0);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(drained, false);
+    await drain;
+    assert.equal(board.getRun(run.id)?.status, "review");
+    assert.equal(worker.activeCount, 0);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

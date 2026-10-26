@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Clock3 } from "lucide-react";
 import { date } from "./api.js";
 import { Button } from "./components/ui/button.js";
-import type { Run } from "./model.js";
+import type { Card, Run } from "./model.js";
 
 // Shows which provider/model ran a phase, e.g. "Run: anthropic/claude-sonnet-4-5".
 export function AgentBadge({
@@ -25,11 +25,49 @@ export function AgentBadge({
   );
 }
 
-export function AttemptList({ runs }: { runs: Run[] }) {
+const OUTPUT_TAIL_LINES = 40;
+
+export function errorPrompt(
+  run: Run,
+  card?: Pick<Card, "title" | "repo"> | null,
+): string {
+  const lines = [
+    "A Bakery agent run failed. Investigate the failure and fix the cause.",
+    "",
+  ];
+  if (card?.title) lines.push(`Card: ${card.title}`);
+  if (card?.repo) lines.push(`Repo: ${card.repo}`);
+  lines.push(`Attempt: #${run.attempt} (${run.status})`);
+  if (run.worktree) lines.push(`Worktree: ${run.worktree}`);
+  lines.push(`Started: ${run.startedAt}`);
+  if (run.finishedAt) lines.push(`Finished: ${run.finishedAt}`);
+  lines.push("", "Error:", "```", run.error ?? "", "```");
+  const output = run.output.trim();
+  if (output) {
+    const tail = output.split("\n").slice(-OUTPUT_TAIL_LINES).join("\n");
+    lines.push(
+      "",
+      `Last agent output (up to ${OUTPUT_TAIL_LINES} lines):`,
+      "```",
+      tail,
+      "```",
+    );
+  }
+  return lines.join("\n");
+}
+
+export function AttemptList({
+  runs,
+  card,
+}: {
+  runs: Run[];
+  card?: Pick<Card, "title" | "repo"> | null;
+}) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [copyFeedback, setCopyFeedback] = useState<{
     runId: string;
     copied: boolean;
+    kind: "path" | "error";
   } | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -38,12 +76,12 @@ export function AttemptList({ runs }: { runs: Run[] }) {
     },
     [],
   );
-  const copyPath = async (runId: string, path: string) => {
+  const copy = async (runId: string, text: string, kind: "path" | "error") => {
     try {
-      await navigator.clipboard.writeText(path);
-      setCopyFeedback({ runId, copied: true });
+      await navigator.clipboard.writeText(text);
+      setCopyFeedback({ runId, copied: true, kind });
     } catch {
-      setCopyFeedback({ runId, copied: false });
+      setCopyFeedback({ runId, copied: false, kind });
     }
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     feedbackTimer.current = setTimeout(() => setCopyFeedback(null), 3000);
@@ -97,11 +135,11 @@ export function AttemptList({ runs }: { runs: Run[] }) {
                   id={`attempt-${run.id}`}
                   className="border-t border-border"
                 >
-                  {run.worktree && (
+                  {(run.worktree || run.error) && (
                     <div className="px-4 pt-3 text-[11px]">
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span className="min-w-0 flex-1 font-mono text-muted-foreground [overflow-wrap:anywhere]">
-                          {run.worktree}
+                          {run.worktree ?? "No worktree"}
                         </span>
                         <Button
                           type="button"
@@ -109,11 +147,17 @@ export function AttemptList({ runs }: { runs: Run[] }) {
                           size="sm"
                           className="shrink-0"
                           onClick={() => {
-                            if (run.worktree)
-                              void copyPath(run.id, run.worktree);
+                            if (run.error)
+                              void copy(
+                                run.id,
+                                errorPrompt(run, card),
+                                "error",
+                              );
+                            else if (run.worktree)
+                              void copy(run.id, run.worktree, "path");
                           }}
                         >
-                          Copy path
+                          {run.error ? "Copy error" : "Copy path"}
                         </Button>
                       </div>
                       {copyFeedback?.runId === run.id && (
@@ -121,9 +165,13 @@ export function AttemptList({ runs }: { runs: Run[] }) {
                           role={copyFeedback.copied ? "status" : "alert"}
                           className={`mt-1 ${copyFeedback.copied ? "text-primary" : "text-destructive"}`}
                         >
-                          {copyFeedback.copied
-                            ? "Path copied"
-                            : "Could not copy path"}
+                          {copyFeedback.kind === "error"
+                            ? copyFeedback.copied
+                              ? "Error copied as agent prompt"
+                              : "Could not copy error"
+                            : copyFeedback.copied
+                              ? "Path copied"
+                              : "Could not copy path"}
                         </p>
                       )}
                     </div>

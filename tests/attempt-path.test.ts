@@ -5,7 +5,10 @@ import { createServer } from "vite";
 
 const worktree = "/Users/example/projects/a very long repository name/worktrees/attempt-with-an-exact-path";
 const otherWorktree = "/Users/example/projects/other/worktrees/previous";
+const failedWorktree = "/Users/example/.local/share/bakery/worktrees/failed-run";
+const failure = "Pi exited (143); Bakery sent SIGTERM: server received SIGTERM; no settlement event; stderr logged on server";
 const runs = [
+  { id: "errored", attempt: 4, status: "failed", worktree: failedWorktree, output: "line one\nlast words", error: failure, startedAt: "2025-01-01T13:00:00Z", finishedAt: "2025-01-01T13:05:00Z", startedBy: "manual" },
   { id: "first", attempt: 3, status: "failed", worktree, output: "", error: null, startedAt: "2025-01-01T12:00:00Z", finishedAt: null, startedBy: "manual" },
   { id: "missing", attempt: 2, status: "failed", worktree: null, output: "", error: null, startedAt: "2025-01-01T11:00:00Z", finishedAt: null, startedBy: "manual" },
   { id: "older", attempt: 1, status: "failed", worktree: otherWorktree, output: "", error: null, startedAt: "2025-01-01T10:00:00Z", finishedAt: null, startedBy: "manual" },
@@ -32,13 +35,15 @@ async function openAttempts() {
   await page.goto(`http://127.0.0.1:${address.port}/`);
   await page.getByRole("button", { name: /Copy a path/ }).click();
   await page.getByRole("heading", { name: "Attempts" }).waitFor();
-  await page.getByText(worktree, { exact: true }).waitFor();
+  await page.getByText(failedWorktree, { exact: true }).waitFor();
   return { page, browser, server };
 }
 
 test("attempt paths copy exactly, only where present, with visible success and failure", async () => {
   const { page, browser, server } = await openAttempts();
   try {
+    await page.getByRole("button", { name: /Attempt #3/ }).click();
+    await page.getByText(worktree, { exact: true }).waitFor();
     const first = page.locator("#attempt-first");
     const missing = page.locator("#attempt-missing");
     const older = page.locator("#attempt-older");
@@ -57,5 +62,23 @@ test("attempt paths copy exactly, only where present, with visible success and f
     });
     await first.getByRole("button", { name: "Copy path" }).click();
     await first.getByRole("alert").getByText("Could not copy path").waitFor({ timeout: 2000 });
+  } finally { await browser.close(); await server.close(); }
+});
+
+test("failed attempts with an error copy an agent prompt instead of the path", async () => {
+  const { page, browser, server } = await openAttempts();
+  try {
+    const errored = page.locator("#attempt-errored");
+    assert.equal(await errored.getByRole("button", { name: "Copy path" }).count(), 0);
+    await errored.getByRole("button", { name: "Copy error" }).click();
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    assert.match(copied, /Investigate the failure/);
+    assert.ok(copied.includes("Card: Copy a path"));
+    assert.ok(copied.includes("Repo: /Users/example/projects/repo"));
+    assert.ok(copied.includes("Attempt: #4 (failed)"));
+    assert.ok(copied.includes(`Worktree: ${failedWorktree}`));
+    assert.ok(copied.includes(failure));
+    assert.ok(copied.includes("last words"));
+    await errored.getByRole("status").getByText("Error copied as agent prompt").waitFor();
   } finally { await browser.close(); await server.close(); }
 });

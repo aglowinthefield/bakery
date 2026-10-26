@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { addAgent } from "./agent.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 
-export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done";
+export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string };
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light" };
 type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string };
@@ -201,7 +201,7 @@ export class Board {
   private hasUnresolvedAutoFailure(repo: string, since: string | null): boolean {
     return !!this.db.prepare(`SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId
       WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed' AND runs.startedAt>=?
-        AND cards.status!='done'
+        AND cards.status NOT IN ('done', 'archived')
         AND NOT EXISTS (SELECT 1 FROM approvals WHERE approvals.cardId=cards.id AND approvals.merged=1)
         AND NOT EXISTS (SELECT 1 FROM external_integrations WHERE external_integrations.cardId=cards.id)
       LIMIT 1`).get(repo, since ?? "");
@@ -326,6 +326,7 @@ export class Board {
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
+    if (card.status === "archived") throw new Error("Restore this archived card to Done first");
     if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge");
     if (status === "triage" && (card.status !== "ready" || this.listRuns(id).length)) throw new Error("Only unstarted Ready cards can move to Triage");
     if (status === "done" && this.listRuns(id).length) throw new Error("Cards with run work cannot be marked Done without approval and integration");
@@ -336,6 +337,24 @@ export class Board {
     }
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
     return this.getCard(id)!;
+  }
+  // Archiving only hides Done cards in a separate lane. It never touches runs, worktrees, or Git.
+  setArchived(repo: string, ids: string[], archived: boolean): Card[] {
+    const unique = [...new Set(ids)];
+    if (!unique.length || unique.length > 500) throw new Error("Select between 1 and 500 cards");
+    const from = archived ? "done" : "archived", to = archived ? "archived" : "done";
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of unique) {
+        const card = this.getCard(id);
+        if (!card || card.repo !== repo) throw new Error("Card not found on this board");
+        if (card.status !== from) throw new Error(archived ? "Only Done cards can be archived" : "Only archived cards can be restored");
+      }
+      const time = now(), update = this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?");
+      for (const id of unique) update.run(to, time, id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    return unique.map(id => this.getCard(id)!);
   }
   listReviewComments(cardId: string): ReviewComment[] {
     return this.db.prepare("SELECT * FROM review_comments WHERE cardId=? ORDER BY createdAt, id").all(cardId) as ReviewComment[];
@@ -472,6 +491,7 @@ export class Board {
       if (card.status === "running") throw new Error("Card already has an active run");
       if (card.status === "interrupted") throw new Error("Resolve the interrupted process before retrying");
       if (card.status === "done") throw new Error("Reopen this card before starting a run");
+      if (card.status === "archived") throw new Error("Restore this archived card before starting a run");
       if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
       if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry Approve and merge");
       if (this.db.prepare("SELECT 1 FROM auto_review_jobs WHERE cardId=? AND state='running' LIMIT 1").get(cardId))
