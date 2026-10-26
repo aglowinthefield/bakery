@@ -575,6 +575,7 @@ function App() {
               <div className="flex items-center">
                 <button
                   onClick={() => {
+                    if (boardId === item.id) return;
                     setBoardId(item.id);
                     localStorage.setItem("bakery-board", item.id);
                     setSelected(null);
