@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -94,10 +94,61 @@ test("a rolling six-start limit prevents unbounded model spend and persists afte
     item.pickup.tick();
     assert.equal(item.board.autoStartsToday(item.repo), 6);
     assert.equal(item.board.listCards(item.repo).filter(card => card.status === "ready").length, 1);
+    const capped = item.board.getBoard(item.repoBoard.id)!;
+    assert.equal(capped.pickupDailyLimit, 6);
+    assert.equal(capped.autoPickupStarts, 6);
+    const oldest = item.board.listRuns(item.board.listCards(item.repo).find(card => card.title === "Task 0")!.id)[0].startedAt;
+    assert.equal(capped.autoPickupNextAt, new Date(Date.parse(oldest) + 86_400_000).toISOString());
     const second = new Board(join(item.dir, "board.sqlite"));
     assert.equal(second.autoStartsToday(item.repo), 6);
     assert.equal(second.listAutoPickupCandidates().length, 0);
+    assert.equal(second.getBoard(item.repoBoard.id)?.autoPickupNextAt, capped.autoPickupNextAt);
+    assert.throws(() => second.setAutoPickup(item.repoBoard.id, true, 2, 25), /daily.*limit/i);
+    second.setAutoPickup(item.repoBoard.id, true, 2, 8);
+    assert.equal(second.getBoard(item.repoBoard.id)?.pickupDailyLimit, 8);
+    assert.equal(second.listAutoPickupCandidates().length, 1);
+    assert.throws(() => second.resetAutoPickupLimit(item.repoBoard.id), /limit|enabled/i);
+    second.setAutoPickup(item.repoBoard.id, true, 2, 6);
     second.close();
+  } finally { await item.close(); }
+});
+
+test("a start in the same millisecond as a reset counts against the new limit", async () => {
+  const item = fixture();
+  mock.timers.enable({ apis: ["Date"], now: new Date() });
+  try {
+    const first = item.card("Before reset"), second = item.card("After reset"), third = item.card("Blocked");
+    item.board.setAutoPickup(item.repoBoard.id, true, 2, 1);
+    const before = item.board.claim(first.id, "auto");
+    item.board.finish(before.id, "review");
+    item.board.resetAutoPickupLimit(item.repoBoard.id);
+    const after = item.board.claim(second.id, "auto");
+    assert.equal(after.startedAt, before.startedAt);
+    item.board.finish(after.id, "review");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupStarts, 1);
+    assert.throws(() => item.board.claim(third.id, "auto"), /not eligible/);
+  } finally { mock.timers.reset(); await item.close(); }
+});
+
+test("an explicit reset clears the rolling count but retains run history and permits another start", async () => {
+  const item = fixture();
+  try {
+    item.release();
+    item.board.setAutoPickup(item.repoBoard.id, true, 2, 1);
+    const first = item.card("First"), second = item.card("After reset");
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(first.id)?.status === "review");
+    item.pickup.tick();
+    assert.equal(item.board.getCard(second.id)?.status, "ready");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupStarts, 1);
+    assert.throws(() => item.board.resetAutoPickupLimit("missing"), /Board not found/);
+    item.board.resetAutoPickupLimit(item.repoBoard.id);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupStarts, 0);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupNextAt, null);
+    assert.equal(item.board.listRuns(first.id).length, 1, "reset does not erase attempts");
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(second.id)?.status === "review");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupStarts, 1);
   } finally { await item.close(); }
 });
 

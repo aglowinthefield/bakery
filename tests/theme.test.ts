@@ -134,6 +134,7 @@ test("theme picker changes board and open review immediately, then loads the sav
     await page.locator('[data-change="add"]').waitFor();
     assert.deepEqual(await palette(), light);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
+    assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(56, 104, 74)");
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("radio", { name: "Default" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");

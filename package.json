@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "bakery-cli": "./scripts/bakery-cli.mjs"
+  },
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
     "build": "npm run format:check && tsc -b && vite build",
     "start": "tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
+    "bakery": "node scripts/bakery-cli.mjs",
     "format": "prettier --write src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts",
     "format:check": "prettier --check src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts"
   },

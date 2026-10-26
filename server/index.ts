@@ -89,14 +89,23 @@ const server = createServer(async (req, res) => {
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
     }
+    const pickupResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/auto-pickup\/reset-limit$/);
+    if (pickupResetRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(pickupResetRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      send(res, 200, board.resetAutoPickupLimit(repoBoard.id)); return;
+    }
     const settingsRoute = path.match(/^\/api\/boards\/([\w-]+)\/settings$/);
     if (settingsRoute && req.method === "PATCH") {
       const repoBoard = board.getBoard(settingsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       const input = await body(req);
-      if ("autoPickupEnabled" in input || "pickupConcurrency" in input) {
-        if (typeof input.autoPickupEnabled !== "boolean" || !Number.isSafeInteger(input.pickupConcurrency)) throw new Error("Specify autoPickupEnabled and pickupConcurrency together");
-        send(res, 200, board.setAutoPickup(repoBoard.id, input.autoPickupEnabled, Number(input.pickupConcurrency))); return;
+      if ("autoPickupEnabled" in input || "pickupConcurrency" in input || "pickupDailyLimit" in input) {
+        if (typeof input.autoPickupEnabled !== "boolean" || !Number.isSafeInteger(input.pickupConcurrency) ||
+          ("pickupDailyLimit" in input && !Number.isSafeInteger(input.pickupDailyLimit)))
+          throw new Error("Specify autoPickupEnabled and pickupConcurrency together, with an optional integer pickupDailyLimit");
+        send(res, 200, board.setAutoPickup(repoBoard.id, input.autoPickupEnabled, Number(input.pickupConcurrency),
+          "pickupDailyLimit" in input ? Number(input.pickupDailyLimit) : undefined)); return;
       }
       if ("autoReviewEnabled" in input || "verificationCommand" in input) {
         if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
