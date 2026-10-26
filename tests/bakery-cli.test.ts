@@ -75,12 +75,12 @@ test("pickup enable needs consent; disable and concurrency changes use settings 
   try {
     assert.notEqual((await f.run("pickup", "on")).code, 0);
     assert.equal(f.requests.filter(r => r.method === "PATCH").length, 0);
-    const enabled = await f.run("pickup", "on", "--concurrency", "2", "--limit", "8", "--yes");
+    const enabled = await f.run("pickup", "on", "--concurrency", "2", "--limit", "99", "--yes");
     assert.equal(enabled.code, 0, enabled.stderr);
     const disabled = await f.run("pickup", "off");
     assert.equal(disabled.code, 0, disabled.stderr);
     assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [
-      { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 8 },
+      { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 99 },
       { autoPickupEnabled: false, pickupConcurrency: 2, pickupDailyLimit: 6 },
     ]);
   } finally { await f.close(); }

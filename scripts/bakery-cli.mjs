@@ -11,7 +11,7 @@ Usage: bakery-cli boards [--json]
        bakery-cli triage CARD_ID [--board ID|PATH]
        bakery-cli runs CARD_ID [--board ID|PATH] [--json]
        bakery-cli conflicts [--board ID|PATH] [--json]
-       bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-24] [--board ID|PATH] [--yes]
+       bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--board ID|PATH] [--yes]
 
 Set BAKERY_URL (or BAKERY_PORT) to use a different local server. --json prints full API data.
 --yes is required before enabling or resetting pickup, or moving a card to Ready on a pickup-enabled board;
@@ -128,7 +128,7 @@ async function main() {
     const concurrency = opts.concurrency === undefined ? board.pickupConcurrency : Number(opts.concurrency);
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Concurrency must be an integer from 1 to 4");
     const limit = opts.limit === undefined ? (board.pickupDailyLimit ?? 6) : Number(opts.limit);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 24) throw new Error("Limit must be an integer from 1 to 24");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 99) throw new Error("Limit must be an integer from 1 to 99");
     if (args[0] === "on" && board.autoPickupEnabled && limit > board.pickupDailyLimit && !opts.yes)
       throw new Error("Raising the limit can start paid Pi runs immediately. Repeat with --yes to confirm.");
     const updated = await request(origin, `${path}/settings`, "PATCH", { autoPickupEnabled: args[0] === "on", pickupConcurrency: concurrency, pickupDailyLimit: limit });

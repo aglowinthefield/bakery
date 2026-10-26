@@ -163,7 +163,7 @@ export class Board {
     if (!current) throw new Error("Board not found");
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Auto-pickup concurrency must be between 1 and 4");
     const limit = dailyLimit ?? current.pickupDailyLimit;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 24) throw new Error("Auto-pickup daily start limit must be between 1 and 24");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 99) throw new Error("Auto-pickup daily start limit must be between 1 and 99");
     this.db.prepare("UPDATE boards SET autoPickupEnabled=?, pickupConcurrency=?, pickupDailyLimit=?, autoPickupEnabledAt=?, autoPickupError='' WHERE id=?")
       .run(enabled ? 1 : 0, concurrency, limit, enabled ? (current.autoPickupEnabled ? current.autoPickupEnabledAt : now()) : null, id);
     return this.getBoard(id)!;

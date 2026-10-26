@@ -122,13 +122,13 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 5 })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 0 })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 25 })).status, 400);
-    const pickup = await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 8 });
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 100 })).status, 400);
+    const pickup = await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 99 });
     assert.equal(pickup.data.autoPickupEnabled, true);
-    assert.equal(pickup.data.pickupDailyLimit, 8);
+    assert.equal(pickup.data.pickupDailyLimit, 99);
     assert.equal((await request(`/boards/${first.id}/auto-pickup/reset-limit`, "POST")).status, 400);
     assert.equal((await request(`/boards/missing/auto-pickup/reset-limit`, "POST")).status, 404);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: false, pickupConcurrency: 2 })).data.pickupDailyLimit, 8);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: false, pickupConcurrency: 2 })).data.pickupDailyLimit, 99);
     assert.equal((await request("/boards")).data.find((item: { id: string }) => item.id === second.id).autoCollapseEmptySwimlanes, false);
     execFileSync("git", ["-C", alpha, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;
