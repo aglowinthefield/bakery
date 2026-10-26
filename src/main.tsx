@@ -670,9 +670,8 @@ function App() {
             </p>
           </fieldset>
           <div className="mt-6 border-t border-border pt-5 text-sm">
-            <div className="font-medium">
-              Unattended review ·{" "}
-              {currentBoard?.repo.split("/").at(-1) ?? "select a repository"}
+            <div className="break-all font-medium">
+              Unattended review · {currentBoard?.repo ?? "select a repository"}
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               A tool-free Pi reviewer inspects new Review cards; the
