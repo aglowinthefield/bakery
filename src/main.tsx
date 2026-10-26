@@ -90,7 +90,7 @@ function RepositoryPathInput({
     setDismissed(false);
   };
   return (
-    <div className="relative min-w-0 flex-1">
+    <div className="min-w-0 flex-1">
       <input
         required
         role="combobox"
@@ -149,7 +149,7 @@ function RepositoryPathInput({
           id="repository-path-options"
           role="listbox"
           aria-label="Directory suggestions"
-          className="absolute top-full z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg"
+          className="mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg"
         >
           {suggestions.map((path, index) => (
             <button
@@ -179,6 +179,29 @@ function App() {
   const [addingRepo, setAddingRepo] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [repoPath, setRepoPath] = useState("");
+  const [repoCheck, setRepoCheck] = useState<{
+    path: string;
+    error?: string;
+  } | null>(null);
+  useEffect(() => {
+    if ((!addingRepo && !editingBoard) || !repoPath.trim()) return;
+    let current = true;
+    const timer = setTimeout(() => {
+      void api<{ root: string }>(
+        `/repository-root?path=${encodeURIComponent(repoPath)}`,
+      )
+        .then(() => {
+          if (current) setRepoCheck({ path: repoPath });
+        })
+        .catch((err) => {
+          if (current) setRepoCheck({ path: repoPath, error: String(err) });
+        });
+    }, 150);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [repoPath, addingRepo, editingBoard]);
   const [cards, setCards] = useState<Card[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [verificationDraft, setVerificationDraft] = useState("");
@@ -1060,6 +1083,11 @@ function App() {
               {error}
             </p>
           )}
+          {repoCheck?.path === repoPath && repoCheck.error && (
+            <p role="alert" className="mt-3 text-sm text-destructive">
+              {repoCheck.error}
+            </p>
+          )}
           <form
             className="mt-5 flex gap-2"
             onSubmit={(event) => {
@@ -1090,7 +1118,12 @@ function App() {
             }}
           >
             <RepositoryPathInput value={repoPath} onChange={setRepoPath} />
-            <Button disabled={busy} type="submit">
+            <Button
+              disabled={
+                busy || repoCheck?.path !== repoPath || !!repoCheck.error
+              }
+              type="submit"
+            >
               {editingBoard ? "Save" : "Add"}
             </Button>
           </form>

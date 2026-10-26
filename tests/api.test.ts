@@ -20,6 +20,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
   const alpha = join(home, "code", "alpha"), beta = join(home, "code", "beta"), gamma = join(home, "code", "gamma");
   mkdirSync(alpha, { recursive: true }); mkdirSync(beta); mkdirSync(gamma);
   mkdirSync(join(home, "code", "alpine"));
+  mkdirSync(join(alpha, "subfolder"));
   for (const repo of [alpha, beta, gamma]) execFileSync("git", ["init", "-q", repo]);
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
@@ -46,9 +47,13 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Fal")).data, ["~/code/alpha/", "~/code/alpine/"]);
     assert.deepEqual((await request(`/path-suggestions?path=${encodeURIComponent(join(home, "code") + "/al")}`)).data, [alpha + "/", join(home, "code", "alpine") + "/"]);
-    assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Falpha%2F")).data, []);
+    assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Falpha%2F")).data, ["~/code/alpha/subfolder/"]);
     assert.deepEqual((await request("/path-suggestions?path=code%2Fal")).data, []);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fmissing%2Fa")).data, []);
+    assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha")}`)).data.root, realpathSync(alpha));
+    assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpine")}`)).status, 400);
+    assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code")}`)).status, 400);
+    assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha/subfolder")}`)).status, 400);
     assert.equal((await request(`/path-suggestions?path=${"a".repeat(1025)}`)).status, 400);
     assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" });
     assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
@@ -72,6 +77,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(first.autoPickupNextAt, null);
     assert.equal((await request("/boards", "POST", { repo: alpha })).status, 400);
     assert.equal((await request("/boards", "POST", { repo: "code/beta" })).status, 400);
+    assert.equal((await request("/boards", "POST", { repo: "~/code/alpine" })).status, 400);
     const second = (await request("/boards", "POST", { repo: beta })).data;
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: "yes" })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", {})).status, 400);
