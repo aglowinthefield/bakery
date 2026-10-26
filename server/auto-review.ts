@@ -1,6 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { Board, type Card, type RepoBoard, type Run } from "./board.js";
-import { agentsInStream } from "./agent.js";
+import { agentsInStream, usageInStream } from "./agent.js";
 import { Integration } from "./integration.js";
 
 // Keep the reviewer deliberately tool-free: it sees the bounded diff, but cannot edit or run commands.
@@ -130,8 +130,9 @@ export class AutoReview {
       child.once("error", error => { clearTimeout(timer); reject(error); });
       child.once("close", code => {
         clearTimeout(timer);
-        // Record which agent reviewed, even when its verdict is unusable.
+        // Record which agent reviewed and what it cost, even when its verdict is unusable.
         for (const label of agentsInStream(stdout).split(", ").filter(Boolean)) this.board.recordAutoReviewAgent(runId, label);
+        this.board.recordAutoReviewUsage(runId, usageInStream(stdout));
         if (exceeded) reject(new Error("Agent review timed out or exceeded its output limit"));
         else if (code !== 0) reject(new Error(`Agent review failed (${code}): ${stderr.slice(-1000)}`));
         else resolve(stdout);

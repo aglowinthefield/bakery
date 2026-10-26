@@ -1,3 +1,4 @@
+import type { UsageFields } from "./usage.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
 
 export type Status =
@@ -26,6 +27,9 @@ export type Board = {
   autoPickupNextAt: string | null;
   autoPickupEnabledAt: string | null;
   autoPickupError: string;
+  pickupCostBudget?: number | null;
+  cost24h?: number;
+  autoPickupBudgetReached?: boolean;
   cardCounts?: Partial<Record<Status, number>>;
 };
 export type AutoReviewJob = {
@@ -37,7 +41,7 @@ export type AutoReviewJob = {
   startedAt: string;
   finishedAt: string | null;
   agent: string;
-};
+} & UsageFields;
 export type BakerySettings = {
   confirmRunStart: boolean;
   notifyOnReview: boolean;
@@ -81,7 +85,8 @@ export type Card = {
   turnsIncomplete: number;
   runAgent: string;
   reviewAgent: string;
-};
+  usageIncomplete?: number;
+} & UsageFields;
 export type Run = {
   id: string;
   attempt: number;
@@ -93,4 +98,4 @@ export type Run = {
   finishedAt: string | null;
   startedBy: "manual" | "auto";
   agent: string;
-};
+} & UsageFields;

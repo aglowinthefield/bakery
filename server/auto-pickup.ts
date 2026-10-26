@@ -2,7 +2,8 @@ import type { Board } from "./board.js";
 import type { Worker } from "./worker.js";
 
 // The database claim is the final concurrency/cap guard. This timer only chooses
-// eligible Ready cards; it never resumes interrupted runs or retries failed ones.
+// eligible Ready cards; it never resumes interrupted runs or retries failed ones. Like the start limit, a
+// reached cost budget only makes pickup wait; spend already running is never stopped.
 export class AutoPickup {
   private timer?: ReturnType<typeof setInterval>;
   constructor(private readonly board: Board, private readonly worker: Worker) {}
@@ -23,7 +24,8 @@ export class AutoPickup {
       }
       const candidates = this.board.listAutoPickupCandidates().filter(item => item.board.id === repoBoard.id);
       for (const { card } of candidates) {
-        if (this.board.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || this.board.autoStartsToday(repoBoard.repo) >= repoBoard.pickupDailyLimit) break;
+        if (this.board.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || this.board.autoStartsToday(repoBoard.repo) >= repoBoard.pickupDailyLimit ||
+          this.board.autoPickupBudgetReached(repoBoard.repo)) break;
         try {
           this.worker.start(card, "auto");
         } catch (error) {

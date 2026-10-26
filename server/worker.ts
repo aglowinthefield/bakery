@@ -1,7 +1,7 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { agentLabel } from "./agent.js";
+import { agentLabel, messageUsage } from "./agent.js";
 import { Board, type Card, type Run } from "./board.js";
 
 function git(repo: string, ...args: string[]) {
@@ -82,6 +82,8 @@ export class Worker {
             if (label && label !== lastAgent) { lastAgent = label; this.board.recordAgent(run.id, label); }
           }
           if (event.type === "message_end" && event.message?.role === "assistant") {
+            const usage = messageUsage(event.message);
+            if (usage) this.board.recordUsage(run.id, usage);
             if (event.message.stopReason === "error") {
               terminalModelError = providerFailure(event.message.errorMessage);
               this.board.append(run.id, `\n${terminalModelError}; Pi may retry.\n`);

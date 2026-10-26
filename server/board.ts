@@ -1,13 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { addAgent } from "./agent.js";
+import { addAgent, type Usage } from "./agent.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean };
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light" };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string };
-const toRepoBoard = (row: BoardRow, starts: string[]): RepoBoard => ({
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; pickupCostBudget: number | null };
+const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
   autoReviewEnabledAt: row.autoReviewEnabledAt, pickupConcurrency: row.pickupConcurrency,
   pickupDailyLimit: row.pickupDailyLimit, autoPickupEnabledAt: row.autoPickupEnabledAt, autoPickupError: row.autoPickupError,
@@ -16,19 +16,31 @@ const toRepoBoard = (row: BoardRow, starts: string[]): RepoBoard => ({
   autoPickupStarts: starts.length,
   autoPickupNextAt: starts.length >= row.pickupDailyLimit
     ? new Date(Date.parse(starts[starts.length - row.pickupDailyLimit]) + 86_400_000).toISOString() : null,
+  pickupCostBudget: row.pickupCostBudget, cost24h,
+  autoPickupBudgetReached: row.pickupCostBudget !== null && cost24h >= row.pickupCostBudget,
 });
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; runAgent: string; reviewAgent: string };
-export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string };
+// Token and cost columns are NULL for attempts recorded before Bakery tracked usage; new attempts start at 0.
+const usageColumns = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "cost"] as const;
+type UsageFields = { [Key in keyof Usage]: number | null };
+const usageDefinitions = "inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheWriteTokens INTEGER, cost REAL";
+const usageUpdate = usageColumns.map(column => `${column}=COALESCE(${column}, 0)+?`).join(", ");
+const usageValues = (usage: Usage) => usageColumns.map(column => usage[column]);
+// A card's usage sums its attempts and agent reviews; usageIncomplete is 1 when an older one has no record.
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; runAgent: string; reviewAgent: string; usageIncomplete: number } & UsageFields;
+export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string };
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, pickupCostBudget";
 const now = () => new Date().toISOString();
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
-  COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent
-  FROM cards LEFT JOIN runs ON runs.cardId=cards.id`;
+  COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent,
+  ${usageColumns.map(column => `MAX(spend.${column}) AS ${column}`).join(", ")}, COALESCE(MAX(spend.unrecorded), 0) AS usageIncomplete
+  FROM cards LEFT JOIN runs ON runs.cardId=cards.id
+  LEFT JOIN (SELECT cardId, ${usageColumns.map(column => `SUM(${column}) AS ${column}`).join(", ")}, MAX(cost IS NULL) AS unrecorded
+    FROM (SELECT cardId, ${usageColumns.join(", ")} FROM runs UNION ALL SELECT cardId, ${usageColumns.join(", ")} FROM auto_review_jobs) GROUP BY cardId) spend ON spend.cardId=cards.id`;
 
 export class Board {
   private db: DatabaseSync;
@@ -36,12 +48,12 @@ export class Board {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'layout-grid', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', ${usageDefinitions}, UNIQUE(cardId, attempt));
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'layout-grid', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0, pickupCostBudget REAL);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT);
+      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)));
@@ -81,6 +93,7 @@ export class Board {
     if (!boardColumns.has("autoPickupResetRunRowid")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoPickupEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupEnabledAt TEXT");
     if (!boardColumns.has("autoPickupError")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupError TEXT NOT NULL DEFAULT ''");
+    if (!boardColumns.has("pickupCostBudget")) this.db.exec("ALTER TABLE boards ADD COLUMN pickupCostBudget REAL");
     if (!boardColumns.has("autoPickupResumeOnResolution")) {
       this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0");
       // Older failure pauses lost their enablement timestamp; recognize only this exact legacy reason.
@@ -103,8 +116,12 @@ export class Board {
     if (!runColumns.has("startedBy")) this.db.exec("ALTER TABLE runs ADD COLUMN startedBy TEXT NOT NULL DEFAULT 'manual'");
     // Older runs did not record their agent; they keep an empty label rather than a guess.
     if (!runColumns.has("agent")) this.db.exec("ALTER TABLE runs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
-    if (!(this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).some(column => column.name === "agent"))
-      this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
+    const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
+    if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
+    // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
+    for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
+      for (const definition of usageDefinitions.split(", "))
+        if (!columns.has(definition.split(" ")[0])) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
     const approvalColumns = new Set((this.db.prepare("PRAGMA table_info(approvals)").all() as { name: string }[]).map(column => column.name));
     if (!approvalColumns.has("preparedHead")) this.db.exec("ALTER TABLE approvals ADD COLUMN preparedHead TEXT");
     if (!approvalColumns.has("merged")) this.db.exec("ALTER TABLE approvals ADD COLUMN merged INTEGER NOT NULL DEFAULT 0");
@@ -135,7 +152,15 @@ export class Board {
     const starts = (this.db.prepare(`SELECT runs.startedAt FROM runs JOIN cards ON cards.id=runs.cardId
       WHERE cards.repo=? AND runs.startedBy='auto' AND runs.rowid>?
         AND julianday(runs.startedAt)>=julianday('now','-1 day') ORDER BY runs.startedAt`).all(row.repo, row.autoPickupResetRunRowid) as { startedAt: string }[]).map(run => run.startedAt);
-    return toRepoBoard(row, starts);
+    return toRepoBoard(row, starts, this.cost24h(row.repo));
+  }
+  // Rolling 24h spend: attempts and agent reviews still running or finished within the last day.
+  // Cost accrues while a run is active, so a long run counts until a day after it ends.
+  private cost24h(repo: string): number {
+    const spend = (table: "runs" | "auto_review_jobs") => `SELECT ${table}.cost FROM ${table} JOIN cards ON cards.id=${table}.cardId
+      WHERE cards.repo=? AND ${table}.cost IS NOT NULL AND (${table}.finishedAt IS NULL OR julianday(${table}.finishedAt)>=julianday('now','-1 day'))`;
+    const row = this.db.prepare(`SELECT COALESCE(SUM(cost), 0) AS total FROM (${spend("runs")} UNION ALL ${spend("auto_review_jobs")})`).get(repo, repo) as { total: number };
+    return row.total;
   }
   listBoards(): RepoBoard[] { return (this.db.prepare(`SELECT ${boardFields} FROM boards WHERE archived=0 ORDER BY repo`).all() as BoardRow[]).map(row => this.toBoard(row)); }
   getBoard(id: string): RepoBoard | undefined {
@@ -184,14 +209,17 @@ export class Board {
       .run(enabled ? 1 : 0, command, enabled ? (board.autoReviewEnabled && board.verificationCommand === command ? board.autoReviewEnabledAt : now()) : null, id);
     return this.getBoard(id)!;
   }
-  setAutoPickup(id: string, enabled: boolean, concurrency: number, dailyLimit?: number): RepoBoard {
+  setAutoPickup(id: string, enabled: boolean, concurrency: number, dailyLimit?: number, costBudget?: number | null): RepoBoard {
     const current = this.getBoard(id);
     if (!current) throw new Error("Board not found");
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Auto-pickup concurrency must be between 1 and 4");
     const limit = dailyLimit ?? current.pickupDailyLimit;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 99) throw new Error("Auto-pickup daily start limit must be between 1 and 99");
-    this.db.prepare("UPDATE boards SET autoPickupEnabled=?, pickupConcurrency=?, pickupDailyLimit=?, autoPickupEnabledAt=?, autoPickupError='', autoPickupResumeOnResolution=0 WHERE id=?")
-      .run(enabled ? 1 : 0, concurrency, limit, enabled ? (current.autoPickupEnabled ? current.autoPickupEnabledAt : now()) : null, id);
+    const budget = costBudget === undefined ? current.pickupCostBudget : costBudget;
+    if (budget !== null && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0.01 || budget > 10_000))
+      throw new Error("Auto-pickup daily cost budget must be off or between $0.01 and $10,000");
+    this.db.prepare("UPDATE boards SET autoPickupEnabled=?, pickupConcurrency=?, pickupDailyLimit=?, pickupCostBudget=?, autoPickupEnabledAt=?, autoPickupError='', autoPickupResumeOnResolution=0 WHERE id=?")
+      .run(enabled ? 1 : 0, concurrency, limit, budget === null ? null : Math.round(budget * 100) / 100, enabled ? (current.autoPickupEnabled ? current.autoPickupEnabledAt : now()) : null, id);
     return this.getBoard(id)!;
   }
   resetAutoPickupLimit(id: string): RepoBoard {
@@ -237,6 +265,9 @@ export class Board {
   runningCount(repo: string): number {
     return (this.db.prepare("SELECT COUNT(*) AS n FROM cards WHERE repo=? AND status='running'").get(repo) as { n: number }).n;
   }
+  autoPickupBudgetReached(repo: string): boolean {
+    return !!this.listBoards().find(item => item.repo === repo)?.autoPickupBudgetReached;
+  }
   autoStartsToday(repo: string): number {
     const row = this.db.prepare(`SELECT ${boardFields} FROM boards WHERE repo=? AND archived=0`).get(repo) as BoardRow | undefined;
     return row ? this.toBoard(row).autoPickupStarts : 0;
@@ -244,7 +275,7 @@ export class Board {
   listAutoPickupCandidates(): { card: Card; board: RepoBoard }[] {
     const result: { card: Card; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
-      if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit) continue;
+      if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached) continue;
       const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY createdAt, rowid").all(repoBoard.repo) as { id: string }[];
       result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })));
     }
@@ -285,7 +316,7 @@ export class Board {
     try {
       const candidate = this.listAutoReviewCandidates().find(item => item.card.id === cardId && item.run.id === runId);
       if (!candidate) throw new Error("Auto-review is not eligible for this card");
-      this.db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt) VALUES (?,?,'running',?)").run(cardId, runId, now());
+      this.db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,cost) VALUES (?,?,'running',?,0,0,0,0,0)").run(cardId, runId, now());
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
@@ -296,6 +327,9 @@ export class Board {
   recordAutoReviewAgent(runId: string, label: string): void {
     const job = this.getAutoReviewJob(runId);
     if (job) this.db.prepare("UPDATE auto_review_jobs SET agent=? WHERE runId=?").run(addAgent(job.agent, label), runId);
+  }
+  recordAutoReviewUsage(runId: string, usage: Usage): void {
+    this.db.prepare(`UPDATE auto_review_jobs SET ${usageUpdate} WHERE runId=?`).run(...usageValues(usage), runId);
   }
   renameBoard(id: string, repo: string): RepoBoard {
     const board = this.getBoard(id);
@@ -519,11 +553,11 @@ export class Board {
       if (repoBoard?.autoPickupEnabled && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
         throw new Error(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
-        this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit || this.autoPickupBlocker(repoBoard)))
+        this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       const id = randomUUID(), sessionId = `bakery-${cardId}`;
-      this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy) VALUES (?, ?, ?, 'running', ?, ?, ?)").run(id, cardId, attempt, sessionId, now(), startedBy);
+      this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy);
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
       this.db.exec("COMMIT");
       return this.getRun(id)!;
@@ -535,6 +569,9 @@ export class Board {
   recordAgent(id: string, label: string) {
     const run = this.getRun(id);
     if (run?.status === "running") this.db.prepare("UPDATE runs SET agent=? WHERE id=?").run(addAgent(run.agent, label), id);
+  }
+  recordUsage(id: string, usage: Usage) {
+    this.db.prepare(`UPDATE runs SET ${usageUpdate} WHERE id=? AND status='running'`).run(...usageValues(usage), id);
   }
   completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
   append(id: string, chunk: string) {

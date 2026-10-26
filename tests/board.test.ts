@@ -281,7 +281,14 @@ test("existing cards become repository boards without losing runs", () => {
     assert.equal(board.listRuns("old-card")[0]?.sessionId, "old-session");
     assert.equal(board.listCards(repo)[0]?.turns, 3);
     assert.equal(board.listCards(repo)[0]?.turnsIncomplete, 1);
+    assert.equal(board.listRuns("old-card")[0]?.cost, null, "pre-usage attempts show no recorded cost");
+    assert.equal(board.listRuns("old-card")[0]?.inputTokens, null);
+    assert.equal(board.listCards(repo)[0]?.cost, null);
     const next = board.claim("old-card");
+    assert.equal(board.getRun(next.id)?.cost, 0, "new attempts start recording at zero");
+    board.recordUsage(next.id, { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0.5 });
+    assert.equal(board.listCards(repo)[0]?.cost, 0.5);
+    assert.equal(board.listCards(repo)[0]?.usageIncomplete, 1);
     board.completeTurn(next.id);
     board.completeTurn(next.id);
     assert.equal(board.listCards(repo)[0]?.turns, 5);

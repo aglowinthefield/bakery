@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
 const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
-async function fixture(boards = [board]) {
+async function fixture(boards: object[] = [board]) {
   const requests: { method: string; path: string; input: unknown }[] = [];
   const server = createServer(async (req, res) => {
     let text = "";
@@ -23,7 +23,11 @@ async function fixture(boards = [board]) {
     else if (path === `/api/boards/${board.id}/cards/card-one/status` && req.method === "POST") data = { id: "card-one", status: (input as { status: string }).status };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|two)\/start$/.test(path) && req.method === "POST") data = { id: `run-${path.split("/")[5]}`, attempt: 2, status: "running" };
     else if (path === `/api/boards/${board.id}/cards/card-three/start` && req.method === "POST") { res.writeHead(400); res.end(JSON.stringify({ error: "Move this card to Ready before starting a run" })); return; }
-    else if (path === `/api/boards/${board.id}/cards/card-one/runs`) data = [{ id: "run-one", status: "failed", startedBy: "auto" }];
+    else if (path === `/api/boards/${board.id}/cards/card-one/runs`) data = [
+      { id: "run-two", status: "review", startedBy: "manual", inputTokens: 1200, outputTokens: 300, cacheReadTokens: 5000, cacheWriteTokens: 100, cost: 0.42 },
+      { id: "run-one", status: "failed", startedBy: "auto", inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, cost: null },
+    ];
+    else if (path === `/api/boards/${board.id}/cards/card-one/auto-review`) data = [{ runId: "run-two", state: "needs_human", agent: "", inputTokens: 800, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0.08 }];
     else if (path === `/api/boards/${board.id}/conflicts`) data = [{ cardId: "card-one", details: "merge conflict" }];
     else if (path === `/api/boards/${board.id}/settings` && req.method === "PATCH") data = { ...board, ...(input as object) };
     else if (path === `/api/boards/${board.id}/auto-pickup/reset-limit` && req.method === "POST") data = { ...board, autoPickupStarts: 0, autoPickupNextAt: null };
@@ -48,9 +52,18 @@ test("lists boards, cards, runs and conflicts through the HTTP API", async () =>
   try {
     assert.match((await f.run("boards")).stdout, /bakery-project/);
     assert.match((await f.run("cards")).stdout, /card-one.*Make an improvement/);
-    assert.deepEqual(JSON.parse((await f.run("runs", "card-one", "--json")).stdout), [{ id: "run-one", status: "failed", startedBy: "auto" }]);
+    const runs = JSON.parse((await f.run("runs", "card-one", "--json")).stdout);
+    assert.equal(runs.cardId, "card-one");
+    assert.deepEqual(runs.runs.map((run: { id: string }) => run.id), ["run-two", "run-one"]);
+    assert.equal(runs.reviews.length, 1);
+    assert.deepEqual(runs.total, { inputTokens: 2000, outputTokens: 320, cacheReadTokens: 5000, cacheWriteTokens: 100, cost: 0.5, incomplete: true });
+    const text = (await f.run("runs", "card-one")).stdout;
+    assert.match(text, /run-two.*\$0\.42 \(1200 in, 300 out, 5000 cache read, 100 cache write\)/);
+    assert.match(text, /run-one\tfailed.*\t—/, "an older attempt without usage shows a dash, not $0");
+    assert.match(text, /^total\t\$0\.50 .*older attempts not recorded/m);
     assert.match((await f.run("conflicts")).stdout, /merge conflict/);
-    assert.deepEqual(f.requests.map(r => r.path), ["/api/boards", "/api/boards", `/api/boards/${board.id}/cards`, "/api/boards", `/api/boards/${board.id}/cards/card-one/runs`, "/api/boards", `/api/boards/${board.id}/conflicts`]);
+    assert.deepEqual(f.requests.map(r => r.path), ["/api/boards", "/api/boards", `/api/boards/${board.id}/cards`, "/api/boards", `/api/boards/${board.id}/cards/card-one/runs`, `/api/boards/${board.id}/cards/card-one/auto-review`,
+      "/api/boards", `/api/boards/${board.id}/cards/card-one/runs`, `/api/boards/${board.id}/cards/card-one/auto-review`, "/api/boards", `/api/boards/${board.id}/conflicts`]);
   } finally { await f.close(); }
 });
 
@@ -126,5 +139,17 @@ test("start needs consent, starts each card independently, and reports refusals"
     assert.match(started.stdout, /card-three\terror\tBakery 400: Move this card to Ready/);
     assert.match(started.stdout, /card-two\tattempt #2\trunning/);
     assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.path), ["card-one", "card-three", "card-two"].map(id => `/api/boards/${board.id}/cards/${id}/start`));
+  } finally { await f.close(); }
+});
+
+test("pickup shows 24-hour spend and sets or clears an optional cost budget", async () => {
+  const f = await fixture([{ ...board, cost24h: 4.5, pickupCostBudget: 4, autoPickupBudgetReached: true }]);
+  try {
+    assert.match((await f.run("pickup")).stdout, /\$4\.50 spent in 24h of \$4\.00 budget \(waiting: budget reached\)/);
+    assert.match((await f.run("pickup", "on", "--budget", "-1", "--yes")).stderr, /Budget must be off/);
+    assert.match((await f.run("runs", "card-one", "--budget", "5")).stderr, /only valid with pickup/);
+    assert.equal((await f.run("pickup", "on", "--budget", "$12.5", "--yes")).code, 0);
+    assert.equal((await f.run("pickup", "off", "--budget", "off")).code, 0);
+    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => (r.input as { pickupCostBudget?: unknown }).pickupCostBudget), [12.5, null]);
   } finally { await f.close(); }
 });

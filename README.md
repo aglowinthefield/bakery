@@ -121,6 +121,7 @@ Each attempt in a card's **Attempts** list shows:
 
 - The agent that ran it as `provider/model`, for example `anthropic/claude-…` or `openai-codex/gpt-…`. The board card shows the latest run and review agents.
 - A transcript: assistant text, plus one line per turn with tool counts, failures, and changed files. Tool arguments and results aren't stored. Pi's own session has the full conversation.
+- Its cost, as reported by Pi on each assistant message. Hover it for input, output, and cache token counts. Attempts from before Bakery tracked usage show `—`, not `$0.00`. The heading shows the card's total across all attempts and agent reviews.
 - The worktree path, with **Copy path**. Failed attempts have **Copy error** instead, which copies a prompt you can paste into an agent: card, repo, worktree, error, and the end of the output.
 
 The clock on a card counts completed Pi turns across attempts. Older runs show an estimate marked with `~` or `?`.
@@ -129,7 +130,9 @@ Provider errors show only their HTTP status. Pi's stderr goes to the server cons
 
 ## Automation (opt-in)
 
-Both features are off by default and set per repository in **Settings**. Both can start paid Pi runs, and both need the server to keep running. Their limits count runs, not tokens or cost.
+Both features are off by default and set per repository in **Settings**. Both can start paid Pi runs, and both need the server to keep running.
+
+The board header shows **Last 24h**: the cost of attempts and agent reviews that are running or finished in the last 24 hours.
 
 ### Automatic pickup
 
@@ -137,6 +140,7 @@ The server starts the oldest Ready cards for you.
 
 - **Concurrency:** 1 to 4 runs at once (default 2). Manually started runs count toward it.
 - **Daily limit:** 1 to 99 automatic starts in any rolling 24 hours (default 6). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
+- **Daily cost budget:** optional, off by default. When the board's last-24h cost reaches it, pickup waits and the board says why. Pickup resumes as older spend leaves the window, or when you raise or clear the budget. Running work isn't stopped, and manual starts still work. Cost comes from Pi's own pricing, so it's an estimate and can overshoot by whatever runs were already in progress.
 - **Pauses:** pickup pauses on a failed automatic run, an interrupted card, or a startup error, and the board shows why. After a failure, pickup resumes on its own once every failed automatic card is merged and nothing is interrupted. Other pauses need you to turn it back on.
 - Turning pickup off stops new starts. Runs already in progress keep going.
 
@@ -174,12 +178,13 @@ npm run bakery -- triage CARD_ID
 npm run bakery -- start CARD_ID... --yes
 npm run bakery -- runs CARD_ID
 npm run bakery -- conflicts
-npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--yes]
+npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
 ```
 
 - Add `--board ID|PATH` if you have more than one board, and `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
-- `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them.
+- `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
+- `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
 - To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get a `bakery-cli` command on your `PATH`, run `npm link`.
 
@@ -221,7 +226,7 @@ If the server crashes, the supervisor restarts it after 1 second, backing off to
 
 - Pi is told not to commit, push, or publish during a run. **That instruction isn't a sandbox.** Only run agents on repositories you trust.
 - Verification commands for unattended review run with your permissions.
-- Every run, retry, pickup, and review can spend model tokens. Bakery doesn't track tokens or cost.
+- Every run, retry, pickup, and review can spend model tokens. Bakery records the tokens and cost Pi reports, but only a daily cost budget stops automatic pickup. Nothing stops a run that is already going.
 
 ## Development
 
@@ -231,7 +236,7 @@ npm run build          # runs format:check, tsc, and vite build
 npm run format         # fixes formatting in the covered frontend files
 ```
 
-The formatter check covers the board, card details, review, attempts, API, and model modules. It doesn't cover server or test files yet.
+The formatter check covers the board, card details, review, attempts, usage, API, and model modules. It doesn't cover server or test files yet.
 
 Tests use a fake offline `pi` and temporary Git repositories. They don't call a model or touch repositories you've added to Bakery.
 
@@ -239,4 +244,4 @@ Tests use a fake offline `pi` and temporary Git repositories. They don't call a 
 
 - Read-only Linear import into local cards, keyed by issue ID. Bakery won't write to Linear.
 - Better process identity checks for interrupted runs, beyond PID liveness.
-- External CI before approval, token and cost budgets, and automatic card creation.
+- External CI before approval and automatic card creation.

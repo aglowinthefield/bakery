@@ -3,6 +3,25 @@ import { ChevronDown, ChevronRight, Clock3 } from "lucide-react";
 import { date } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import type { Card, Run } from "./model.js";
+import { formatCost, usageTitle, type UsageFields } from "./usage.js";
+
+// Cost of one attempt or review. Older attempts without a usage record show "—", never $0.
+export function CostBadge({
+  usage,
+  label = "Cost",
+}: {
+  usage: UsageFields;
+  label?: string;
+}) {
+  return (
+    <span
+      title={usageTitle(usage)}
+      className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+    >
+      {label}: {formatCost(usage.cost)}
+    </span>
+  );
+}
 
 // Shows which provider/model ran a phase, e.g. "Run: anthropic/claude-sonnet-4-5".
 export function AgentBadge({
@@ -61,7 +80,10 @@ export function AttemptList({
   card,
 }: {
   runs: Run[];
-  card?: Pick<Card, "title" | "repo"> | null;
+  card?:
+    | (Pick<Card, "title" | "repo"> &
+        Partial<Pick<Card, "cost" | "usageIncomplete">>)
+    | null;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [copyFeedback, setCopyFeedback] = useState<{
@@ -88,9 +110,22 @@ export function AttemptList({
   };
   return (
     <div className="mt-8">
-      <h3 className="mb-4 text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">
-        Attempts
-      </h3>
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">
+          Attempts
+        </h3>
+        {runs.length > 0 && (
+          <span
+            className="font-mono text-[11px] text-muted-foreground"
+            title="Sum of every attempt and agent review on this card"
+          >
+            Card total: {formatCost(card?.cost)}
+            {card?.usageIncomplete && typeof card.cost === "number"
+              ? " + older attempts not recorded"
+              : ""}
+          </span>
+        )}
+      </div>
       <div className="space-y-4">
         {runs.map((run, index) => {
           const open = expanded[run.id] ?? index === 0;
@@ -126,6 +161,7 @@ export function AttemptList({
                   agent={run.agent}
                   pending={run.status === "running"}
                 />
+                <CostBadge usage={run} />
                 <span className="ml-auto flex items-center gap-1 text-muted-foreground">
                   <Clock3 size={12} /> {date(run.startedAt)}
                 </span>

@@ -136,12 +136,14 @@ const server = createServer(async (req, res) => {
         if (Object.keys(input).length !== 1 || typeof input.remoteUrl !== "string") throw new Error("Update remoteUrl as a string, separately from other board settings");
         send(res, 200, board.setRemoteUrl(repoBoard.id, input.remoteUrl)); return;
       }
-      if ("autoPickupEnabled" in input || "pickupConcurrency" in input || "pickupDailyLimit" in input) {
+      if ("autoPickupEnabled" in input || "pickupConcurrency" in input || "pickupDailyLimit" in input || "pickupCostBudget" in input) {
         if (typeof input.autoPickupEnabled !== "boolean" || !Number.isSafeInteger(input.pickupConcurrency) ||
-          ("pickupDailyLimit" in input && !Number.isSafeInteger(input.pickupDailyLimit)))
-          throw new Error("Specify autoPickupEnabled and pickupConcurrency together, with an optional integer pickupDailyLimit");
+          ("pickupDailyLimit" in input && !Number.isSafeInteger(input.pickupDailyLimit)) ||
+          ("pickupCostBudget" in input && input.pickupCostBudget !== null && typeof input.pickupCostBudget !== "number"))
+          throw new Error("Specify autoPickupEnabled and pickupConcurrency together, with an optional integer pickupDailyLimit and an optional pickupCostBudget (USD or null for off)");
         send(res, 200, board.setAutoPickup(repoBoard.id, input.autoPickupEnabled, Number(input.pickupConcurrency),
-          "pickupDailyLimit" in input ? Number(input.pickupDailyLimit) : undefined)); return;
+          "pickupDailyLimit" in input ? Number(input.pickupDailyLimit) : undefined,
+          "pickupCostBudget" in input ? input.pickupCostBudget as number | null : undefined)); return;
       }
       if ("autoReviewEnabled" in input || "verificationCommand" in input) {
         if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
