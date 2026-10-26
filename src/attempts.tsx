@@ -4,6 +4,16 @@ import { date } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import type { Card, Run } from "./model.js";
 
+const plural = (count: number, word: string) =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
+// Plain-language rework count, e.g. "3 attempts · 2 review rounds (Request changes)".
+export function reworkSummary(
+  card: Pick<Card, "attempts" | "reviewRounds">,
+): string {
+  return `${plural(card.attempts, "attempt")} · ${plural(card.reviewRounds, "review round")} (Request changes)`;
+}
+
 // Shows which provider/model ran a phase, e.g. "Run: anthropic/claude-sonnet-4-5".
 export function AgentBadge({
   phase,
@@ -61,7 +71,7 @@ export function AttemptList({
   card,
 }: {
   runs: Run[];
-  card?: Pick<Card, "title" | "repo"> | null;
+  card?: Pick<Card, "title" | "repo" | "reviewRounds"> | null;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [copyFeedback, setCopyFeedback] = useState<{
@@ -91,6 +101,15 @@ export function AttemptList({
       <h3 className="mb-4 text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">
         Attempts
       </h3>
+      <p
+        data-testid="rework-summary"
+        className="-mt-2 mb-4 text-xs text-muted-foreground"
+      >
+        {reworkSummary({
+          attempts: runs.length,
+          reviewRounds: card?.reviewRounds ?? 0,
+        })}
+      </p>
       <div className="space-y-4">
         {runs.map((run, index) => {
           const open = expanded[run.id] ?? index === 0;

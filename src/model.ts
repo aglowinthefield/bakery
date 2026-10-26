@@ -79,6 +79,8 @@ export type Card = {
   updatedAt: string;
   turns: number;
   turnsIncomplete: number;
+  attempts: number;
+  reviewRounds: number;
   runAgent: string;
   reviewAgent: string;
 };
