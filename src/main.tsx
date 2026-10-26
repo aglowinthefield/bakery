@@ -597,6 +597,7 @@ function App() {
                     setRepoPath(item.repo);
                     setIconDraft(item.icon);
                     setColorDraft(item.color);
+                    setRemoteUrlDraft(item.remoteUrl ?? "");
                     setEditingBoard(item);
                   }}
                 >
@@ -649,7 +650,6 @@ function App() {
             onClick={() => {
               setError("");
               setVerificationDraft(currentBoard?.verificationCommand ?? "");
-              setRemoteUrlDraft(currentBoard?.remoteUrl ?? "");
               setShowSettings(true);
             }}
           >
@@ -1193,61 +1193,6 @@ function App() {
               full-screen.
             </p>
           </fieldset>
-          <form
-            className="mt-6 border-t border-border pt-5 text-sm"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!currentBoard) return;
-              void action(async () => {
-                const updated = await api<Board>(
-                  `/boards/${currentBoard.id}/settings`,
-                  {
-                    method: "PATCH",
-                    body: JSON.stringify({ remoteUrl: remoteUrlDraft }),
-                  },
-                );
-                setBoards((previous) =>
-                  previous.map((item) =>
-                    item.id === updated.id ? updated : item,
-                  ),
-                );
-                setRemoteUrlDraft(updated.remoteUrl ?? "");
-              });
-            }}
-          >
-            <div className="break-all font-medium">
-              Remote repository ·{" "}
-              {currentBoard?.repo.split("/").at(-1) ?? "select a repository"}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Optional link shown below the board heading, such as the GitHub
-              page. Bakery never pushes to it.
-            </p>
-            <div className="mt-4 flex gap-2">
-              <input
-                type="url"
-                aria-label="Remote repository link"
-                value={remoteUrlDraft}
-                onChange={(event) => setRemoteUrlDraft(event.target.value)}
-                disabled={!currentBoard || busy}
-                placeholder="https://github.com/owner/repo"
-                className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
-              />
-              <Button
-                type="submit"
-                variant="outline"
-                disabled={
-                  !currentBoard ||
-                  busy ||
-                  remoteUrlDraft.trim() === (currentBoard.remoteUrl ?? "")
-                }
-              >
-                {remoteUrlDraft.trim() || !currentBoard?.remoteUrl
-                  ? "Save link"
-                  : "Remove link"}
-              </Button>
-            </div>
-          </form>
           <div className="mt-6 border-t border-border pt-5 text-sm">
             <div className="break-all font-medium">
               Unattended review · {currentBoard?.repo ?? "select a repository"}
@@ -1659,6 +1604,60 @@ function App() {
                 Save appearance
               </Button>
             </div>
+          )}
+          {editingBoard && (
+            <form
+              className="mt-8 border-t border-border pt-5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void action(async () => {
+                  const updated = await api<Board>(
+                    `/boards/${editingBoard.id}/settings`,
+                    {
+                      method: "PATCH",
+                      body: JSON.stringify({ remoteUrl: remoteUrlDraft }),
+                    },
+                  );
+                  setBoards((previous) =>
+                    previous.map((item) =>
+                      item.id === updated.id ? updated : item,
+                    ),
+                  );
+                  setEditingBoard(updated);
+                  setRemoteUrlDraft(updated.remoteUrl ?? "");
+                });
+              }}
+            >
+              <div className="text-sm font-medium">Remote repository</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Optional link to the remote this repository tracks, such as its
+                GitHub page. It appears below the board heading. Bakery never
+                pushes to it.
+              </p>
+              <div className="mt-4 flex gap-2">
+                <input
+                  type="url"
+                  aria-label="Remote repository link"
+                  value={remoteUrlDraft}
+                  onChange={(event) => setRemoteUrlDraft(event.target.value)}
+                  disabled={busy}
+                  placeholder="https://github.com/owner/repo"
+                  className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+                />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={
+                    busy ||
+                    remoteUrlDraft.trim() === (editingBoard.remoteUrl ?? "")
+                  }
+                >
+                  {remoteUrlDraft.trim() || !editingBoard.remoteUrl
+                    ? "Save link"
+                    : "Remove link"}
+                </Button>
+              </div>
+            </form>
           )}
           {editingBoard && (
             <div className="mt-8 border-t border-border pt-5">
