@@ -52,6 +52,7 @@ test("run confirmation preference defaults off and persists across restarts", ()
     first.close();
     const second = new Board(path);
     assert.deepEqual(second.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "compline" });
+    assert.deepEqual(second.updateSettings({ theme: "light" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "light" });
     assert.deepEqual(second.updateSettings({ theme: "default" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "default" });
     second.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -67,6 +68,37 @@ test("existing settings databases gain the Default theme without losing preferen
     legacy.close();
     const board = new Board(path);
     assert.deepEqual(board.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "default" });
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a Compline database can save Light without losing its preferences", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-theme-upgrade-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const old = new DatabaseSync(path);
+    old.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL, cardDetailsLayout TEXT NOT NULL, theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline'))); INSERT INTO settings VALUES (1, 1, 'side', 'compline')");
+    old.close();
+    const board = new Board(path);
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "compline" });
+    assert.deepEqual(board.updateSettings({ theme: "light" }), { confirmRunStart: true, cardDetailsLayout: "side", theme: "light" });
+    board.close();
+    const reopened = new Board(path);
+    assert.equal(reopened.getSettings().theme, "light");
+    reopened.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an older Dark preference maps to the unchanged Default palette", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-dark-upgrade-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const old = new DatabaseSync(path);
+    old.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL, cardDetailsLayout TEXT NOT NULL, theme TEXT NOT NULL DEFAULT 'dark' CHECK(theme IN ('dark', 'light'))); INSERT INTO settings VALUES (1, 1, 'side', 'dark')");
+    old.close();
+    const board = new Board(path);
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, cardDetailsLayout: "side", theme: "default" });
+    assert.equal(board.updateSettings({ theme: "compline" }).theme, "compline");
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

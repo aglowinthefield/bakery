@@ -299,11 +299,10 @@ function DiffPatch({
   onSelect?: (line: number) => void;
 }) {
   const colors = {
-    add: "bg-[var(--diff-add-background)] text-[var(--diff-add-foreground)]",
-    remove:
-      "bg-[var(--diff-remove-background)] text-[var(--diff-remove-foreground)]",
+    add: "bg-diff-add text-diff-add-foreground",
+    remove: "bg-diff-remove text-diff-remove-foreground",
     context: "text-foreground/80",
-    meta: "bg-[var(--diff-meta-background)] text-muted-foreground",
+    meta: "bg-muted text-muted-foreground",
   };
   const parsed = parseDiff(patch);
   const lines = parsed.length

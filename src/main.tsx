@@ -21,8 +21,8 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./components/ui/dialog";
-import "./style.css";
 import "highlight.js/styles/github-dark.css";
+import "./style.css";
 import { api, date } from "./api.js";
 import { CardDetails } from "./card-details.js";
 import type {
@@ -32,6 +32,15 @@ import type {
   MergeConflict,
   Status,
 } from "./model.js";
+
+// The database is authoritative. Storage only avoids a palette flash on repeat visits.
+function cacheTheme(theme: BakerySettings["theme"]) {
+  try {
+    localStorage.setItem("bakery-theme", theme);
+  } catch {
+    // Private or full storage must not prevent settings from loading or saving.
+  }
+}
 
 const columns: { id: Status; label: string }[] = [
   { id: "triage", label: "Triage" },
@@ -47,11 +56,6 @@ function App() {
   const [boardId, setBoardId] = useState<string | null>(null);
   const [settings, setSettings] = useState<BakerySettings | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  useEffect(() => {
-    if (!settings) return;
-    document.documentElement.dataset.theme = settings.theme;
-    localStorage.setItem("bakery-theme", settings.theme);
-  }, [settings?.theme]);
   const [addingRepo, setAddingRepo] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [repoPath, setRepoPath] = useState("");
@@ -79,7 +83,11 @@ function App() {
       })
       .catch((err) => setError(String(err)));
     void api<BakerySettings>("/settings")
-      .then(setSettings)
+      .then((next) => {
+        document.documentElement.dataset.theme = next.theme;
+        cacheTheme(next.theme);
+        setSettings(next);
+      })
       .catch((err) => setError(String(err)));
   }, []);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -117,16 +125,19 @@ function App() {
     if (!settings) return;
     const previous = settings;
     setSettings({ ...settings, ...patch });
+    if (patch.theme) document.documentElement.dataset.theme = patch.theme;
     void action(async () => {
       try {
-        setSettings(
-          await api<BakerySettings>("/settings", {
-            method: "PATCH",
-            body: JSON.stringify(patch),
-          }),
-        );
+        const saved = await api<BakerySettings>("/settings", {
+          method: "PATCH",
+          body: JSON.stringify(patch),
+        });
+        setSettings(saved);
+        document.documentElement.dataset.theme = saved.theme;
+        cacheTheme(saved.theme);
       } catch (error) {
         setSettings(previous);
+        document.documentElement.dataset.theme = previous.theme;
         throw error;
       }
     });
@@ -204,9 +215,10 @@ function App() {
       [boardId]: { ...previous[boardId], [status]: !collapsed },
     }));
   };
+  if (!settings && !error) return null;
   return (
     <div className="min-h-screen lg:flex">
-      <aside className="flex flex-col border-b border-border bg-[var(--sidebar)] lg:sticky lg:top-0 lg:h-screen lg:w-[228px] lg:shrink-0 lg:border-r lg:border-b-0">
+      <aside className="flex flex-col border-b border-border bg-sidebar lg:sticky lg:top-0 lg:h-screen lg:w-[228px] lg:shrink-0 lg:border-r lg:border-b-0">
         <div className="flex items-center gap-3 px-6 py-7">
           <div className="grid size-9 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
             <span className="text-xl leading-none">✳</span>
@@ -276,8 +288,8 @@ function App() {
         </div>
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-[var(--review-status)]" />{" "}
-            Local only <span className="ml-auto font-mono">v0.1</span>
+            <span className="size-1.5 rounded-full bg-status-review" /> Local
+            only <span className="ml-auto font-mono">v0.1</span>
           </div>
         </div>
       </aside>
@@ -609,7 +621,7 @@ function App() {
           >
             <legend className="pt-5 font-medium">Theme</legend>
             <div className="mt-3 flex gap-5">
-              {(["default", "compline"] as const).map((theme) => (
+              {(["default", "compline", "light"] as const).map((theme) => (
                 <label
                   key={theme}
                   className="flex cursor-pointer items-center gap-2"
@@ -621,7 +633,11 @@ function App() {
                     onChange={() => saveSettings({ theme })}
                     className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                   />
-                  {theme === "default" ? "Default" : "Compline"}
+                  {theme === "default"
+                    ? "Default"
+                    : theme === "compline"
+                      ? "Compline"
+                      : "Light"}
                 </label>
               ))}
             </div>

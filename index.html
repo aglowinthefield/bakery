@@ -1,2 +1,15 @@
-<!doctype html><html lang="en"><head>
-    <script>document.documentElement.dataset.theme = localStorage.getItem("bakery-theme") === "compline" ? "compline" : "default";</script><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Bakery</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bakery</title>
+    <script>
+      try {
+        const theme = localStorage.getItem("bakery-theme");
+        if (theme === "compline" || theme === "light") document.documentElement.dataset.theme = theme;
+      } catch { /* Storage can be disabled. The database still supplies the theme. */ }
+    </script>
+  </head>
+  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+</html>
