@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowUpRight,
@@ -6,6 +6,29 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
+  Orbit,
+  Rocket,
+  FlaskConical,
+  Bot,
+  Terminal,
+  Blocks,
+  Mountain,
+  Waves,
+  Flower2,
+  Sparkles,
+  Zap,
+  Puzzle,
+  Compass,
+  Gem,
+  Ghost,
+  Coffee,
+  Trees,
+  Telescope,
+  Shapes,
+  Bug,
+  Palette,
+  Origami,
+  Globe2,
   GitBranch,
   LayoutGrid,
   Pencil,
@@ -13,6 +36,7 @@ import {
   RefreshCw,
   Settings2,
   XCircle,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import {
@@ -25,6 +49,12 @@ import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { api, date } from "./api.js";
 import { CardDetails } from "./card-details.js";
+import {
+  repoColors,
+  repoIcons,
+  type RepoColor,
+  type RepoIcon,
+} from "./repo-appearance.js";
 import type {
   BakerySettings,
   Board,
@@ -51,6 +81,49 @@ const columns: { id: Status; label: string }[] = [
   { id: "interrupted", label: "Interrupted" },
   { id: "done", label: "Done" },
 ];
+const appearanceIcons: Record<RepoIcon, LucideIcon> = {
+  "layout-grid": LayoutGrid,
+  rocket: Rocket,
+  orbit: Orbit,
+  "flask-conical": FlaskConical,
+  bot: Bot,
+  terminal: Terminal,
+  blocks: Blocks,
+  mountain: Mountain,
+  waves: Waves,
+  "flower-2": Flower2,
+  sparkles: Sparkles,
+  zap: Zap,
+  puzzle: Puzzle,
+  compass: Compass,
+  gem: Gem,
+  ghost: Ghost,
+  coffee: Coffee,
+  trees: Trees,
+  telescope: Telescope,
+  shapes: Shapes,
+  bug: Bug,
+  palette: Palette,
+  origami: Origami,
+  "globe-2": Globe2,
+};
+function RepoBadge({ board, size = 16 }: { board: Board; size?: number }) {
+  const Icon = appearanceIcons[board.icon] ?? LayoutGrid;
+  const color = repoColors[board.color] ?? repoColors.violet;
+  return (
+    <span
+      className="repo-badge grid size-8 shrink-0 place-items-center rounded-lg"
+      style={
+        {
+          "--repo-color": color,
+          backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`,
+        } as CSSProperties
+      }
+    >
+      <Icon size={size} aria-hidden="true" />
+    </span>
+  );
+}
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardId, setBoardId] = useState<string | null>(null);
@@ -59,6 +132,8 @@ function App() {
   const [addingRepo, setAddingRepo] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [repoPath, setRepoPath] = useState("");
+  const [iconDraft, setIconDraft] = useState<RepoIcon>("layout-grid");
+  const [colorDraft, setColorDraft] = useState<RepoColor>("violet");
   const [cards, setCards] = useState<Card[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [verificationDraft, setVerificationDraft] = useState("");
@@ -247,16 +322,18 @@ function App() {
                 className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
                 title={item.repo}
               >
-                <LayoutGrid size={16} className="shrink-0 text-primary" />
+                <RepoBadge board={item} />
                 <span className="truncate">{item.repo.split("/").at(-1)}</span>
               </button>
               <button
                 aria-label={`Edit ${item.repo}`}
-                title="Edit repository path"
+                title="Edit repository"
                 className="mr-2 p-1 text-muted-foreground hover:text-foreground"
                 onClick={() => {
                   setError("");
                   setRepoPath(item.repo);
+                  setIconDraft(item.icon);
+                  setColorDraft(item.color);
                   setEditingBoard(item);
                 }}
               >
@@ -299,7 +376,8 @@ function App() {
             <div className="mb-2 text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">
               Workspace / Board
             </div>
-            <h1 className="text-[27px] font-semibold tracking-[-.05em]">
+            <h1 className="flex items-center gap-3 text-[27px] font-semibold tracking-[-.05em]">
+              {currentBoard && <RepoBadge board={currentBoard} size={19} />}
               {currentBoard
                 ? currentBoard.repo.split("/").at(-1)
                 : "Choose a repository"}
@@ -922,7 +1000,7 @@ function App() {
       >
         <DialogContent>
           <DialogTitle>
-            {editingBoard ? "Edit repository path" : "Add repository"}
+            {editingBoard ? "Edit repository" : "Add repository"}
           </DialogTitle>
           <DialogDescription>
             {editingBoard
@@ -939,13 +1017,26 @@ function App() {
             onSubmit={(event) => {
               event.preventDefault();
               void action(async () => {
-                const item = await api<Board>(
+                let item = await api<Board>(
                   editingBoard ? `/boards/${editingBoard.id}` : "/boards",
                   {
                     method: editingBoard ? "PATCH" : "POST",
                     body: JSON.stringify({ repo: repoPath }),
                   },
                 );
+                if (
+                  editingBoard &&
+                  (iconDraft !== editingBoard.icon ||
+                    colorDraft !== editingBoard.color)
+                ) {
+                  item = await api<Board>(`/boards/${item.id}/settings`, {
+                    method: "PATCH",
+                    body: JSON.stringify({
+                      icon: iconDraft,
+                      color: colorDraft,
+                    }),
+                  });
+                }
                 setBoards((previous) =>
                   [
                     ...previous.filter((board) => board.id !== item.id),
@@ -972,9 +1063,93 @@ function App() {
               className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
             />
             <Button disabled={busy} type="submit">
-              {editingBoard ? "Save" : "Add"}
+              {editingBoard ? "Save repository" : "Add"}
             </Button>
           </form>
+          {editingBoard && (
+            <div className="mt-8 border-t border-border pt-5">
+              <div className="text-sm font-medium">Appearance</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Choose an icon and color for this repository.
+              </p>
+              <div
+                className="mt-4 grid grid-cols-8 gap-2"
+                role="group"
+                aria-label="Repository icon"
+              >
+                {repoIcons.map((name) => {
+                  const Icon = appearanceIcons[name];
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      title={name.replaceAll("-", " ")}
+                      aria-label={`Icon: ${name.replaceAll("-", " ")}`}
+                      aria-pressed={iconDraft === name}
+                      onClick={() => setIconDraft(name)}
+                      className={`grid size-9 place-items-center rounded-md border cursor-pointer ${iconDraft === name ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+                    >
+                      <Icon size={18} />
+                    </button>
+                  );
+                })}
+              </div>
+              <div
+                className="mt-5 flex flex-wrap gap-2"
+                role="group"
+                aria-label="Repository color"
+              >
+                {(Object.entries(repoColors) as [RepoColor, string][]).map(
+                  ([name, hex]) => (
+                    <button
+                      key={name}
+                      type="button"
+                      title={name}
+                      aria-label={`Color: ${name}`}
+                      aria-pressed={colorDraft === name}
+                      onClick={() => setColorDraft(name)}
+                      className={`size-8 rounded-full border-2 cursor-pointer ${colorDraft === name ? "border-foreground" : "border-transparent"}`}
+                    >
+                      <span
+                        className="block size-full rounded-full border-2 border-background"
+                        style={{ backgroundColor: hex }}
+                      />
+                    </button>
+                  ),
+                )}
+              </div>
+              <Button
+                className="mt-5"
+                disabled={
+                  busy ||
+                  (iconDraft === editingBoard.icon &&
+                    colorDraft === editingBoard.color)
+                }
+                onClick={() =>
+                  void action(async () => {
+                    const updated = await api<Board>(
+                      `/boards/${editingBoard.id}/settings`,
+                      {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          icon: iconDraft,
+                          color: colorDraft,
+                        }),
+                      },
+                    );
+                    setBoards((previous) =>
+                      previous.map((item) =>
+                        item.id === updated.id ? updated : item,
+                      ),
+                    );
+                    setEditingBoard(updated);
+                  })
+                }
+              >
+                Save appearance
+              </Button>
+            </div>
+          )}
           {editingBoard && (
             <div className="mt-8 border-t border-border pt-5">
               <div className="text-sm font-medium">Remove repository</div>
