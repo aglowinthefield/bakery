@@ -182,9 +182,6 @@ export function CardDetails({
     >
       <DialogContent
         showOverlay={!side || expandedDetails || smallScreen}
-        onInteractOutside={(event) => {
-          if (side && !expandedDetails && !smallScreen) event.preventDefault();
-        }}
         overlayClassName={side ? "bg-black/25 backdrop-blur-none" : undefined}
         style={
           side && !expandedDetails

@@ -146,5 +146,9 @@ test("the side panel switches cards without leaking the previous card's review o
     assert.equal(await page.getByRole("heading", { name: "Review diff" }).count(), 0);
     await page.getByRole("button", { name: /Review card/ }).click();
     await page.getByText("Changed files (1)").waitFor();
+    await page.getByRole("heading", { name: "Review card" }).click();
+    assert.equal(await page.getByRole("dialog").count(), 1, "clicking inside keeps the rail open");
+    await page.locator("main").click({ position: { x: 40, y: 130 } });
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
   } finally { await page.close(); }
 });
