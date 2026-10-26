@@ -64,6 +64,7 @@ import "./style.css";
 import { api, date } from "./api.js";
 import { AgentBadge } from "./attempts.js";
 import { CardDetails } from "./card-details.js";
+import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
   repoIcons,
@@ -953,7 +954,8 @@ function App() {
                                 {item.title}
                               </div>
                               <p className="mt-2 line-clamp-2 min-h-9 text-xs leading-relaxed text-muted-foreground">
-                                {item.body || "No description yet."}
+                                {markdownToPlainText(item.body) ||
+                                  "No description yet."}
                               </p>
                               {(item.runAgent || item.reviewAgent) && (
                                 <div className="mt-3 flex flex-wrap gap-1">

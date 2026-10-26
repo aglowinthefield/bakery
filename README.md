@@ -189,6 +189,7 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--yes]
 - To fix a board's path, edit the board. Its cards move only if none has run yet, because attempts keep their worktrees in the original repository.
 - **Remove repository** hides a board without deleting anything. Add the same repository again to restore it.
 - Lanes without active cards can be collapsed. A board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
+- Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
 
 ## Server, data, and restarts
