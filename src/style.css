@@ -138,6 +138,7 @@
 [data-status="done"] { --lane-status-color: var(--status-done); }
 [data-status="archived"] { --lane-status-color: var(--status-archived); }
 .lane-status-dot { background-color: var(--lane-status-color); }
+.lane-status-icon { color: var(--lane-status-color); }
 @theme inline {
   --color-background: var(--background); --color-foreground: var(--foreground);
   --color-card: var(--card); --color-card-foreground: var(--card-foreground);

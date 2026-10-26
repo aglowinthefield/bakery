@@ -7,7 +7,15 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Archive,
   ArrowUpRight,
+  CircleCheck,
+  CirclePause,
+  CircleX,
+  Eye,
+  Inbox,
+  ListTodo,
+  LoaderCircle,
   ChevronDown,
   ChevronRight,
   CircleHelp,
@@ -78,15 +86,15 @@ function cacheTheme(theme: BakerySettings["theme"]) {
   }
 }
 
-const columns: { id: Status; label: string }[] = [
-  { id: "triage", label: "Triage" },
-  { id: "ready", label: "Ready" },
-  { id: "running", label: "Running" },
-  { id: "review", label: "Review" },
-  { id: "failed", label: "Failed" },
-  { id: "interrupted", label: "Interrupted" },
-  { id: "done", label: "Done" },
-  { id: "archived", label: "Archive" },
+const columns: { id: Status; label: string; icon: LucideIcon }[] = [
+  { id: "triage", label: "Triage", icon: Inbox },
+  { id: "ready", label: "Ready", icon: ListTodo },
+  { id: "running", label: "Running", icon: LoaderCircle },
+  { id: "review", label: "Review", icon: Eye },
+  { id: "failed", label: "Failed", icon: CircleX },
+  { id: "interrupted", label: "Interrupted", icon: CirclePause },
+  { id: "done", label: "Done", icon: CircleCheck },
+  { id: "archived", label: "Archive", icon: Archive },
 ];
 const appearanceIcons: Record<RepoIcon, LucideIcon> = {
   "layout-grid": LayoutGrid,
@@ -579,6 +587,39 @@ function App() {
             <Settings2 size={15} /> Settings
           </Button>
         </div>
+        {currentBoard && (
+          <nav aria-label="Card counts" className="px-4 pt-6">
+            <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground">
+              Cards
+            </div>
+            <ul className="grid grid-cols-2 gap-1 lg:grid-cols-1">
+              {columns.map((column) => {
+                const Icon = column.icon;
+                const count = cards.filter(
+                  (c) => c.status === column.id,
+                ).length;
+                return (
+                  <li
+                    key={column.id}
+                    data-status={column.id}
+                    title={`${count} ${column.label.toLowerCase()}`}
+                    className={`flex items-center gap-2.5 rounded-md px-3 py-1 text-sm ${count ? "" : "opacity-50"}`}
+                  >
+                    <Icon
+                      size={14}
+                      aria-hidden="true"
+                      className="lane-status-icon shrink-0"
+                    />
+                    <span className="truncate text-muted-foreground">
+                      {column.label}
+                    </span>
+                    <span className="ml-auto font-mono text-xs">{count}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
+        )}
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="size-1.5 rounded-full bg-status-review" /> Local
