@@ -36,6 +36,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', UNIQUE(cardId, attempt));
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'layout-grid', color TEXT NOT NULL DEFAULT 'violet', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '');
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT);
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
@@ -360,7 +361,28 @@ export class Board {
     return this.db.prepare("SELECT * FROM approvals WHERE cardId=? AND merged=0").get(cardId) as Approval | undefined;
   }
   wasIntegrated(cardId: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM approvals WHERE cardId=? AND merged=1").get(cardId);
+    return !!this.db.prepare("SELECT 1 FROM approvals WHERE cardId=? AND merged=1 UNION SELECT 1 FROM external_integrations WHERE cardId=?").get(cardId, cardId);
+  }
+  listExternalMergeCandidates(): { card: Card; run: Run }[] {
+    const ids = this.db.prepare(`SELECT cards.id FROM cards JOIN runs ON runs.cardId=cards.id
+      WHERE cards.status IN ('review', 'failed') AND runs.attempt=(SELECT MAX(attempt) FROM runs WHERE cardId=cards.id)
+        AND runs.worktree IS NOT NULL AND NOT EXISTS (SELECT 1 FROM approvals WHERE cardId=cards.id AND merged=0)
+      ORDER BY cards.updatedAt`).all() as { id: string }[];
+    return ids.map(({ id }) => ({ card: this.getCard(id)!, run: this.listRuns(id)[0] }));
+  }
+  recordExternalIntegration(cardId: string, runId: string, candidate: string, mergeCommit: string): Card {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
+      if (!card || !['review', 'failed'].includes(card.status) || run?.id !== runId ||
+        this.getApproval(cardId) || this.wasIntegrated(cardId)) throw new Error("Card changed during external merge reconciliation");
+      this.db.prepare("INSERT INTO external_integrations(cardId, runId, candidate, mergeCommit, integratedAt) VALUES (?, ?, ?, ?, ?)")
+        .run(cardId, runId, candidate, mergeCommit, now());
+      this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), cardId);
+      this.clearMergeFailure(cardId);
+      this.db.exec("COMMIT");
+      return this.getCard(cardId)!;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   recordApproval(cardId: string, runId: string, candidate: string): Approval {
     const card = this.getCard(cardId), run = this.listRuns(cardId)[0];

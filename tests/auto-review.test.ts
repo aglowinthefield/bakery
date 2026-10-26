@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,6 +66,72 @@ test("new opt-in reviews run a separate tool-free reviewer and verify before loc
     assert.equal(item.board.getCard(old.card.id)?.status, "review");
     await item.auto.tick();
     assert.equal(item.board.autoReviewMergesToday(item.repo), 1);
+  } finally { item.close(); }
+});
+
+test("the global tick reconciles a failed card merged outside Bakery without enabling auto-review", async () => {
+  const item = fixture();
+  try {
+    const { card, run, worktree } = item.reviewedCard();
+    const failed = item.board.claim(card.id);
+    item.board.attach(failed.id, process.pid, worktree);
+    item.board.finish(failed.id, "failed", "Pi exited (143)");
+    git(worktree, "add", "README.md");
+    git(worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "external card fix");
+    const candidate = git(worktree, "rev-parse", "HEAD");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "--no-ff", "--no-edit", candidate);
+    const mergeCommit = git(item.repo, "rev-parse", "HEAD");
+    await item.auto.tick();
+    assert.equal(item.board.getCard(card.id)?.status, "done");
+    assert.equal(item.board.wasIntegrated(card.id), true);
+    assert.equal(item.board.autoReviewMergesToday(item.repo), 0);
+    const db = new DatabaseSync(join(item.dir, "board.sqlite"));
+    try {
+      assert.deepEqual({ ...db.prepare("SELECT runId, candidate, mergeCommit FROM external_integrations WHERE cardId=?").get(card.id) as object },
+        { runId: failed.id, candidate, mergeCommit });
+      assert.equal(db.prepare("SELECT COUNT(*) AS total FROM approvals WHERE cardId=?").get(card.id)!.total, 0);
+    } finally { db.close(); }
+    assert.equal(item.board.setStatus(card.id, "ready").status, "ready");
+    await item.auto.tick();
+    assert.equal(item.board.getCard(card.id)?.status, "ready");
+    assert.equal(run.status, "review");
+  } finally { item.close(); }
+});
+
+test("the global tick ignores ancestry without integration, discarded merges, pending approval, and dirty branches", async () => {
+  const item = fixture();
+  try {
+    const untouched = item.reviewedCard();
+    // This branch is an ancestor only because main advanced; it contributed nothing.
+    writeFileSync(join(item.repo, "main.txt"), "main only\n");
+    git(item.repo, "add", "main.txt");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "new main work");
+    await item.auto.tick();
+    assert.equal(item.board.getCard(untouched.card.id)?.status, "review");
+    const discarded = item.reviewedCard();
+    git(discarded.worktree, "add", "README.md");
+    git(discarded.worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "discarded change");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "-s", "ours", "--no-ff", "--no-edit", git(discarded.worktree, "rev-parse", "HEAD"));
+    await item.auto.tick();
+    assert.equal(item.board.getCard(discarded.card.id)?.status, "review");
+    const pending = item.reviewedCard();
+    git(pending.worktree, "add", "README.md");
+    git(pending.worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "pending change");
+    const candidate = git(pending.worktree, "rev-parse", "HEAD");
+    item.board.recordApproval(pending.card.id, pending.run.id, candidate);
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "--no-ff", "--no-edit", candidate);
+    await item.auto.tick();
+    assert.equal(item.board.getCard(pending.card.id)?.status, "review");
+    const dirty = item.reviewedCard();
+    git(dirty.worktree, "add", "README.md");
+    git(dirty.worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "dirty branch work");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "--no-ff", "--no-edit", git(dirty.worktree, "rev-parse", "HEAD"));
+    writeFileSync(join(dirty.worktree, "untracked.txt"), "unfinished\n");
+    await item.auto.tick();
+    assert.equal(item.board.getCard(dirty.card.id)?.status, "review");
+    rmSync(join(dirty.worktree, "untracked.txt"));
+    await item.auto.tick();
+    assert.equal(item.board.getCard(dirty.card.id)?.status, "done");
   } finally { item.close(); }
 });
 

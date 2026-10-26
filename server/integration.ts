@@ -36,11 +36,13 @@ function isAncestor(repo: string, ancestor: string, descendant: string) {
 }
 
 export class Integration {
+  private reconciliationErrors = new Set<string>();
   constructor(private board: Board, private dataDir: string) {}
 
-  private location(card: Card) {
+  private location(card: Card, allowFailed = false) {
     const run = this.board.listRuns(card.id)[0];
-    if (card.status !== "review" || !run || run.status !== "review" || !run.worktree) throw new Error("Only a reviewed run can be inspected or approved");
+    if (!run || !run.worktree || !(card.status === "review" && run.status === "review" ||
+      allowFailed && card.status === "failed" && run.status === "failed")) throw new Error("Only a reviewed run can be inspected or approved");
     const repo = card.repo, worktree = join(this.dataDir, "worktrees", card.id);
     if (!existsSync(worktree) || realpathSync(worktree) !== realpathSync(run.worktree)) throw new Error("Card worktree is missing or has moved");
     if (realpathSync(git(repo, "rev-parse", "--show-toplevel")) !== realpathSync(repo) ||
@@ -75,6 +77,34 @@ export class Integration {
   review(card: Card): ReviewDiff {
     const { fingerprint, files } = this.snapshot(card, true);
     return { fingerprint, files };
+  }
+
+  // A merge parent proves the branch was deliberately integrated. An old, unchanged
+  // branch tip being an ancestor of main does not. Do not count an "ours" merge
+  // whose result tree is identical to its first parent.
+  reconcileExternallyMerged(): void {
+    for (const { card } of this.board.listExternalMergeCandidates()) {
+      try {
+        const { repo, worktree, run } = this.location(card, true);
+        if (gitCommand(worktree, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true) ||
+          git(worktree, "ls-files", "-u")) continue;
+        const candidate = git(worktree, "rev-parse", "HEAD");
+        if (!isAncestor(repo, candidate, "main")) continue;
+        const main = git(repo, "rev-parse", "main");
+        const merges = git(repo, "rev-list", "--first-parent", "--parents", "--merges", `${candidate}..${main}`);
+        const merged = merges.split("\n").filter(Boolean).map(line => line.split(" ")).find(([merge, firstParent, ...others]) =>
+          others.includes(candidate) && git(repo, "rev-parse", `${merge}^{tree}`) !== git(repo, "rev-parse", `${firstParent}^{tree}`));
+        if (!merged || git(repo, "rev-parse", "main") !== main || git(worktree, "rev-parse", "HEAD") !== candidate ||
+          gitCommand(worktree, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true)) continue;
+        this.board.recordExternalIntegration(card.id, run.id, candidate, merged[0]);
+        this.reconciliationErrors.delete(card.id);
+        console.log(`Reconciled externally merged card ${card.id} at ${merged[0]}`);
+      } catch (error) {
+        // Git worktrees can disappear independently of Bakery. Leave ambiguous cards unchanged.
+        if (!this.reconciliationErrors.has(card.id)) console.error(`Could not reconcile card ${card.id}: ${String(error)}`);
+        this.reconciliationErrors.add(card.id);
+      }
+    }
   }
 
   withdraw(card: Card): Card {

@@ -58,6 +58,8 @@ export class AutoReview {
   }
   async tick(): Promise<void> {
     if (this.busy) return;
+    // This is the server's unconditional periodic tick, not an auto-review opt-in.
+    this.integration.reconcileExternallyMerged();
     const candidate = this.board.listAutoReviewCandidates()[0];
     if (!candidate) return;
     this.busy = true;
