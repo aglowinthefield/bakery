@@ -30,6 +30,8 @@ test("each lane keeps its label and a readable status dot in both palettes and w
   try {
     await page.goto(server.resolvedUrls!.local[0]);
     await page.getByRole("heading", { name: "Triage" }).waitFor();
+    assert.equal(await page.getByText("Can start a Pi run", { exact: true }).count(), 0, "lane captions do not take space below headings");
+    assert.equal(await page.getByRole("button", { name: /ready card/ }).isVisible(), true);
     let defaultColors: string[] = [];
     for (const theme of ["default", "compline"]) {
       await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
