@@ -1325,6 +1325,8 @@ function App() {
                   : sorted;
               const firstWaiting =
                 column.id === "review" ? waitingCards[0]?.id : undefined;
+              const yourTurnCount = laneCards.filter(needsYourReview).length;
+              const firstYourTurn = laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
               const collapsible = cards
@@ -1622,6 +1624,9 @@ function App() {
                               }}
                               onDragEnd={endDrag}
                               data-activity={activity ?? undefined}
+                              data-turn={
+                                needsYourReview(item) ? "yours" : undefined
+                              }
                               data-dragging={
                                 dragging?.card.id === item.id || undefined
                               }
@@ -1630,6 +1635,23 @@ function App() {
                               {content}
                             </button>
                           );
+                          if (item.id === firstYourTurn)
+                            return (
+                              <Fragment key={item.id}>
+                                <div
+                                  role="separator"
+                                  aria-label="Your turn"
+                                  className="flex items-center gap-2 px-1 text-[10px] font-semibold uppercase tracking-[.14em] text-foreground"
+                                >
+                                  Your turn
+                                  <span className="h-px flex-1 bg-status-review" />
+                                  <span className="font-mono">
+                                    {yourTurnCount}
+                                  </span>
+                                </div>
+                                {tile}
+                              </Fragment>
+                            );
                           if (item.id !== firstWaiting) return tile;
                           return (
                             <Fragment key={item.id}>
@@ -2561,7 +2583,7 @@ function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
     </span>
   );
 }
-/** Says who has a Review card that is not your turn, or how long a running agent has been quiet. */
+/** Says a Review card is your turn, who has it if not, or how long a running agent has been quiet. */
 function ActivityBadge({
   card,
   activity,
@@ -2581,6 +2603,17 @@ function ActivityBadge({
           <Hourglass size={10} aria-hidden />
         )}
         {reviewWaitLabels[card.reviewWait]}
+      </span>
+    );
+  if (needsYourReview(card))
+    return (
+      <span
+        data-testid="activity-badge"
+        title="Ready for your review"
+        className="flex items-center gap-1 rounded border border-status-review bg-status-review px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] text-background"
+      >
+        <Eye size={10} aria-hidden />
+        Your turn
       </span>
     );
   if (activity !== "quiet" || !card.lastActivityAt) return null;

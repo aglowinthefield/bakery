@@ -215,6 +215,7 @@ button, input, textarea { font: inherit; }
   animation: activity-orbit 2.4s linear infinite;
 }
 .card-activity[data-activity="waiting"] { animation: activity-breathe 3.2s ease-in-out infinite; }
+.card-activity[data-turn="yours"] { border-color: color-mix(in srgb, var(--status-review) 70%, transparent); box-shadow: inset 3px 0 0 var(--status-review); }
 .card-activity[data-activity="quiet"] { border-color: color-mix(in srgb, #d99a3a 70%, transparent); }
 @media (prefers-reduced-motion: reduce) {
   .card-activity[data-activity="working"]::before { animation: none; background: var(--primary); }
