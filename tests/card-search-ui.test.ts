@@ -111,6 +111,7 @@ test("search filters cards by title, body, and ID prefix and clears", async () =
     await search.fill("polish");
     await shown("Fix login redirect").waitFor({ state: "detached" });
     await page.getByRole("button", { name: "other", exact: true }).click();
+    await page.getByRole("button", { name: "Kanban" }).click();
     await shown("Other board card").waitFor();
     assert.equal(await search.inputValue(), "");
   } finally {

@@ -61,7 +61,7 @@ test("database theme still loads when browser storage rejects writes", async () 
   try {
     await page.goto(url);
     await page.getByRole("button", { name: "Settings" }).click();
-    assert.equal(await page.getByRole("radio", { name: "Light" }).isChecked(), true);
+    assert.equal(await page.getByRole("radio", { name: "Light", exact: true }).isChecked(), true);
     assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(245, 243, 238)");
   } finally { await page.close(); }
 });
@@ -121,7 +121,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.equal(dark.add, "rgb(25, 53, 41)");
     assert.equal(dark.remove, "rgb(59, 37, 40)");
     await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByRole("radio", { name: "Light" }).check();
+    await page.getByRole("radio", { name: "Light", exact: true }).check();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
@@ -152,7 +152,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     failPatch = true;
     await page.getByRole("button", { name: "Settings" }).click();
     // click, not check: the rejected save reverts the radio, which check() reports as a failure when it lands first.
-    await page.getByRole("radio", { name: "Light" }).click();
+    await page.getByRole("radio", { name: "Light", exact: true }).click();
     await page.getByRole("alert").filter({ hasText: "Save rejected" }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();

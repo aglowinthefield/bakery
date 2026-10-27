@@ -35,6 +35,7 @@ import {
   Gitlab,
   XCircle,
   X,
+  Kanban,
   PanelLeftClose,
   PanelLeftOpen,
   type LucideIcon,
@@ -514,6 +515,20 @@ export function App() {
     setReposCollapsed(next);
     localStorage.setItem("bakery-repos-collapsed", String(next));
   };
+  // Repos start collapsed except the open one; the user's toggles persist.
+  const [repoOpen, setRepoOpen] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("bakery-repo-open") ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+  const toggleRepoOpen = (id: string, open: boolean) =>
+    setRepoOpen((previous) => {
+      const next = { ...previous, [id]: !open };
+      localStorage.setItem("bakery-repo-open", JSON.stringify(next));
+      return next;
+    });
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     Math.min(
       480,
@@ -1095,63 +1110,75 @@ export function App() {
             )}
           </button>
           <div id="sidebar-repositories" hidden={reposCollapsed}>
-            {boards.map((item) => (
-              <div
-                key={item.id}
-                className={`rounded-lg ${view === "board" && boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
-              >
-                <div className="flex items-center">
-                  <button
-                    onClick={() => openBoard(item.id)}
-                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-[length:var(--text-sidebar)]"
-                    title={item.repo}
-                  >
-                    <RepoBadge board={item} />
-                    <span className="truncate">
-                      {item.repo.split("/").at(-1)}
-                    </span>
-                  </button>
-                  <ul
-                    aria-label="Card counts"
-                    className="flex shrink-0 items-center justify-end gap-2 pr-3"
-                  >
-                    {sidebarCounts.map((group) => {
-                      const Icon = group.icon;
-                      const live =
-                        view === "board" &&
-                        boardId === item.id &&
-                        (cards.length || !item.cardCounts);
-                      const count = group.statuses.reduce(
-                        (sum, status) =>
-                          sum +
-                          (live
-                            ? cards.filter((c) => countKey(c) === status).length
-                            : (item.cardCounts?.[status] ?? 0)),
-                        0,
-                      );
-                      if (group.hideEmpty && !count) return null;
-                      return (
-                        <li
-                          key={group.id}
-                          data-group={group.id}
-                          data-status={group.color}
-                          title={`${count} ${group.label.toLowerCase()}`}
-                          aria-label={`${group.label}: ${count}`}
-                          className={`flex items-center gap-1 text-[length:var(--text-sidebar-meta)] ${count ? "" : "opacity-40"}`}
-                        >
-                          <Icon
-                            size={10}
-                            aria-hidden="true"
-                            className="lane-status-icon shrink-0"
-                          />
-                          <span className="font-mono">{count}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
+            {boards.map((item) => {
+              const active = view === "board" && boardId === item.id;
+              const open = repoOpen[item.id] ?? active;
+              return (
+                <div key={item.id} className="rounded-lg">
+                  <div className="flex items-center rounded-lg hover:bg-accent/30">
+                    <button
+                      onClick={() => toggleRepoOpen(item.id, open)}
+                      aria-expanded={open}
+                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-[length:var(--text-sidebar)]"
+                      title={item.repo}
+                    >
+                      <RepoBadge board={item} />
+                      <span className="truncate">
+                        {item.repo.split("/").at(-1)}
+                      </span>
+                    </button>
+                    <ul
+                      aria-label="Card counts"
+                      className="flex shrink-0 items-center justify-end gap-2 pr-3"
+                    >
+                      {sidebarCounts.map((group) => {
+                        const Icon = group.icon;
+                        const live =
+                          view === "board" &&
+                          boardId === item.id &&
+                          (cards.length || !item.cardCounts);
+                        const count = group.statuses.reduce(
+                          (sum, status) =>
+                            sum +
+                            (live
+                              ? cards.filter((c) => countKey(c) === status)
+                                  .length
+                              : (item.cardCounts?.[status] ?? 0)),
+                          0,
+                        );
+                        if (group.hideEmpty && !count) return null;
+                        return (
+                          <li
+                            key={group.id}
+                            data-group={group.id}
+                            data-status={group.color}
+                            title={`${count} ${group.label.toLowerCase()}`}
+                            aria-label={`${group.label}: ${count}`}
+                            className={`flex items-center gap-1 text-[length:var(--text-sidebar-meta)] ${count ? "" : "opacity-40"}`}
+                          >
+                            <Icon
+                              size={10}
+                              aria-hidden="true"
+                              className="lane-status-icon shrink-0"
+                            />
+                            <span className="font-mono">{count}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                  {open && (
+                    <button
+                      onClick={() => openBoard(item.id)}
+                      aria-current={active ? "page" : undefined}
+                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${active ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                    >
+                      <Kanban size={13} aria-hidden="true" /> Kanban
+                    </button>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <Button
               variant="ghost"
               className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
@@ -1554,7 +1581,7 @@ export function App() {
                     endDrag();
                     moveCard(card, column.id);
                   }}
-                  className={`${collapsed ? "w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
+                  className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
                   {collapsed ? (
                     <button
@@ -1578,7 +1605,16 @@ export function App() {
                     </button>
                   ) : (
                     <>
-                      <div className="mb-2 flex min-h-6 items-center gap-2 px-1">
+                      <div
+                        className={`mb-2 flex min-h-6 items-center gap-2 px-1 ${collapsible ? "cursor-pointer" : ""}`}
+                        onClick={(event) => {
+                          if (
+                            collapsible &&
+                            !(event.target as HTMLElement).closest("button")
+                          )
+                            toggleLane(column.id, false);
+                        }}
+                      >
                         <span
                           aria-hidden="true"
                           className="lane-status-dot size-2.5 shrink-0 rounded-full"
@@ -1672,9 +1708,6 @@ export function App() {
                             <>
                               <div className="mb-4 flex items-start justify-between gap-2">
                                 <span className="flex flex-wrap items-center gap-1.5">
-                                  <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
-                                    Manual
-                                  </span>
                                   {(item.priority ?? 0) !== 0 && (
                                     <PriorityBadge priority={item.priority} />
                                   )}

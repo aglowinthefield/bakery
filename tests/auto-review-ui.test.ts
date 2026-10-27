@@ -32,6 +32,8 @@ test("unattended review is configured per repository, not in global Settings", a
     assert.equal(await dialog.getByRole("textbox", { name: "Auto-review verification command" }).count(), 0);
     await page.keyboard.press("Escape");
 
+    // The edit pencil lives on the open board's heading.
+    await page.getByRole("button", { name: "Kanban" }).click();
     await page.getByRole("button", { name: "Edit /tmp/first/app" }).click();
     await dialog.getByText("Unattended review").waitFor();
     assert.equal(await dialog.getByRole("textbox", { name: "Auto-review verification command" }).inputValue(), "npm test");
@@ -40,6 +42,8 @@ test("unattended review is configured per repository, not in global Settings", a
       "the repository path picker is not focused when editing a repository");
     await page.keyboard.press("Escape");
 
+    await page.getByRole("button", { name: "app", exact: true }).nth(1).click();
+    await page.getByRole("button", { name: "Kanban" }).last().click();
     await page.getByRole("button", { name: "Edit /tmp/second/app" }).click();
     assert.equal(await dialog.getByRole("textbox", { name: "Auto-review verification command" }).inputValue(), "npm run check");
     await dialog.getByRole("button", { name: "Enable auto-review" }).waitFor();

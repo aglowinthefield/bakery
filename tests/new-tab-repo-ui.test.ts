@@ -15,6 +15,12 @@ async function openTab(context: BrowserContext, url: string): Promise<Page> {
   return page;
 }
 
+async function openRepo(page: Page, name: string) {
+  const row = page.getByRole("button", { name, exact: true });
+  if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+  await row.locator("xpath=../..").getByRole("button", { name: "Kanban" }).click();
+}
+
 test("a new tab opens the repo last viewed in any tab", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
@@ -32,10 +38,10 @@ test("a new tab opens the repo last viewed in any tab", async () => {
     const activeRepo = (page: Page) => page.locator("h1").first().textContent();
 
     const first = await openTab(context, url);
-    await first.getByRole("button", { name: "one", exact: true }).click();
+    await openRepo(first, "one");
     const second = await openTab(context, url);
     assert.match((await activeRepo(second)) ?? "", /one/, "new tab opens the repo picked in the first tab");
-    await second.getByRole("button", { name: "two", exact: true }).click();
+    await openRepo(second, "two");
 
     // Returning to the first tab makes its repo the last viewed again.
     await first.bringToFront();
