@@ -1,8 +1,41 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, RefreshCw, XCircle } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  MessageSquarePlus,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
+import { parsePatchFiles, type FileDiffOptions } from "@pierre/diffs";
+import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { Button } from "./components/ui/button";
-import { highlightDiffCode } from "./review-diff.js";
-import { parseDiff } from "./diff-lines.js";
+import { parseDiff, type DiffLine } from "./diff-lines.js";
+import {
+  diffStats,
+  rowForTarget,
+  targetForRow,
+  withFileHeader,
+} from "./review-patch.js";
+
+type DiffStyle = "unified" | "split";
+const DIFF_STYLE_KEY = "bakery-diff-style";
+function initialDiffStyle(): DiffStyle {
+  try {
+    return localStorage.getItem(DIFF_STYLE_KEY) === "split"
+      ? "split"
+      : "unified";
+  } catch {
+    return "unified";
+  }
+}
 import type { ReviewComment, ReviewDiff, MergeConflict } from "./model.js";
 
 export function ReviewPanel({
@@ -29,6 +62,15 @@ export function ReviewPanel({
     index: number;
     id: number;
   } | null>(null);
+  const [diffStyle, setDiffStyle] = useState<DiffStyle>(initialDiffStyle);
+  const chooseDiffStyle = (next: DiffStyle) => {
+    setDiffStyle(next);
+    try {
+      localStorage.setItem(DIFF_STYLE_KEY, next);
+    } catch {
+      // The choice still applies for this session.
+    }
+  };
   return (
     <section
       aria-label="Review diff"
@@ -38,14 +80,34 @@ export function ReviewPanel({
         <h3 className="text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">
           Review diff
         </h3>
-        <Button size="sm" variant="ghost" onClick={onRefresh}>
-          <RefreshCw size={13} /> Refresh diff
-        </Button>
+        <div className="flex items-center gap-2">
+          <div
+            role="radiogroup"
+            aria-label="Diff layout"
+            className="inline-flex rounded-md border border-border p-0.5 text-xs"
+          >
+            {(["unified", "split"] as const).map((style) => (
+              <button
+                key={style}
+                type="button"
+                role="radio"
+                aria-checked={diffStyle === style}
+                onClick={() => chooseDiffStyle(style)}
+                className={`rounded px-2 py-0.5 capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${diffStyle === style ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                {style}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" variant="ghost" onClick={onRefresh}>
+            <RefreshCw size={13} /> Refresh diff
+          </Button>
+        </div>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Card changes since its shared commit with main. Select a code line to
-        annotate it. Comments stay on this exact diff; older comments are kept
-        as history, not moved to new lines.
+        Card changes since its shared commit with main. Press + beside a code
+        line to annotate it. Comments stay on this exact diff; older comments
+        are kept as history, not moved to new lines.
       </p>
       {error && (
         <p role="alert" className="mt-3 text-xs text-destructive">
@@ -104,6 +166,7 @@ export function ReviewPanel({
                       comment.fingerprint === review.fingerprint,
                   )}
                   busy={busy}
+                  diffStyle={diffStyle}
                   canComment={
                     !comments.some(
                       (comment) =>
@@ -179,6 +242,7 @@ function ReviewFile({
   comments,
   busy,
   canComment,
+  diffStyle,
   onAdd,
 }: {
   file: ReviewDiff["files"][number];
@@ -187,6 +251,7 @@ function ReviewFile({
   comments: ReviewComment[];
   busy: boolean;
   canComment: boolean;
+  diffStyle: DiffStyle;
   onAdd: (path: string, line: number, body: string) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(index === 0);
@@ -202,9 +267,66 @@ function ReviewFile({
   const [selectedLine, setSelectedLine] = useState<number | null>(null);
   const [text, setText] = useState("");
   const panelId = `review-file-${index}`;
-  const selected = selectedLine && parseDiff(file.patch)[selectedLine - 1];
-  const code = selected && selected.code;
+  const rows = useMemo(() => parseDiff(file.patch), [file.patch]);
+  const stats = useMemo(() => diffStats(rows), [rows]);
+  const codeRows = useMemo(
+    () =>
+      rows.flatMap((line, row) =>
+        line.kind === "meta" ? [] : [{ line, row: row + 1 }],
+      ),
+    [rows],
+  );
+  const selected = selectedLine ? rows[selectedLine - 1] : undefined;
   const fileLine = selected && (selected.newLine ?? selected.oldLine);
+  const commenting = selectedLine !== null && canComment;
+  const form = commenting ? (
+    <form
+      className="m-2 space-y-2 rounded-md border border-border bg-card p-3 font-sans"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!text.trim()) return;
+        void onAdd(file.path, selectedLine, text).then((saved) => {
+          if (saved) {
+            setText("");
+            setSelectedLine(null);
+          }
+        });
+      }}
+    >
+      <label className="block text-xs font-medium">
+        Comment on {file.path}:{fileLine ?? `diff row ${selectedLine}`}
+        <code className="mt-1 block truncate font-mono font-normal text-muted-foreground">
+          {selected?.code}
+        </code>
+        <textarea
+          required
+          maxLength={1000}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setSelectedLine(null);
+          }}
+          rows={3}
+          autoFocus
+          placeholder="What should change?"
+          className="mt-2 w-full resize-y rounded-md border border-border bg-background p-2 text-sm"
+        />
+      </label>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={busy || !text.trim()} type="submit">
+          Add comment
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          type="button"
+          onClick={() => setSelectedLine(null)}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
+  ) : null;
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-background">
       <h4>
@@ -221,145 +343,207 @@ function ReviewFile({
           ) : (
             <ChevronRight size={14} className="shrink-0" />
           )}
-          {file.path}
+          <span className="min-w-0 flex-1">{file.path}</span>
           {comments.length > 0 && (
-            <span className="ml-auto rounded bg-secondary px-2 py-0.5">
+            <span className="shrink-0 rounded bg-secondary px-2 py-0.5">
               {comments.length} note{comments.length === 1 ? "" : "s"}
+            </span>
+          )}
+          {codeRows.length > 0 && (
+            <span
+              className="shrink-0 tabular-nums"
+              aria-label={`${stats.additions} added, ${stats.deletions} removed`}
+            >
+              <span className="text-diff-add-foreground">
+                +{stats.additions}
+              </span>{" "}
+              <span className="text-diff-remove-foreground">
+                −{stats.deletions}
+              </span>
             </span>
           )}
         </button>
       </h4>
       {open && (
-        <div id={panelId}>
+        <div id={panelId} className="border-t border-border">
+          {canComment && codeRows.length > 0 && (
+            <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
+              <MessageSquarePlus size={13} className="shrink-0" />
+              <span className="hidden sm:inline">
+                Hover a line and press + to comment, or
+              </span>
+              <select
+                aria-label={`Comment on a line in ${file.path}`}
+                value=""
+                onChange={(event) => {
+                  const row = Number(event.target.value);
+                  if (row) setSelectedLine(row);
+                }}
+                className="min-w-0 max-w-full flex-1 truncate rounded border border-border bg-card px-1.5 py-0.5 font-mono text-[11px] text-foreground sm:max-w-72 sm:flex-none"
+              >
+                <option value="">pick a line…</option>
+                {codeRows.map(({ line, row }) => (
+                  <option key={row} value={row}>
+                    {`${line.prefix}${line.newLine ?? line.oldLine}  ${line.code.trim().slice(0, 60)}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <DiffPatch
             path={file.path}
             patch={file.patch}
+            rows={rows}
             comments={comments}
+            diffStyle={diffStyle}
+            selectedLine={commenting ? selectedLine : null}
+            form={form}
             onSelect={canComment ? setSelectedLine : undefined}
           />
-          {selectedLine !== null && canComment && (
-            <form
-              className="space-y-2 border-t border-border p-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!text.trim()) return;
-                void onAdd(file.path, selectedLine, text).then((saved) => {
-                  if (saved) {
-                    setText("");
-                    setSelectedLine(null);
-                  }
-                });
-              }}
-            >
-              <label className="block text-xs font-medium">
-                Comment on {file.path}:{fileLine ?? `diff row ${selectedLine}`}
-                <code className="mt-1 block truncate font-normal text-muted-foreground">
-                  {code}
-                </code>
-                <textarea
-                  required
-                  maxLength={1000}
-                  value={text}
-                  onChange={(event) => setText(event.target.value)}
-                  rows={3}
-                  autoFocus
-                  placeholder="What should change?"
-                  className="mt-2 w-full resize-y rounded-md border border-border bg-card p-2 text-sm"
-                />
-              </label>
-              <div className="flex gap-2">
-                <Button size="sm" disabled={busy || !text.trim()} type="submit">
-                  Add comment
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  type="button"
-                  onClick={() => setSelectedLine(null)}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          )}
         </div>
       )}
     </div>
   );
 }
+type Note = { kind: "comment"; comment: ReviewComment } | { kind: "form" };
+function useThemeType(): "light" | "dark" {
+  const read = (): "light" | "dark" =>
+    document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  const [type, setType] = useState(read);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setType(read()));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => observer.disconnect();
+  }, []);
+  return type;
+}
+// Pierre renders inside shadow DOM; CSS variables cross that boundary, so the diff
+// follows Bakery's palette instead of the library's default colors.
+const diffSurface = {
+  "--diffs-font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+  "--diffs-header-font-family": "inherit",
+  "--diffs-font-size": "11.5px",
+  "--diffs-line-height": "20px",
+  "--diffs-light-bg": "var(--code-background)",
+  "--diffs-dark-bg": "var(--code-background)",
+  "--diffs-bg-addition-override": "var(--diff-add)",
+  "--diffs-bg-deletion-override": "var(--diff-remove)",
+  "--diffs-bg-addition-number-override": "var(--diff-add)",
+  "--diffs-bg-deletion-number-override": "var(--diff-remove)",
+  "--diffs-bg-separator-override": "var(--muted)",
+  "--diffs-selection-color-override": "var(--primary)",
+  "--diffs-bg-selection-override":
+    "color-mix(in srgb, var(--primary) 12%, var(--code-background))",
+  "--diffs-bg-selection-number-override":
+    "color-mix(in srgb, var(--primary) 28%, var(--code-background))",
+} as CSSProperties;
+const diffCSS = `
+  pre, [data-diff], [data-code] { background-color: var(--code-background); }
+  [data-line-type="change-addition"], [data-line-type="change-addition"] [data-column-number] { background-color: var(--diff-add); }
+  [data-line-type="change-deletion"], [data-line-type="change-deletion"] [data-column-number] { background-color: var(--diff-remove); }
+`;
 function DiffPatch({
   path,
   patch,
+  rows,
   comments,
+  diffStyle,
+  selectedLine,
+  form,
   onSelect,
 }: {
   path: string;
   patch: string;
+  rows: DiffLine[];
   comments: ReviewComment[];
+  diffStyle: DiffStyle;
+  selectedLine: number | null;
+  form: ReactNode;
   onSelect?: (line: number) => void;
 }) {
-  const colors = {
-    add: "bg-diff-add text-diff-add-foreground",
-    remove: "bg-diff-remove text-diff-remove-foreground",
-    context: "text-foreground/80",
-    meta: "bg-muted text-muted-foreground",
-  };
-  const parsed = parseDiff(patch);
-  const lines = parsed.length
-    ? parsed
-    : [
-        {
-          kind: "meta" as const,
-          code: "No text diff (binary file).",
-          prefix: "",
-        },
-      ];
+  const themeType = useThemeType();
+  const fileDiff = useMemo(
+    () => parsePatchFiles(withFileHeader(path, patch))[0]?.files[0],
+    [path, patch],
+  );
+  const select = useRef(onSelect);
+  select.current = onSelect;
+  const commentable = onSelect !== undefined;
+  const options = useMemo<FileDiffOptions<Note, undefined>>(
+    () => ({
+      theme: { dark: "pierre-dark", light: "pierre-light" },
+      themeType,
+      diffStyle,
+      diffIndicators: "classic",
+      hunkSeparators: "metadata",
+      lineDiffType: "word-alt",
+      overflow: "scroll",
+      disableFileHeader: true,
+      unsafeCSS: diffCSS,
+      enableGutterUtility: commentable,
+      lineHoverHighlight: commentable ? "both" : "disabled",
+      onGutterUtilityClick: (range) => {
+        const row = rowForTarget(rows, range.endSide ?? range.side, range.end);
+        if (row) select.current?.(row);
+      },
+    }),
+    [themeType, diffStyle, commentable, rows],
+  );
+  const target = selectedLine ? targetForRow(rows, selectedLine) : null;
+  const selectedLines = useMemo(
+    () =>
+      target
+        ? {
+            start: target.lineNumber,
+            end: target.lineNumber,
+            side: target.side,
+          }
+        : null,
+    [target?.side, target?.lineNumber],
+  );
+  const annotations = useMemo(() => {
+    const notes: DiffLineAnnotation<Note>[] = [];
+    for (const comment of comments) {
+      const at = targetForRow(rows, comment.line);
+      if (at) notes.push({ ...at, metadata: { kind: "comment", comment } });
+    }
+    if (target) notes.push({ ...target, metadata: { kind: "form" } });
+    return notes;
+  }, [comments, rows, target?.side, target?.lineNumber]);
+  if (!fileDiff || !rows.some((line) => line.kind !== "meta")) {
+    return (
+      <p className="bg-muted px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        No text diff (binary file).
+      </p>
+    );
+  }
   return (
-    <div className="max-h-96 overflow-auto border-t border-border bg-[var(--code-background)] font-mono text-[11px] leading-5 whitespace-pre">
-      {lines.map((line, index) => (
-        <div key={index}>
-          <div
-            data-change={line.kind}
-            className={`flex min-w-full w-max ${colors[line.kind]}`}
-          >
-            {line.kind === "meta" ? (
-              <span className="px-2">{line.code}</span>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  aria-label={`Comment on ${path} line ${line.newLine ?? line.oldLine ?? index + 1} (${line.kind})`}
-                  disabled={!onSelect}
-                  onClick={() => onSelect?.(index + 1)}
-                  className="w-10 shrink-0 text-right text-muted-foreground hover:bg-primary/20 disabled:cursor-default"
-                >
-                  {line.newLine ?? line.oldLine ?? ""}
-                </button>
-                <span className="w-4 shrink-0 pl-1">{line.prefix}</span>
-                <code
-                  className="pr-4"
-                  dangerouslySetInnerHTML={{
-                    __html: highlightDiffCode(line.code, path),
-                  }}
-                />
-              </>
-            )}
-          </div>
-          {comments
-            .filter((comment) => comment.line === index + 1)
-            .map((comment) => (
-              <div
-                key={comment.id}
-                className="min-w-full w-max border-l-2 border-primary bg-card px-3 py-1 text-foreground whitespace-normal"
-              >
-                <span className="text-primary">
-                  {comment.state === "draft" ? "Draft" : "Requested"}:{" "}
-                </span>
-                {comment.body}
-              </div>
-            ))}
-        </div>
-      ))}
+    <div className="max-h-[32rem] overflow-auto bg-[var(--code-background)]">
+      <FileDiff<Note>
+        fileDiff={fileDiff}
+        options={options}
+        style={diffSurface}
+        lineAnnotations={annotations}
+        selectedLines={selectedLines}
+        renderAnnotation={(annotation) =>
+          annotation.metadata.kind === "form" ? (
+            form
+          ) : (
+            <div className="border-l-2 border-primary bg-card px-3 py-1.5 font-sans text-xs text-foreground whitespace-pre-wrap break-words">
+              <span className="font-medium text-primary">
+                {annotation.metadata.comment.state === "draft"
+                  ? "Draft"
+                  : "Requested"}
+                :{" "}
+              </span>
+              {annotation.metadata.comment.body}
+            </div>
+          )
+        }
+      />
     </div>
   );
 }

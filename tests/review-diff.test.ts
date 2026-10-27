@@ -31,3 +31,22 @@ test("syntax highlights known languages and escapes untrusted patch contents", (
   assert.equal(highlightDiffCode("<img src=x onerror=alert(1)>", "assets/file.unknown"), "&lt;img src=x onerror=alert(1)&gt;");
   assert.doesNotMatch(highlightDiffCode("const x = '<script>';", "src/main.tsx"), /<script>/);
 });
+
+test("review comment rows map to renderer lines and back", async () => {
+  const { diffStats, rowForTarget, targetForRow, withFileHeader } = await import("../src/review-patch.js");
+  const patch = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -4,3 +4,3 @@\n keep\n-old\n+new\n tail";
+  const rows = parseDiff(patch);
+  assert.deepEqual(targetForRow(rows, 5), { side: "additions", lineNumber: 4 });
+  assert.deepEqual(targetForRow(rows, 6), { side: "deletions", lineNumber: 5 });
+  assert.deepEqual(targetForRow(rows, 7), { side: "additions", lineNumber: 5 });
+  assert.equal(targetForRow(rows, 4), null, "hunk headers are not commentable");
+  for (const row of [5, 6, 7, 8]) {
+    const target = targetForRow(rows, row)!;
+    assert.equal(rowForTarget(rows, target.side, target.lineNumber), row);
+  }
+  assert.equal(rowForTarget(rows, "deletions", 4), 5, "context lines are reachable from the old side");
+  assert.equal(rowForTarget(rows, "additions", 99), null);
+  assert.deepEqual(diffStats(rows), { additions: 1, deletions: 1 });
+  assert.equal(withFileHeader("a.ts", patch), patch);
+  assert.equal(withFileHeader("src/b.ts", "@@ -0,0 +1 @@\n+x\n"), "diff --git a/src/b.ts b/src/b.ts\n--- a/src/b.ts\n+++ b/src/b.ts\n@@ -0,0 +1 @@\n+x\n");
+});
