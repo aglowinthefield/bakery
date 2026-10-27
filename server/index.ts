@@ -56,6 +56,11 @@ function fields(value: Record<string, unknown>) {
   if (typeof title !== "string" || !title.trim() || title.length > 200 || typeof description !== "string" || description.length > 16000) throw new Error("Title and description are required");
   return { title: title.trim(), body: description };
 }
+function idempotencyKey(value: unknown) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || !value.trim() || value.length > 200) throw new Error("Idempotency key must be 1 to 200 characters");
+  return value;
+}
 function repoRoot(value: unknown) {
   if (typeof value !== "string" || !value.trim()) throw new Error("Repository path is required");
   const input = value.trim();
@@ -200,7 +205,13 @@ const server = createServer(async (req, res) => {
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       if (!id) {
         if (req.method === "GET") { send(res, 200, board.listCards(repoBoard.repo)); return; }
-        if (req.method === "POST") { send(res, 201, board.createCard({ ...fields(await body(req)), repo: repoBoard.repo })); return; }
+        if (req.method === "POST") {
+          const input = await body(req), card = fields(input), key = idempotencyKey(input.idempotencyKey);
+          // A repeated key returns the board's existing card unchanged, whatever its status.
+          const existing = key === null ? undefined : board.getCardByIdempotencyKey(repoBoard.repo, key);
+          if (existing) { send(res, 200, existing); return; }
+          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key })); return;
+        }
       } else {
         const item = board.getCard(id);
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }

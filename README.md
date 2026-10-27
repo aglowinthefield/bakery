@@ -174,7 +174,7 @@ The CLI talks to the running server's HTTP API, so it goes through the same chec
 ```sh
 npm run bakery -- boards
 npm run bakery -- cards
-npm run bakery -- create --title "..." --body "..."
+npm run bakery -- create --title "..." --body "..." [--key KEY]
 npm run bakery -- ready CARD_ID [--yes]
 npm run bakery -- triage CARD_ID
 npm run bakery -- start CARD_ID... --yes
@@ -185,6 +185,7 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 
 
 - Add `--board ID|PATH` if you have more than one board, and `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
+- `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
 - `cards` prints each card's ID, status, attempt count, review rounds, and title.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.

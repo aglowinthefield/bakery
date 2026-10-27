@@ -278,6 +278,14 @@ export function CardDetails({
             </Button>
           </div>
         )}
+        {card?.idempotencyKey && (
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>Idempotency key</span>
+            <code className="select-all break-all font-mono text-foreground">
+              {card.idempotencyKey}
+            </code>
+          </div>
+        )}
         <Button
           size="sm"
           variant="ghost"

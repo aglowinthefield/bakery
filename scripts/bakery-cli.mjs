@@ -6,7 +6,7 @@ const usage = `bakery-cli — local Bakery API client
 
 Usage: bakery-cli boards [--json]
        bakery-cli cards [--board ID|PATH] [--json]
-       bakery-cli create --title TITLE [--body BODY] [--board ID|PATH] [--json]
+       bakery-cli create --title TITLE [--body BODY] [--key KEY] [--board ID|PATH] [--json]
        bakery-cli ready CARD_ID [--board ID|PATH] [--yes]
        bakery-cli triage CARD_ID [--board ID|PATH]
        bakery-cli start CARD_ID... [--board ID|PATH] --yes
@@ -17,13 +17,15 @@ Usage: bakery-cli boards [--json]
 Set BAKERY_URL (or BAKERY_PORT) to use a different local server. --json prints full API data.
 runs lists each attempt's tokens and cost ("—" when an older attempt has no record) and the card total,
 including agent reviews; runs --json prints { cardId, total, runs, reviews }.
+create --key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status,
+it is printed instead of creating another.
 start runs Pi on Ready, Review or Failed cards (a retry reuses the card's worktree and Pi session).
 --yes is required before start, enabling or resetting pickup, or moving a card to Ready on a pickup-enabled
 board; each can start paid Pi runs. No command approves a merge.`;
 
 function options(argv) {
   const result = { positionals: [], json: false, yes: false };
-  const values = new Set(["board", "title", "body", "concurrency", "limit", "budget"]);
+  const values = new Set(["board", "title", "body", "key", "concurrency", "limit", "budget"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
@@ -100,7 +102,7 @@ async function main() {
   const expected = { boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0 };
   if (!(command in expected) && command !== "pickup" && command !== "start") throw new Error(`Unknown command: ${command}\n${usage}`);
   if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "start" ? !args.length : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
-  if (command !== "create" && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create");
+  if (command !== "create" && (opts.title !== undefined || opts.body !== undefined || opts.key !== undefined)) throw new Error("--title, --body and --key are only valid with create");
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
   if (opts.yes && !(command === "ready" || command === "pickup" || command === "start")) throw new Error("--yes is only valid with ready, start or pickup");
   if (command === "start") {
@@ -121,7 +123,10 @@ async function main() {
     print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
   } else if (command === "create") {
     if (!opts.title?.trim()) throw new Error("create requires --title TITLE");
-    const card = await request(origin, `${path}/cards`, "POST", { title: opts.title, body: opts.body ?? "" });
+    if (opts.key !== undefined && (!opts.key.trim() || opts.key.length > 200)) throw new Error("--key must be 1 to 200 characters");
+    const input = { title: opts.title, body: opts.body ?? "" };
+    if (opts.key !== undefined) input.idempotencyKey = opts.key;
+    const card = await request(origin, `${path}/cards`, "POST", input);
     print(card, opts.json, [`${card.id}\t${card.status}\t${card.title}`]);
   } else if (command === "ready" || command === "triage") {
     if (command === "ready" && board.autoPickupEnabled && !opts.yes) throw new Error("Auto pickup is enabled: Ready may start paid Pi immediately. Repeat with --yes to confirm.");
