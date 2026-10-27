@@ -1578,7 +1578,16 @@ export function App() {
                     </button>
                   ) : (
                     <>
-                      <div className="mb-2 flex min-h-6 items-center gap-2 px-1">
+                      <div
+                        className={`mb-2 flex min-h-6 items-center gap-2 px-1 ${collapsible ? "cursor-pointer" : ""}`}
+                        onClick={(event) => {
+                          if (
+                            collapsible &&
+                            !(event.target as HTMLElement).closest("button")
+                          )
+                            toggleLane(column.id, false);
+                        }}
+                      >
                         <span
                           aria-hidden="true"
                           className="lane-status-dot size-2.5 shrink-0 rounded-full"
