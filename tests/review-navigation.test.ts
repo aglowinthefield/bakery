@@ -166,7 +166,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
     await solarized();
     assert.notEqual(bakery, "rgb(0, 43, 54)");
     await page.reload();
-    await page.getByRole("button", { name: /Review card/ }).click();
+    // The reload reopens the card this tab had open.
     await page.locator('[data-line-type="change-addition"]').first().waitFor();
     assert.equal(await page.getByRole("combobox", { name: "Diff theme" }).inputValue(), "solarized");
     await solarized();
