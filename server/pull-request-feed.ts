@@ -27,16 +27,6 @@ export class PullRequestFeed {
   }
   /** What is known now: the pulls and when they were fetched, or undefined before the first fetch lands. */
   get(boardId: string): Entry | undefined { return this.entries.get(boardId); }
-  /** Merged or closed PRs, read on demand and kept for a minute: they change rarely and nothing polls them. */
-  async history(boardId: string, state: "closed" | "merged"): Promise<RepoPullRequest[]> {
-    const key = `${boardId}:${state}`, kept = this.entries.get(key);
-    if (kept && Date.now() - kept.at < 60_000) return kept.pulls;
-    const repoBoard = this.board.getBoard(boardId);
-    if (!repoBoard) return [];
-    const pulls = await this.github.listOpenPullRequests(boardGithubRepo(repoBoard), state);
-    this.entries.set(key, { pulls, at: Date.now() });
-    return pulls;
-  }
   /** Refreshes one board, sharing an in-flight pass. Resolves once the quick list is published. */
   refresh(boardId: string): Promise<void> {
     const existing = this.inFlight.get(boardId);
@@ -48,7 +38,7 @@ export class PullRequestFeed {
     const quick = this.github.listOpenPullRequests(repo).then(list => {
       const before = new Map((this.entries.get(boardId)?.pulls ?? []).map(pr => [pr.number, pr]));
       // Keep the slow fields from the last pass until the new ones arrive.
-      this.entries.set(boardId, { at: Date.now(), pulls: list.map(pr => ({ ...pr, additions: before.get(pr.number)?.additions, deletions: before.get(pr.number)?.deletions, reviewDecision: before.get(pr.number)?.reviewDecision, checks: before.get(pr.number)?.checks })) });
+      this.entries.set(boardId, { at: Date.now(), pulls: list.map(pr => ({ ...pr, additions: before.get(pr.number)?.additions, deletions: before.get(pr.number)?.deletions, reviewDecision: before.get(pr.number)?.reviewDecision, mergeable: before.get(pr.number)?.mergeable, checks: before.get(pr.number)?.checks })) });
     });
     const whole = quick
       .then(() => this.github.listOpenPullRequestExtras(repo))
@@ -58,7 +48,7 @@ export class PullRequestFeed {
         const byNumber = new Map(extras.map(extra => [extra.number, extra]));
         entry.pulls = entry.pulls.map(pr => {
           const extra = byNumber.get(pr.number);
-          return extra ? { ...pr, additions: extra.additions, deletions: extra.deletions, reviewDecision: extra.reviewDecision, checks: checksState({ statusCheckRollup: extra.statusCheckRollup }) } : pr;
+          return extra ? { ...pr, additions: extra.additions, deletions: extra.deletions, reviewDecision: extra.reviewDecision, mergeable: extra.mergeable as RepoPullRequest["mergeable"], checks: checksState({ statusCheckRollup: extra.statusCheckRollup }) } : pr;
         });
       })
       .catch(error => { if (!this.entries.has(boardId)) throw error; console.error(`Pull request details for ${repo}: ${error instanceof Error ? error.message : String(error)}`); })

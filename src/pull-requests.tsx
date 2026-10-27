@@ -12,7 +12,6 @@ import {
   type Sort,
 } from "./pull-request-filter.js";
 
-type State = "open" | "merged" | "closed";
 
 const decisions: Record<string, string> = {
   APPROVED: "Approved",
@@ -34,8 +33,7 @@ export function PullRequests({
   onOpenCard: (cardId: string) => void;
 }) {
   const [error, setError] = useState("");
-  const [state, setState] = useState<State>("open");
-  const [pulls, setPulls] = useState<PullRequest[] | null>(() => remembered.get(`${boardId}:open`) ?? null);
+  const [pulls, setPulls] = useState<PullRequest[] | null>(() => remembered.get(boardId) ?? null);
   const [filters, setFilters] = useState<Filters>(noFilters);
   const [sort, setSort] = useState<Sort>(() => (localStorage.getItem("bakery-pr-sort") as Sort) in sorts ? (localStorage.getItem("bakery-pr-sort") as Sort) : "updated");
   const set = (patch: Partial<Filters>) => setFilters((previous) => ({ ...previous, ...patch }));
@@ -43,13 +41,13 @@ export function PullRequests({
   useEffect(() => {
     let current = true;
     let timer: ReturnType<typeof setTimeout>;
-    setPulls(remembered.get(`${boardId}:${state}`) ?? null);
+    setPulls(remembered.get(boardId) ?? null);
     setError("");
     const load = () =>
-      api<PullRequest[]>(`/boards/${boardId}/pull-requests?state=${state}`)
+      api<PullRequest[]>(`/boards/${boardId}/pull-requests`)
         .then((next) => {
           if (!current) return;
-          remembered.set(`${boardId}:${state}`, next);
+          remembered.set(boardId, next);
           setPulls(next);
           setError("");
         })
@@ -62,30 +60,17 @@ export function PullRequests({
       current = false;
       clearTimeout(timer);
     };
-  }, [boardId, state]);
+  }, [boardId]);
   const options = filterOptions(pulls ?? []);
   const shown = pulls ? sortPullRequests(filterPullRequests(pulls, filters), sort) : [];
   const filtered = JSON.stringify(filters) !== JSON.stringify(noFilters);
   return (
     <div className="px-6 py-6 lg:px-10">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div role="tablist" aria-label="Pull request state" className="flex rounded-md border border-border text-xs">
-          {(["open", "merged", "closed"] as State[]).map((item) => (
-            <button
-              key={item}
-              role="tab"
-              aria-selected={state === item}
-              onClick={() => setState(item)}
-              className={`px-3 py-1 capitalize ${state === item ? "bg-accent/60 font-medium" : "text-muted-foreground hover:bg-accent/30"}`}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
         <input
           type="search"
           aria-label="Search pull requests"
-          placeholder="Search, or author:name label:bug is:draft"
+          placeholder="Search, or author:name label:bug is:conflicting"
           value={filters.query}
           onChange={(event) => set({ query: event.target.value })}
           className="min-w-64 flex-1 rounded-md border border-border bg-background px-3 py-1 text-xs"
@@ -103,7 +88,7 @@ export function PullRequests({
           <option value="none">Assigned to nobody</option>
           {options.assignees.map((name) => <option key={name}>{name}</option>)}
         </select>
-        {state === "open" && (
+        {(
           <>
             <select aria-label="Review" className={select} value={filters.review} onChange={(e) => set({ review: e.target.value })}>
               <option value="">Review</option>
@@ -117,6 +102,11 @@ export function PullRequests({
               <option value="passing">Passing</option>
               <option value="failing">Failing</option>
               <option value="pending">Pending</option>
+            </select>
+            <select aria-label="Conflicts" className={select} value={filters.conflicts} onChange={(e) => set({ conflicts: e.target.value })}>
+              <option value="">Conflicts</option>
+              <option value="conflicting">Has conflicts</option>
+              <option value="clean">No conflicts</option>
             </select>
             <select aria-label="Draft" className={select} value={filters.draft} onChange={(e) => set({ draft: e.target.value })}>
               <option value="">Draft or ready</option>
@@ -147,10 +137,10 @@ export function PullRequests({
           </button>
         )}
       </div>
-      {pulls && <p className="mb-2 text-xs text-muted-foreground">{shown.length} of {pulls.length} {state} pull requests</p>}
+      {pulls && <p className="mb-2 text-xs text-muted-foreground">{shown.length} of {pulls.length} open pull requests</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {!error && !pulls && <p className="text-sm text-muted-foreground">Loading pull requests…</p>}
-      {pulls && shown.length === 0 && <p className="text-sm text-muted-foreground">{filtered ? "No pull requests match these filters." : `No ${state} pull requests.`}</p>}
+      {pulls && shown.length === 0 && <p className="text-sm text-muted-foreground">{filtered ? "No pull requests match these filters." : "No open pull requests."}</p>}
       <ul aria-label="Pull requests" className="divide-y divide-border">
         {shown.map((pr) => (
           <li
@@ -163,13 +153,18 @@ export function PullRequests({
             <a href={pr.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
               <span className="block truncate font-medium">{pr.title}</span>
               <span className="block truncate text-xs text-muted-foreground">
-                #{pr.number} · {pr.author?.login ?? "unknown"} · {pr.headRefName} · {state === "merged" && pr.mergedAt ? `merged ${date(pr.mergedAt)}` : `updated ${date(pr.updatedAt)}`}
+                #{pr.number} · {pr.author?.login ?? "unknown"} · {pr.headRefName} · {`updated ${date(pr.updatedAt)}`}
                 {pr.additions !== undefined && ` · +${pr.additions} −${pr.deletions ?? 0}`}
               </span>
             </a>
             {(pr.labels ?? []).slice(0, 3).map((label) => (
               <button key={label.name} onClick={() => set({ label: label.name })} title={`Filter by ${label.name}`} className="shrink-0 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/50">{label.name}</button>
             ))}
+            {pr.mergeable === "CONFLICTING" && (
+              <button onClick={() => set({ conflicts: "conflicting" })} title="This branch has merge conflicts with main" className="shrink-0 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-xs text-red-500">
+                Conflicts
+              </button>
+            )}
             {pr.isDraft && <span className="text-xs text-muted-foreground">Draft</span>}
             {pr.checks && <span className="text-xs text-muted-foreground">Checks {pr.checks}</span>}
             {pr.reviewDecision && <span className="text-xs text-muted-foreground">{decisions[pr.reviewDecision] ?? pr.reviewDecision}</span>}

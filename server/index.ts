@@ -171,16 +171,11 @@ const server = createServer(async (req, res) => {
     if (pullsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(pullsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
-      const state = new URL(req.url ?? "", "http://x").searchParams.get("state") ?? "open";
-      if (!["open", "closed", "merged"].includes(state)) throw new Error("state must be open, closed or merged");
-      let pulls;
-      if (state === "open") {
-        // Served from the background feed; only the first view of a repository waits for GitHub.
-        const stored = pullFeed.get(repoBoard.id);
-        if (!stored) await pullFeed.refresh(repoBoard.id);
-        else if (Date.now() - stored.at > 15_000) void pullFeed.refresh(repoBoard.id).catch(() => {});
-        pulls = pullFeed.get(repoBoard.id)?.pulls ?? [];
-      } else pulls = await pullFeed.history(repoBoard.id, state as "closed" | "merged");
+      // Served from the background feed; only the first view of a repository waits for GitHub.
+      const stored = pullFeed.get(repoBoard.id);
+      if (!stored) await pullFeed.refresh(repoBoard.id);
+      else if (Date.now() - stored.at > 15_000) void pullFeed.refresh(repoBoard.id).catch(() => {});
+      const pulls = pullFeed.get(repoBoard.id)?.pulls ?? [];
       // Each PR carries the card it belongs to, so the page can link back to the board.
       const cards = board.listCards(repoBoard.repo).filter(card => card.prNumber && card.status !== "archived");
       send(res, 200, pulls.map(pr => {

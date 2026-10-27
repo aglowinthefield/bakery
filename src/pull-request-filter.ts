@@ -6,8 +6,7 @@ export type PullRequest = {
   isDraft: boolean;
   updatedAt: string;
   createdAt?: string;
-  closedAt?: string | null;
-  mergedAt?: string | null;
+  mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
   author?: { login?: string } | null;
   labels?: { name: string; color?: string }[];
   assignees?: { login: string }[];
@@ -26,9 +25,10 @@ export type Filters = {
   review: string; // "" | APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | none
   checks: string; // "" | passing | failing | pending
   draft: string; // "" | draft | ready
+  conflicts: string; // "" | conflicting | clean
   card: string; // "" | with | without
 };
-export const noFilters: Filters = { query: "", author: "", label: "", assignee: "", review: "", checks: "", draft: "", card: "" };
+export const noFilters: Filters = { query: "", author: "", label: "", assignee: "", review: "", checks: "", draft: "", conflicts: "", card: "" };
 
 export const sorts = {
   newest: "Newest",
@@ -55,6 +55,7 @@ function matchesQuery(pr: PullRequest, query: string): boolean {
       if (key === "assignee") return (pr.assignees ?? []).some((a) => a.login.toLowerCase() === value);
       if (key === "branch" || key === "head") return pr.headRefName.toLowerCase() === value;
       if (key === "is" && value === "draft") return pr.isDraft;
+      if (key === "is" && value === "conflicting") return pr.mergeable === "CONFLICTING";
       if (key === "draft") return pr.isDraft === (value === "true");
     }
     return haystack.includes(word);
@@ -69,6 +70,7 @@ export function filterPullRequests(pulls: PullRequest[], f: Filters): PullReques
     (!f.assignee || (f.assignee === "none" ? !(pr.assignees ?? []).length : (pr.assignees ?? []).some((a) => a.login === f.assignee))) &&
     (!f.review || (f.review === "none" ? !pr.reviewDecision : pr.reviewDecision === f.review)) &&
     (!f.checks || pr.checks === f.checks) &&
+    (!f.conflicts || (f.conflicts === "conflicting" ? pr.mergeable === "CONFLICTING" : pr.mergeable === "MERGEABLE")) &&
     (!f.draft || pr.isDraft === (f.draft === "draft")) &&
     (!f.card || !!pr.card === (f.card === "with")));
 }
