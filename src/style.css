@@ -10,6 +10,9 @@
   --text-base: calc(1rem * var(--density-text));
   --text-lg: calc(1.125rem * var(--density-text));
   --text-xl: calc(1.25rem * var(--density-text));
+  /* Sidebar rows sit a step below body text: 13px and 11px at default density. */
+  --text-sidebar: calc(0.8125rem * var(--density-text));
+  --text-sidebar-meta: calc(0.6875rem * var(--density-text));
 }
 :root {
   color-scheme: dark;
