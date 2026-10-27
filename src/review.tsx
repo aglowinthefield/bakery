@@ -10,7 +10,6 @@ import {
 import {
   ChevronDown,
   ChevronRight,
-  MessageSquarePlus,
   RefreshCw,
   XCircle,
 } from "lucide-react";
@@ -401,30 +400,6 @@ function ReviewFile({
       </h4>
       {open && (
         <div id={panelId} className="border-t border-border">
-          {canComment && codeRows.length > 0 && (
-            <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
-              <MessageSquarePlus size={13} className="shrink-0" />
-              <span className="hidden sm:inline">
-                Hover a line and press + to comment, or
-              </span>
-              <select
-                aria-label={`Comment on a line in ${file.path}`}
-                value=""
-                onChange={(event) => {
-                  const row = Number(event.target.value);
-                  if (row) setSelectedLine(row);
-                }}
-                className="min-w-0 max-w-full flex-1 truncate rounded border border-border bg-card px-1.5 py-0.5 font-mono text-[11px] text-foreground sm:max-w-72 sm:flex-none"
-              >
-                <option value="">pick a line…</option>
-                {codeRows.map(({ line, row }) => (
-                  <option key={row} value={row}>
-                    {`${line.prefix}${line.newLine ?? line.oldLine}  ${line.code.trim().slice(0, 60)}`}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
           <DiffPatch
             path={file.path}
             patch={file.patch}
