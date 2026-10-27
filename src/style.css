@@ -291,6 +291,16 @@ body { margin: 0; min-width: 320px; background: var(--background); color: var(--
 .markdown code { border-radius: 4px; background: var(--code-background); padding: .1em .35em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; }
 .markdown pre { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--code-background); padding: .75em 1em; line-height: 1.5; }
 .markdown pre code { background: none; padding: 0; white-space: pre; }
+.markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: .75em 0; }
+.markdown :is(th, td) { border: 1px solid var(--border); padding: .35em .75em; text-align: left; }
+.markdown th { background: var(--code-background); font-weight: 600; }
+.markdown details { margin: .75em 0; border: 1px solid var(--border); border-radius: 6px; padding: .4em .75em; }
+.markdown details[open] > summary { margin-bottom: .5em; border-bottom: 1px solid var(--border); padding-bottom: .4em; }
+.markdown summary { cursor: pointer; font-weight: 600; }
+.markdown img { max-width: 100%; height: auto; }
+.markdown kbd { border: 1px solid var(--border); border-radius: 4px; background: var(--code-background); padding: .05em .4em; font-family: ui-monospace, monospace; font-size: .85em; }
+.markdown input[type="checkbox"] { margin-right: .4em; accent-color: var(--primary); }
+.markdown li:has(> input[type="checkbox"]), .markdown li.task-list-item { list-style: none; }
 /* Card activity: a light travels round the border while an agent works on the card, the border breathes slowly
    while it waits on something outside Bakery (CI, GitHub), and turns amber when a running agent has gone quiet. */
 @property --activity-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }

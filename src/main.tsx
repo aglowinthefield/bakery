@@ -20,6 +20,7 @@ import {
   CircleHelp,
   Clock3,
   GitBranch,
+  GitPullRequest,
   Hourglass,
   Pencil,
   Plus,
@@ -59,6 +60,7 @@ import {
 import { AgentBadge, reworkSummary } from "./attempts.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
+import { PullRequests } from "./pull-requests.js";
 import { LocalMerges } from "./local-merges.js";
 import { appearanceIcons, RepoBadge } from "./repo-badge.js";
 import { needsYouStatuses, reviewOrder, Today } from "./today.js";
@@ -69,7 +71,7 @@ import {
   type RepoColor,
   type RepoIcon,
 } from "./repo-appearance.js";
-import { describeRemote, type RemoteHost } from "./remote-link.js";
+import { describeRemote, supportsPullRequests, type RemoteHost } from "./remote-link.js";
 import {
   byPriority,
   priorities,
@@ -500,11 +502,10 @@ export function App() {
   }, [repoPath, addingRepo, editingBoard]);
   const [cards, setCards] = useState<Card[]>([]);
   // Today is the landing page until you pick a board; the last choice persists.
-  const [view, setView] = useState<"today" | "board">(() =>
-    (readTab("bakery-view") ?? localStorage.getItem("bakery-view")) === "board"
-      ? "board"
-      : "today",
-  );
+  const [view, setView] = useState<"today" | "board" | "pulls">(() => {
+    const saved = readTab("bakery-view") ?? localStorage.getItem("bakery-view");
+    return saved === "board" || saved === "pulls" ? saved : "today";
+  });
   const [reposCollapsed, setReposCollapsed] = useState(
     () => localStorage.getItem("bakery-repos-collapsed") === "true",
   );
@@ -699,6 +700,13 @@ export function App() {
     setSelected(null);
     setCards([]);
     setMergeConflicts([]);
+  };
+  const [pullHighlight, setPullHighlight] = useState<number | null>(null);
+  const openPulls = (id: string, highlight: number | null = null) => {
+    setPullHighlight(highlight);
+    openBoard(id);
+    setView("pulls");
+    localStorage.setItem("bakery-view", "pulls");
   };
   const openToday = () => {
     setView("today");
@@ -1110,7 +1118,8 @@ export function App() {
           <div id="sidebar-repositories" hidden={reposCollapsed}>
             {boards.map((item) => {
               const active = view === "board" && boardId === item.id;
-              const open = repoOpen[item.id] ?? active;
+              const pullsActive = view === "pulls" && boardId === item.id;
+              const open = repoOpen[item.id] ?? (active || pullsActive);
               return (
                 <div key={item.id} className="rounded-lg">
                   <div className="flex items-center rounded-lg hover:bg-accent/30">
@@ -1174,6 +1183,15 @@ export function App() {
                       <Kanban size={13} aria-hidden="true" /> Kanban
                     </button>
                   )}
+                  {open && supportsPullRequests(item) && (
+                    <button
+                      onClick={() => openPulls(item.id)}
+                      aria-current={pullsActive ? "page" : undefined}
+                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${pullsActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                    >
+                      <GitPullRequest size={13} aria-hidden="true" /> Pull requests
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -1229,7 +1247,33 @@ export function App() {
           />
         </main>
       )}
-      <main className="min-w-0 flex-1" hidden={view === "today"}>
+      {view === "pulls" && boardId && currentBoard && supportsPullRequests(currentBoard) && (
+        <main className="min-w-0 flex-1">
+          <header className="border-b border-border px-6 py-6 lg:px-10">
+            <h1 className="text-[27px] font-semibold tracking-[-.05em]">
+              Pull requests
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {currentBoard?.repo}
+            </p>
+          </header>
+          <PullRequests
+            boardId={boardId}
+            highlight={pullHighlight}
+            onOpenCard={(id) => {
+              openBoard(boardId);
+              setSelected(id);
+            }}
+          />
+        </main>
+      )}
+      <main
+        className="min-w-0 flex-1"
+        hidden={
+          view === "today" ||
+          (view === "pulls" && !!currentBoard && supportsPullRequests(currentBoard))
+        }
+      >
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-6 lg:px-10">
           <div>
             <div className="mb-2 text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">
@@ -1707,7 +1751,20 @@ export function App() {
                                     />
                                   )}
                                   {item.prNumber && (
-                                    <PullRequestBadge card={item} />
+                                    <PullRequestBadge
+                                      card={item}
+                                      onOpen={
+                                        currentBoard &&
+                                        supportsPullRequests(currentBoard) &&
+                                        item.prState === "OPEN"
+                                          ? () =>
+                                              openPulls(
+                                                currentBoard.id,
+                                                item.prNumber ?? null,
+                                              )
+                                          : undefined
+                                      }
+                                    />
                                   )}
                                   {item.status === "done" &&
                                     item.originMain && (
@@ -2716,6 +2773,15 @@ export function App() {
           card={card}
           boardCards={scopeCards.filter((item) => item.repo === card?.repo)}
           onOpenCard={setSelected}
+          onOpenPullRequest={(() => {
+            const owner = boards.find((item) => item.id === detailBoardId);
+            return owner && card?.prNumber && supportsPullRequests(owner)
+              ? () => {
+                  setSelected(null);
+                  openPulls(owner.id, card.prNumber ?? null);
+                }
+              : undefined;
+          })()}
           settings={settings}
           conflict={mergeConflicts.find((item) => item.cardId === selected)}
           queue={
@@ -2754,7 +2820,13 @@ export function App() {
     </div>
   );
 }
-function PullRequestBadge({ card }: { card: Card }) {
+function PullRequestBadge({
+  card,
+  onOpen,
+}: {
+  card: Card;
+  onOpen?: () => void;
+}) {
   const tone =
     card.prState === "MERGED"
       ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
@@ -2764,6 +2836,15 @@ function PullRequestBadge({ card }: { card: Card }) {
   return (
     <span
       data-testid="pr-badge"
+      role={onOpen ? "link" : undefined}
+      onClick={
+        onOpen
+          ? (event) => {
+              event.stopPropagation();
+              onOpen();
+            }
+          : undefined
+      }
       title={[
         card.prUrl,
         card.prState?.toLowerCase(),

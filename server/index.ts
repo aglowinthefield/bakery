@@ -11,7 +11,8 @@ import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { draftPullRequest } from "./pr-draft.js";
-import { GitHub, GitHubSync, detectGithubIntegration } from "./github.js";
+import { PullRequestFeed } from "./pull-request-feed.js";
+import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
@@ -35,6 +36,7 @@ const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
+const pullFeed = new PullRequestFeed(board, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card),
   card => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true));
@@ -164,6 +166,28 @@ const server = createServer(async (req, res) => {
       if (!item) { send(res, 404, { error: "Board not found" }); return; }
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
+    }
+    const pullRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})$/);
+    if (pullRoute && req.method === "GET") {
+      const repoBoard = board.getBoard(pullRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      send(res, 200, await github.pullRequestDetail(boardGithubRepo(repoBoard), Number(pullRoute[2]))); return;
+    }
+    const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
+    if (pullsRoute && req.method === "GET") {
+      const repoBoard = board.getBoard(pullsRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      // Served from the background feed; only the first view of a repository waits for GitHub.
+      const stored = pullFeed.get(repoBoard.id);
+      if (!stored) await pullFeed.refresh(repoBoard.id);
+      else if (Date.now() - stored.at > 15_000) void pullFeed.refresh(repoBoard.id).catch(() => {});
+      const pulls = pullFeed.get(repoBoard.id)?.pulls ?? [];
+      // Each PR carries the card it belongs to, so the page can link back to the board.
+      const cards = board.listCards(repoBoard.repo).filter(card => card.prNumber && card.status !== "archived");
+      send(res, 200, pulls.map(pr => {
+        const card = cards.find(item => item.prNumber === pr.number);
+        return { ...pr, card: card ? { id: card.id, title: card.title, status: card.status, prChecks: card.prChecks ?? null } : null };
+      })); return;
     }
     const pickupResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/auto-pickup\/reset-limit$/);
     if (pickupResetRoute && req.method === "POST") {
@@ -384,13 +408,13 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); githubSync.start();
+server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
   // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
   // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
   for (const item of board.listBoards().filter(item => item.githubMainProtected === null && item.remoteUrl))
     void detectGithubIntegration(board, item.id, github, false).catch(error => console.error(`GitHub main check for ${item.repo}: ${error}`));
 });
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); githubSync.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 process.on("message", (message: unknown) => {

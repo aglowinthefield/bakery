@@ -39,6 +39,8 @@ type Props = {
   /** The cards on this card's board that the page has loaded, for naming and choosing dependencies. */
   boardCards: Card[];
   onOpenCard: (id: string) => void;
+  /** Opens the repository's Pull requests page on this card's PR; absent when the remote has none. */
+  onOpenPullRequest?: () => void;
   settings: BakerySettings | null;
   conflict: MergeConflict | undefined;
   onClose: () => void;
@@ -56,6 +58,7 @@ export function CardDetails({
   card,
   boardCards,
   onOpenCard,
+  onOpenPullRequest,
   settings,
   conflict: mergeConflict,
   onClose,
@@ -423,6 +426,7 @@ export function CardDetails({
         )}
         {card && integration === "github-pr" && (
           <PullRequestLink
+            onOpenPullRequest={card.prState === "OPEN" ? onOpenPullRequest : undefined}
             card={card}
             busy={busy}
             onSave={(url) =>
@@ -1035,7 +1039,9 @@ function PullRequestLink({
   card,
   busy,
   onSave,
+  onOpenPullRequest,
 }: {
+  onOpenPullRequest?: () => void;
   card: Card;
   busy: boolean;
   onSave: (url: string) => Promise<boolean>;
@@ -1059,6 +1065,17 @@ function PullRequestLink({
           </a>
         ) : (
           `none yet (looks for bakery/${card.id})`
+        )}
+        {onOpenPullRequest && (
+          <>
+            {" \u00b7 "}
+            <button
+              onClick={onOpenPullRequest}
+              className="text-primary underline-offset-2 hover:underline"
+            >
+              View in Pull requests
+            </button>
+          </>
         )}
         {state && ` \u00b7 ${state}`}
         {card.prChecks && ` \u00b7 checks ${card.prChecks}`}

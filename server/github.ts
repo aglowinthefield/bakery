@@ -18,6 +18,12 @@ export type Check = {
   conclusion?: string | null; state?: string | null; status?: string | null;
   name?: string; context?: string; workflowName?: string; startedAt?: string; completedAt?: string; detailsUrl?: string; targetUrl?: string;
 };
+/** One open PR as the Pull requests page shows it. */
+export type RepoPullRequest = {
+  number: number; title: string; url: string; headRefName: string; isDraft: boolean; updatedAt: string;
+  author?: { login?: string } | null; createdAt?: string; mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
+  labels?: { name: string; color?: string }[]; assignees?: { login: string }[]; additions?: number; deletions?: number; reviewDecision?: string | null; checks?: string | null;
+};
 const prFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,statusCheckRollup";
 // statusCheckRollup is expensive: across 200 PRs on a busy repo GitHub's GraphQL API times out (HTTP 504).
 // The batched list leaves it out; checks are fetched per open PR instead.
@@ -135,6 +141,18 @@ export class GitHub {
   /** Recent PRs in the repository, newest first. One call per board per tick. */
   async listPullRequests(repo: string): Promise<PullRequest[]> {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "all", "--limit", "200", "--json", listFields])) as PullRequest[];
+  }
+  /** Open PRs for the Pull requests page: the cheap fields, about a second even on a busy repo. */
+  async listOpenPullRequests(repo: string): Promise<RepoPullRequest[]> {
+    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number,title,url,author,headRefName,isDraft,updatedAt,createdAt,labels,assignees"])) as RepoPullRequest[];
+  }
+  /** The fields GitHub is slow to compute (seconds on a busy repo), fetched apart so they never hold up the list. */
+  async listOpenPullRequestExtras(repo: string): Promise<(Pick<RepoPullRequest, "number" | "additions" | "deletions" | "reviewDecision"> & { mergeable?: string; statusCheckRollup?: Check[] })[]> {
+    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number,reviewDecision,additions,deletions,mergeable,statusCheckRollup"]));
+  }
+  /** Everything the Pull requests page's detail view shows for one PR. */
+  async pullRequestDetail(repo: string, number: number): Promise<unknown> {
+    return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "number,title,url,body,author,baseRefName,headRefName,isDraft,mergeable,mergeStateStatus,reviewDecision,additions,deletions,changedFiles,files,commits,latestReviews,comments,statusCheckRollup,labels,assignees,createdAt,updatedAt"]));
   }
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {

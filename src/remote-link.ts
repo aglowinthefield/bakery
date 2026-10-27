@@ -14,3 +14,8 @@ export function describeRemote(value: string): { host: RemoteHost; hostname: str
   if (host === "other" || !path) return { host, hostname, label: path ? `${hostname}/${path}` : hostname };
   return { host, hostname, label: path };
 }
+
+/** Whether Bakery can list this repository's pull requests: only GitHub remotes, through `gh`. */
+export function supportsPullRequests(board: { remoteUrl?: string }): boolean {
+  return !!board.remoteUrl && describeRemote(board.remoteUrl).host === "github";
+}
