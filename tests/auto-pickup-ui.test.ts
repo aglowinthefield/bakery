@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 
 test("a capped board shows the reason, next slot, and a confirmed reset in the repository settings", async () => {
-  const server = await createServer({ server: { port: 0 } });
+  const server = await createServer({ server: { port: 0, strictPort: false } });
   await server.listen();
   const address = server.httpServer!.address();
   assert.ok(address && typeof address !== "string");

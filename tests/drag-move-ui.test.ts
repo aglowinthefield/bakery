@@ -19,7 +19,7 @@ test("drop targets mirror the card's own move buttons", () => {
 });
 
 test("dragging a card onto a valid lane moves it; other lanes refuse the drop", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {

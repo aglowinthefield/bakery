@@ -17,7 +17,7 @@ const boardCards = [
 const otherCards = [card("9999aaaa-0000", "ready", "Other board card")];
 
 test("search filters cards by title, body, and ID prefix and clears", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {

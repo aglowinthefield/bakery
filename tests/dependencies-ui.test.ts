@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 
 test("a blocked Ready card shows a waiting badge, and details list, link, add and remove dependencies", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {

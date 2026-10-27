@@ -15,7 +15,7 @@ const runs = [
 ];
 
 async function openAttempts() {
-  const server = await createServer({ server: { port: 0 } });
+  const server = await createServer({ server: { port: 0, strictPort: false } });
   await server.listen();
   const address = server.httpServer!.address();
   assert.ok(address && typeof address !== "string");

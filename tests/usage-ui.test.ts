@@ -14,7 +14,7 @@ const runs = [
 ];
 
 async function open(board: Record<string, unknown>, onPatch: (input: Record<string, unknown>) => Record<string, unknown> = input => input) {
-  const server = await createServer({ server: { port: 0 } });
+  const server = await createServer({ server: { port: 0, strictPort: false } });
   await server.listen();
   const address = server.httpServer!.address();
   assert.ok(address && typeof address !== "string");

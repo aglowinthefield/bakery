@@ -39,7 +39,7 @@ async function openCard(server: ViteDevServer, page: Page) {
 }
 
 test("a page reload reopens the card this tab had open", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {
@@ -64,7 +64,7 @@ test("a page reload reopens the card this tab had open", async () => {
 });
 
 test("a change to the app module hot-swaps without reloading the page", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {

@@ -16,7 +16,7 @@ async function openTab(context: BrowserContext, url: string): Promise<Page> {
 }
 
 test("a new tab opens the repo last viewed in any tab", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {

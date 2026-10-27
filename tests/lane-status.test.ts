@@ -9,7 +9,7 @@ let server: ViteDevServer;
 let browser: Browser;
 
 before(async () => {
-  server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   browser = await chromium.launch();
 });

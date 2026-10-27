@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 
 test("github-pr Approve shows the drafted PR, flags a title the semantic check rejects, and sends the edited draft", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {

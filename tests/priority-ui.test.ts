@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 
 test("lanes sort by priority, non-Normal cards show a badge, and details can change priority", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {

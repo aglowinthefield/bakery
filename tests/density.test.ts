@@ -7,7 +7,7 @@ let server: ViteDevServer;
 let browser: Browser;
 let url: string;
 before(async () => {
-  server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   url = server.resolvedUrls!.local[0];
   browser = await chromium.launch();

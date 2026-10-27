@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 
 test("repository icon and color picker updates navigation and heading after save and reload", async () => {
-  const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   let browser;
   try {
     await server.listen();
