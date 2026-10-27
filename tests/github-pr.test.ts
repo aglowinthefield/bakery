@@ -511,11 +511,15 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
     await sync.syncBoard(f.repoBoard.id);
     assert.deepEqual(started, [card.id], "the next sync started it");
     assert.equal(f.board.getCard(card.id)!.ciReworks, 1, "a retried start is the same round");
-    f.board.clearCiFeedback(card.id); // The fake rework does not run Pi, which would hand the failures over.
+    // The fake rework does not run Pi, so the failures are still waiting. A rerun that passes drops them.
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [lint, { ...lint, startedAt: new Date().toISOString(), conclusion: "SUCCESS" }] }]);
     await sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCiFeedback(card.id), undefined, "stale failures are dropped once CI passes");
+    assert.equal(f.board.getCard(card.id)!.prChecks, "passing");
     assert.deepEqual(started, [card.id]);
 
     // A new pushed commit that fails again, with the limit used up: the card stays in Review with the reason.
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [{ ...lint, startedAt: new Date(Date.now() + 1000).toISOString() }] }]);
     const db = new DatabaseSync(join(f.dir, "board.sqlite"));
     try { db.prepare("UPDATE cards SET ciReworks=?, ciReworkSha='0000' WHERE id=?").run(maxCiReworks, card.id); } finally { db.close(); }
     await sync.syncBoard(f.repoBoard.id);
