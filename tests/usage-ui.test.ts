@@ -58,7 +58,7 @@ test("attempts show their cost, older attempts show a dash, and the card shows i
   } finally { await close(); }
 });
 
-test("the board shows rolling spend, a reached budget explains the wait, and Settings saves or clears the budget", async () => {
+test("the board shows rolling spend, a reached budget explains the wait, and the repository settings save or clear the budget", async () => {
   let dialogs = 0;
   const { page, close } = await open({ ...baseBoard, cost24h: 1.2, pickupCostBudget: 1, autoPickupBudgetReached: true }, input => ({
     ...input, autoPickupBudgetReached: typeof input.pickupCostBudget === "number" && input.pickupCostBudget <= 1.2,
@@ -68,7 +68,7 @@ test("the board shows rolling spend, a reached budget explains the wait, and Set
     await page.getByText("Last 24h: $1.20 of $1.00 budget").waitFor();
     await page.getByText(/Auto pickup waiting: daily cost budget reached/).waitFor();
     await page.getByText(/Manual starts still work/).waitFor();
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: `Edit ${repo}` }).click();
     const input = page.getByRole("textbox", { name: "Auto pickup daily cost budget" });
     assert.equal(await input.inputValue(), "1");
     await input.fill("abc");
