@@ -725,6 +725,11 @@ export function CardDetails({
                 busy ||
                 !currentReview ||
                 changesRequested ||
+                // The open PR already holds this run's work; Approve returns once a newer run exists.
+                (integration === "github-pr" &&
+                  card.prState === "OPEN" &&
+                  !card.prOverrideUrl &&
+                  !!card.reviewWait) ||
                 autoJobs.some(
                   (item) =>
                     item.runId === runs[0]?.id && item.state === "running",
