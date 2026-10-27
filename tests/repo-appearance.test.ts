@@ -29,7 +29,7 @@ test("repository icon and color picker updates navigation and heading after save
       else if (path.endsWith("/local-merges")) await route.fulfill({ json: { cards: [], main: null } });
       else throw new Error(`Unexpected API request: ${path}`);
     });
-    const badges = page.locator("aside button[title='/tmp/example'] svg, header h1 svg");
+    const badges = page.locator("aside button[title='/tmp/example'] svg, header h1 .repo-badge svg");
     await page.goto(server.resolvedUrls!.local[0]);
     await badges.first().waitFor();
     assert.equal(await badges.count(), 2);
@@ -40,7 +40,7 @@ test("repository icon and color picker updates navigation and heading after save
     assert.equal(await page.getByRole("button", { name: "Save appearance" }).isEnabled(), true);
     await page.getByRole("button", { name: "Save appearance" }).click();
     await page.getByRole("button", { name: "Save appearance" }).waitFor({ state: "visible" });
-    await page.waitForFunction(() => document.querySelector("header h1 svg")?.parentElement && getComputedStyle(document.querySelector("header h1 svg")!.parentElement!).color === "rgb(251, 113, 133)");
+    await page.waitForFunction(() => document.querySelector("header h1 .repo-badge svg")?.parentElement && getComputedStyle(document.querySelector("header h1 .repo-badge svg")!.parentElement!).color === "rgb(251, 113, 133)");
     assert.deepEqual([board.icon, board.color], ["rocket", "coral"]);
     assert.notEqual(await badges.first().evaluate(el => el.innerHTML), initial);
     assert.equal(await badges.first().evaluate(el => getComputedStyle(el.parentElement!).color), "rgb(251, 113, 133)");
@@ -60,7 +60,7 @@ test("repository icon and color picker updates navigation and heading after save
     assert.notEqual(await badges.last().evaluate(el => getComputedStyle(el.parentElement!).color), "rgb(251, 191, 36)");
     await page.reload();
     assert.equal(await page.getByRole("button", { name: "Edit /tmp/renamed" }).count(), 1);
-    assert.notEqual(await page.locator("header h1 svg").evaluate(el => el.innerHTML), initial);
+    assert.notEqual(await page.locator("header h1 .repo-badge svg").evaluate(el => el.innerHTML), initial);
     await page.close();
   } finally { await browser?.close(); await server.close(); }
 });
