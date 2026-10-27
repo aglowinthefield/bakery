@@ -6,6 +6,7 @@ import { join, extname, isAbsolute, resolve } from "node:path";
 import { Board, parsePriority } from "./board.js";
 import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
+import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { GitHub, GitHubSync } from "./github.js";
@@ -27,12 +28,14 @@ const piBin = process.env.BAKERY_PI_BIN ?? "pi";
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
 const autoReview = new AutoReview(board, integration, piBin);
+// Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
+const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card),
-  card => integration.openPullRequest(card, integration.review(card).fingerprint, github));
+  card => integration.openPullRequest(card, integration.review(card).fingerprint, github, true));
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
@@ -251,7 +254,7 @@ const server = createServer(async (req, res) => {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       if (!id) {
-        if (req.method === "GET") { send(res, 200, board.listCards(repoBoard.repo)); return; }
+        if (req.method === "GET") { send(res, 200, originMain.annotate(repoBoard, board.listCards(repoBoard.repo))); return; }
         if (req.method === "POST") {
           const input = await body(req), card = fields(input), key = idempotencyKey(input.idempotencyKey);
           // A repeated key returns the board's existing card unchanged, whatever its status.

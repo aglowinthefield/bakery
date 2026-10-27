@@ -14,7 +14,7 @@ flowchart LR
   server -->|one per card| wt[Git worktree<br/>branch bakery/CARD_ID]
   server -->|spawns| pi[pi agent]
   pi -->|edits| wt
-  wt -->|Approve and merge| main[local main]
+  wt -->|Approve and merge into local main| main[local main]
 ```
 
 ## Contents
@@ -51,7 +51,7 @@ Then:
 1. Add a repository by entering its Git root, either an absolute path or a `~/` path. The repository needs at least one commit, because worktrees start from `HEAD`.
 2. Create a card. New cards start in **Triage**.
 3. Move the card to **Ready**, then start it. Starting a run uses paid model tokens.
-4. When Pi finishes, the card moves to **Review**. Read the diff, then **Approve and merge** or **Request changes**.
+4. When Pi finishes, the card moves to **Review**. Read the diff, then **Approve and merge into local main** (or **Approve and open PR** on a github-pr board) or **Request changes**.
 
 Uncommitted or untracked files in your checkout don't appear in card worktrees.
 
@@ -130,7 +130,7 @@ When you approve:
 
 ```mermaid
 flowchart TD
-  A[Approve and merge] --> B{Worktree or main changed<br/>since the diff loaded?}
+  A[Approve and merge into local main] --> B{Worktree or main changed<br/>since the diff loaded?}
   B -->|yes| R[Refuse: refresh the diff]
   B -->|no| C[Commit all unignored changes<br/>on the card branch]
   C --> D[Merge with current main<br/>in a temporary worktree]
@@ -161,7 +161,7 @@ To turn it on, give the board a GitHub remote link (`https://github.com/OWNER/RE
 What changes in this mode:
 
 - **New card worktrees** start from a freshly fetched `origin/main`, not from the local checkout's `HEAD`.
-- **Approve and open PR** commits the reviewed changes on `bakery/<card>`, pushes that branch to `origin`, and runs `gh pr create` with the card title and the card description plus the run summary. Nothing merges locally. If the branch already has an open PR, Approve pushes the new commits to it. `gh` errors, such as a repository's PR title rules, appear on the card word for word. Pi is still told never to push or open PRs. Your Approve is the authorization.
+- **Approve and open PR** commits the reviewed changes on `bakery/<card>`, pushes that branch to `origin`, and runs `gh pr create` with the card title and the card description plus the run summary. Nothing merges locally. If the branch already has an open PR, Approve pushes the new commits to it. `gh` errors, such as a repository's PR title rules, appear on the card word for word. Pi is still told never to push or open PRs. Your Approve is the authorization. Bakery comments on the PR at each turning point: when it pushes an update (and whether a person approved it or it was an automatic CI fix), when it sends the card back for failing CI, and when it gives up after the fix-run limit. A CI fix run may also add or remove labels on its own PR, edit its description, and comment to explain why, for checks that a label or description line satisfies.
 - **Linking a PR.** Bakery finds a card's PR by its `bakery/<card>` branch. If your branch naming differs, attach the PR link on the card, or run `bakery-cli pr CARD_ID URL` (`off` clears it). A linked PR is only watched; Bakery doesn't push to it.
 - **Polling.** About once a minute per board, Bakery makes one `gh pr list` call for the board's Review cards:
   - **Open:** the card stays in Review and shows the PR number and checks state. The button becomes **Approve and update PR #N**, which pushes new reviewed work to that PR.

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "./board.js";
-import { boardGithubRepo, fetchOrigin, type GitHub } from "./github.js";
+import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false): string {
@@ -170,9 +170,10 @@ export class Integration {
    * a PR (or reuse the open one). Nothing merges locally; the card stays in Review until the PR merges on GitHub.
    * The operator's Approve is the authorization to push; the agent itself never pushes.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub): Promise<Card> {
+  /** `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it. */
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, automatic = false): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
-    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge");
+    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
     await github.check();
@@ -187,20 +188,22 @@ export class Integration {
     const branch = `bakery/${card.id}`;
     // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
     git(worktree, "push", "origin", `${candidate}:refs/heads/${branch}`);
-    const { number, url } = await this.ensurePullRequest(card, run.output, slug, github);
+    const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
+    const { number, url } = await this.ensurePullRequest(card, run.output, slug, github, { sha: candidate, why });
     this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
     this.board.recordPullRequestPush(card.id, run.id);
     return this.board.getCard(card.id)!;
   }
 
   /** The open PR from `bakery/<id>`, or a new one with the card title and the card body plus the run summary. */
-  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub): Promise<{ number: number; url: string }> {
+  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string }): Promise<{ number: number; url: string }> {
     const branch = `bakery/${card.id}`;
     const existing = await github.findByBranch(slug, branch);
     let url = existing?.state === "OPEN" ? existing.url : "";
+    const summary = (output || "").trim().slice(-3000);
+    const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
+    if (existing && url) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
     if (!url) {
-      const summary = (output || "").trim().slice(-3000);
-      const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
       const body = `${card.body.trim()}\n\n---\n\nOpened by Bakery for card \`${card.id}\`.${details}`;
       url = await github.create(slug, branch, card.title.replace(/\s+/g, " ").trim().slice(0, 250) || `Bakery card ${card.id}`, body);
     }
@@ -244,7 +247,7 @@ export class Integration {
     if (isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
     // A plain push: if bakery/<id> on GitHub holds other commits, Git refuses instead of overwriting them.
     git(repo, "push", "origin", `${candidate}:refs/heads/bakery/${card.id}`);
-    const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github);
+    const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, { sha: candidate, why: "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" });
     return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: this.mainRecovery(repo) };
   }
 
