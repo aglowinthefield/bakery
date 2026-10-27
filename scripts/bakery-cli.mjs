@@ -4,7 +4,8 @@ import { resolve } from "node:path";
 
 const usage = `bakery-cli — local Bakery API client
 
-Usage: bakery-cli boards [--json]
+Usage: bakery-cli add TITLE... [--body BODY] [--priority low|normal|high|urgent] [--board ID|PATH] [--json]
+       bakery-cli boards [--json]
        bakery-cli cards [--board ID|PATH] [--json]
        bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority low|normal|high|urgent] [--board ID|PATH] [--json]
        bakery-cli show CARD_ID [--board ID|PATH] [--json]
@@ -20,6 +21,8 @@ Usage: bakery-cli boards [--json]
        bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--budget USD|off] [--board ID|PATH] [--yes]
 
 Set BAKERY_URL (or BAKERY_PORT) to use a different local server. --json prints full API data.
+Without --board, commands use the board whose repository contains the current directory, or the only board.
+add is quick capture: the words after it become the title of a new Triage card.
 runs lists each attempt's tokens and cost ("—" when an older attempt has no record) and the card total,
 including agent reviews; runs --json prints { cardId, total, runs, reviews }.
 create --key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status,
@@ -76,6 +79,10 @@ async function request(origin, path, method = "GET", input) {
 }
 
 function selectBoard(boards, selector) {
+  // The innermost repository containing the current directory wins, so nested repositories pick themselves.
+  const cwd = process.cwd();
+  const here = boards.filter(item => cwd === item.repo || cwd.startsWith(`${item.repo}/`)).sort((a, b) => b.repo.length - a.repo.length)[0];
+  if (!selector && here) return here;
   if (!selector && boards.length === 1) return boards[0];
   if (!selector) throw new Error(boards.length ? "More than one board; choose one with --board ID|PATH" : "No boards yet. Add a repository in Bakery first.");
   const path = selector.startsWith("~/") ? resolve(homedir(), selector.slice(2)) : resolve(selector);
@@ -124,11 +131,12 @@ async function main() {
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
   const expected = { boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, stats: 0 };
-  const variadic = ["start", "archive"];
+  const variadic = ["start", "archive", "add"];
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
-  if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
-  if (command !== "create" && command !== "edit" && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create or edit");
-  if (command !== "create" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create");
+  if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
+  if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
+  if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
   if (opts.priority !== undefined && !Object.hasOwn(priorities, opts.priority)) throw new Error("Priority must be low, normal, high, or urgent");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
@@ -151,8 +159,9 @@ async function main() {
   if (command === "cards") {
     const cards = await request(origin, `${path}/cards`);
     print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tpriority:${priorityName(item.priority)}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
-  } else if (command === "create") {
-    if (!opts.title?.trim()) throw new Error("create requires --title TITLE");
+  } else if (command === "create" || command === "add") {
+    if (command === "add") opts.title = args.join(" ");
+    if (!opts.title?.trim()) throw new Error(command === "add" ? "add requires a title" : "create requires --title TITLE");
     if (opts.key !== undefined && (!opts.key.trim() || opts.key.length > 200)) throw new Error("--key must be 1 to 200 characters");
     const input = { title: opts.title, body: opts.body ?? "" };
     if (opts.priority !== undefined) input.priority = opts.priority;

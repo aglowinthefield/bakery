@@ -182,6 +182,7 @@ flowchart LR
 The CLI talks to the running server's HTTP API, so it goes through the same checks as the UI.
 
 ```sh
+npm run bakery -- add fix the flaky login test [--priority high]
 npm run bakery -- boards
 npm run bakery -- cards
 npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority low|normal|high|urgent]
@@ -198,7 +199,8 @@ npm run bakery -- conflicts
 npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
 ```
 
-- Add `--board ID|PATH` if you have more than one board, and `--json` for full API responses.
+- `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body` and `--priority` as `create`.
+- Without `--board`, commands use the board whose repository contains your current directory. Outside every repository, they use the only board, or ask for `--board ID|PATH` if you have several. Add `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
 - `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
 - `cards` prints each card's ID, status, attempt count, review rounds, and title.

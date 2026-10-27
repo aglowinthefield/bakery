@@ -129,6 +129,11 @@ const server = createServer(async (req, res) => {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
     if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {} }))); return; }
+    if (path === "/api/cards" && req.method === "GET") {
+      // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
+      const repos = new Set(board.listBoards().map(item => item.repo));
+      send(res, 200, board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived")); return;
+    }
     if (path === "/api/boards" && req.method === "POST") {
       const root = repoRoot((await body(req)).repo);
       if (board.listBoards().some(item => item.repo === root)) throw new Error("Repository already has a board");

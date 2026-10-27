@@ -177,6 +177,9 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards/archive`, "POST", { cardIds: [finished.id] })).data[0].status, "archived");
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
     assert.deepEqual((await request(`/boards/${second.id}/cards`)).data.map((item: { title: string }) => item.title), ["Beta keyed"]);
+    // Today reads every board at once and leaves archived cards out.
+    const everyTitle = async () => (await request("/cards")).data.map((item: { title: string }) => item.title).sort();
+    assert.deepEqual(await everyTitle(), ["Alpha", "Beta keyed", "Keyed"]);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/runs`)).status, 404);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/start`, "POST")).status, 404);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/approve`, "POST")).status, 404);
@@ -193,6 +196,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync(gamma));
     assert.equal((await request(`/boards/${first.id}`, "DELETE")).status, 200);
     assert.equal((await request(`/boards/${first.id}/cards`)).status, 404);
+    assert.deepEqual(await everyTitle(), ["Beta keyed"]);
     assert.equal((await request("/boards")).data.length, 1);
     const restored = await request("/boards", "POST", { repo: gamma });
     assert.equal(restored.data.id, first.id);

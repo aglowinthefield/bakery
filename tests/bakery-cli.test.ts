@@ -3,6 +3,9 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
 const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
@@ -55,15 +58,16 @@ async function fixture(boards: object[] = [board]) {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
-  const run = async (...args: string[]) => {
-    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
+  const runIn = async (cwd: string | undefined, ...args: string[]) => {
+    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
     let stdout = "", stderr = "";
     for await (const chunk of child.stdout) stdout += chunk;
     for await (const chunk of child.stderr) stderr += chunk;
     const code = await new Promise<number | null>(resolve => child.once("close", resolve));
     return { code, stdout, stderr };
   };
-  return { requests, run, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
+  const run = (...args: string[]) => runIn(undefined, ...args);
+  return { requests, run, runIn, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
 
 test("lists boards, cards, runs and conflicts through the HTTP API", async () => {
@@ -113,6 +117,30 @@ test("card creation and status changes go through the API; Ready needs consent w
     assert.match((await f.run("create", "--title", "Long", "--key", "k".repeat(201))).stderr, /1 to 200/);
     assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { status: "triage" }, { title: "Hotfix", body: "", priority: "urgent" }, { title: "Scripted", body: "", idempotencyKey: "nightly-1" }]);
   } finally { await f.close(); }
+});
+
+test("add captures a Triage card on the board for the current directory", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "bakery-cli-add-")));
+  const alpha = join(root, "alpha"), beta = join(root, "beta"), elsewhere = join(root, "elsewhere");
+  for (const dir of [join(alpha, "src"), beta, elsewhere]) mkdirSync(dir, { recursive: true });
+  const f = await fixture([{ ...board, repo: alpha }, { ...board, id: "board-two", repo: beta }]);
+  try {
+    const added = await f.runIn(join(alpha, "src"), "add", "Fix", "the flaky test", "--priority", "high");
+    assert.equal(added.code, 0, added.stderr);
+    assert.equal(added.stdout, "new-card\ttriage\tpriority:high\tFix the flaky test\n");
+    await f.runIn(beta, "add", "Beta idea");
+    const ambiguous = await f.runIn(elsewhere, "add", "Lost idea");
+    assert.notEqual(ambiguous.code, 0);
+    assert.match(ambiguous.stderr, /More than one board/);
+    assert.match((await f.runIn(alpha, "add")).stderr, /add requires a title/);
+    const chosen = await f.runIn(elsewhere, "add", "Chosen", "--board", alpha);
+    assert.equal(chosen.code, 0, chosen.stderr);
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => [r.path, r.input]), [
+      ["/api/boards/board-one/cards", { title: "Fix the flaky test", body: "", priority: "high" }],
+      ["/api/boards/board-two/cards", { title: "Beta idea", body: "" }],
+      ["/api/boards/board-one/cards", { title: "Chosen", body: "" }],
+    ]);
+  } finally { await f.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("pickup enable needs consent; disable and concurrency changes use settings API", async () => {
@@ -214,7 +242,7 @@ test("edit patches title and description, keeping the field not supplied", async
   const f = await fixture();
   try {
     assert.match((await f.run("edit", "card-one")).stderr, /--title TITLE and\/or --body BODY/);
-    assert.match((await f.run("cards", "--title", "x")).stderr, /only valid with create or edit/);
+    assert.match((await f.run("cards", "--title", "x")).stderr, /only valid with create, add or edit/);
     assert.match((await f.run("edit", "card-one", "--title", "  ")).stderr, /cannot be empty/);
     assert.equal((await f.run("edit", "card-one", "--title", "Renamed")).code, 0);
     assert.equal((await f.run("edit", "card-one", "--body", "")).code, 0);
