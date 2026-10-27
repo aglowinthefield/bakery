@@ -47,6 +47,11 @@ if (args[0] === "pr" && args[1] === "create") {
   fs.writeFileSync(file, JSON.stringify(prs));
   console.log(url); process.exit(0);
 }
+if (args[0] === "pr" && args[1] === "comment") {
+  if (fs.existsSync(path.join(dir, "comment-error"))) { console.error("comment failed"); process.exit(1); }
+  fs.appendFileSync(path.join(dir, "comments.log"), JSON.stringify({ number: Number(args[2]), body: flag("--body") }) + "\\n");
+  process.exit(0);
+}
 if (args[0] === "run" && args[1] === "view") {
   const log = path.join(dir, "job-" + flag("--job") + ".log");
   if (!fs.existsSync(log)) { console.error("job not found"); process.exit(1); }
@@ -92,6 +97,7 @@ function fixture(wtBin?: string, integration: "github-pr" | "default" = "github-
   const sync = new GitHubSync(board, data, github, wtBin);
   const prs = () => (existsSync(join(ghDir, "prs.json")) ? JSON.parse(readFileSync(join(ghDir, "prs.json"), "utf8")) : []) as (PullRequest & { title: string; body: string; base: string })[];
   const setPrs = (value: unknown[]) => writeFileSync(join(ghDir, "prs.json"), JSON.stringify(value));
+  const comments = () => existsSync(join(ghDir, "comments.log")) ? readFileSync(join(ghDir, "comments.log"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { number: number; body: string }) : [];
   const calls = () => existsSync(join(ghDir, "calls.log")) ? readFileSync(join(ghDir, "calls.log"), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]) : [];
   /** Lands a commit on origin/main from another clone, as other merged work would. */
   const landUpstream = (name: string) => {
@@ -107,7 +113,7 @@ function fixture(wtBin?: string, integration: "github-pr" | "default" = "github-
     return git(upstream, "rev-parse", "HEAD");
   };
   const cleanup = () => { board.close(); process.env.PATH = previousPath; delete process.env.FAKE_GH_DIR; rmSync(dir, { recursive: true, force: true }); };
-  return { dir, ghDir, origin, repo, upstream, data, fakePi, board, repoBoard, github, sync, prs, setPrs, calls, landUpstream, squashMerge, cleanup };
+  return { dir, ghDir, origin, repo, upstream, data, fakePi, board, repoBoard, github, sync, prs, setPrs, calls, comments, landUpstream, squashMerge, cleanup };
 }
 type Fixture = ReturnType<typeof fixture>;
 
@@ -505,6 +511,9 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
     const latest = f.board.listRuns(card.id)[0]; assert.equal(latest.status, "review", `${latest.error} ${latest.output}`);
     const prompt = readFileSync(promptFile, "utf8");
     assert.match(prompt, new RegExp(`failed CI at ${pushed}`));
+    assert.match(prompt, /authorized to change that pull request \(#100, https:\/\/github.com\/acme\/widgets\/pull\/100\) with `gh pr edit`/);
+    assert.deepEqual(f.comments().map(c => c.number), [100]);
+    assert.match(f.comments()[0].body, new RegExp(`^CI failed at ${pushed.slice(0, 12)}: \`CI / lint\`\\. Bakery sent this back .*automatic fix run 1 of 3`));
     assert.match(prompt, /### CI \/ lint: failure\nhttps:\/\/github.com\/acme\/widgets\/actions\/runs\/1\/job\/55\n\n```\nfeature.txt: missing newline\n```/);
     assert.doesNotMatch(prompt, /CI \/ test/, "passing checks are left out");
     let current = f.board.getCard(card.id)!;
@@ -522,6 +531,7 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
     assert.equal(updated.prNumber, 100);
     assert.equal(f.prs().length, 1, "the open PR was reused");
     const fixed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    assert.match(f.comments().at(-1)!.body, new RegExp(`^Bakery pushed ${fixed.slice(0, 12)}: changes the operator reviewed and approved`));
     assert.notEqual(fixed, pushed);
     f.setPrs([{ ...pr, headRefOid: fixed, statusCheckRollup: [lint] }]);
     await sync.syncBoard(f.repoBoard.id);
@@ -586,7 +596,10 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
     await sync.syncBoard(f.repoBoard.id);
     assert.deepEqual(started, [card.id, card.id]);
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/);
+    const gaveUp = f.comments().filter(c => /Bakery has stopped sending it back/.test(c.body));
+    assert.equal(gaveUp.length, 1);
     await sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.comments().filter(c => /Bakery has stopped sending it back/.test(c.body)).length, 1, "said once");
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/, "the reason stays on the card");
     assert.equal(f.board.getCard(card.id)!.reviewWait, null, "past the limit, CI is yours to fix");
   } finally { f.cleanup(); }
@@ -600,7 +613,7 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
   const worker = new Worker(f.board, f.data, fixPi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github));
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, true));
   try {
     const card = await reviewedCard(f);
     await approve(f, card.id);
@@ -618,6 +631,7 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
     await sync.syncBoard(f.repoBoard.id);
     const fixed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
     assert.notEqual(fixed, pushed, "the fix was pushed without Approve");
+    assert.match(f.comments().at(-1)!.body, /: a fix for the failing CI, pushed automatically without human review\./);
     assert.equal(f.prs().length, 1, "to the same PR");
     assert.equal(f.board.getCard(card.id)!.status, "review", "the card waits for the PR to merge");
     const pushes = () => git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
@@ -743,4 +757,23 @@ test("GitHub remote: changing the remote clears what was detected about the old 
     assert.equal(moved.integrationNote, "");
     assert.equal((await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true))?.githubMainProtected, null, "non-GitHub remotes are not checked");
   } finally { f.cleanup(); }
+});
+
+test("github-pr: a PR comment that fails to post does not stop a CI send-back", async () => {
+  const f = fixture();
+  const started: string[] = [];
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => { started.push(card.id); });
+  const error = console.error; console.error = () => {};
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    const done = new Date(Date.now() - 1000).toISOString();
+    writeFileSync(join(f.ghDir, "comment-error"), "");
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [{ name: "lint", workflowName: "CI", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done }] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id]);
+    assert.equal(f.board.getCard(card.id)!.prError, null);
+  } finally { console.error = error; f.cleanup(); }
 });

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "./board.js";
-import { boardGithubRepo, fetchOrigin, type GitHub } from "./github.js";
+import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
 import { githubRepo } from "./github-url.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
@@ -154,9 +154,10 @@ export class Integration {
    * a PR (or reuse the open one). Nothing merges locally; the card stays in Review until the PR merges on GitHub.
    * The operator's Approve is the authorization to push; the agent itself never pushes.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub): Promise<Card> {
+  /** `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it. */
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, automatic = false): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
-    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge");
+    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
     await github.check();
@@ -173,9 +174,13 @@ export class Integration {
     git(worktree, "push", "origin", `${candidate}:refs/heads/${branch}`);
     const existing = await github.findByBranch(slug, branch);
     let url = existing?.state === "OPEN" ? existing.url : "";
+    const summary = (run.output || "").trim().slice(-3000);
+    const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
+    if (existing && url) {
+      const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
+      await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${candidate.slice(0, 12)}: ${why}.${details}`);
+    }
     if (!url) {
-      const summary = (run.output || "").trim().slice(-3000);
-      const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
       const body = `${card.body.trim()}\n\n---\n\nOpened by Bakery for card \`${card.id}\`.${details}`;
       url = await github.create(slug, branch, card.title.replace(/\s+/g, " ").trim().slice(0, 250) || `Bakery card ${card.id}`, body);
     }
