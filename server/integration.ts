@@ -1,8 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Board, type Card } from "./board.js";
 import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
@@ -180,14 +180,28 @@ export class Integration {
     const temp = mkdtempSync(join(tmpdir(), "bakery-review-"));
     try {
       const index = join(temp, "index");
-      gitCommand(worktree, ["read-tree", "HEAD"], index);
+      // Seed from the worktree's own index: its stat cache lets `add -A` rehash only changed files.
+      // A fresh read-tree makes git rehash the whole tree (about 0.5s on a 3 GB worktree).
+      try {
+        const source = resolve(worktree, git(worktree, "rev-parse", "--git-path", "index"));
+        copyFileSync(source, index);
+        // Git decides whether an entry is "racily clean" by comparing file times with the index file's own
+        // time, so the copy must keep the original's, or a same-second edit could be missed.
+        const { atime, mtime } = statSync(source);
+        utimesSync(index, atime, mtime);
+      }
+      catch { gitCommand(worktree, ["read-tree", "HEAD"], index); }
       gitCommand(worktree, ["add", "-A"], index);
       const tree = gitCommand(worktree, ["write-tree"], index);
       const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, branch, tree })).digest("hex");
       if (!includeFiles) return { fingerprint, tree, main, files: [] as ReviewDiff["files"] };
       const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
       if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Bakery");
-      const files = paths.map(path => ({ path, patch: git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", base, tree, "--", path) }));
+      // One diff for every file, split at each header, instead of one git process per file. Git lists files
+      // and emits patches in the same path order; if the counts ever disagree, fall back to per-file diffs.
+      const diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", base, tree];
+      const patches = gitCommand(worktree, diffArgs, undefined, true).split(/^(?=diff --git )/m).filter(Boolean);
+      const files = paths.map((path, i) => ({ path, patch: patches.length === paths.length ? patches[i].trim() : gitCommand(worktree, [...diffArgs, "--", path]) }));
       if (files.reduce((size, file) => size + file.patch.length, 0) > 2_000_000) throw new Error("Review diff exceeds 2 MB; inspect the worktree outside Bakery");
       return { fingerprint, tree, main, files };
     } finally { rmSync(temp, { recursive: true, force: true }); }
