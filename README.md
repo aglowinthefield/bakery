@@ -339,6 +339,8 @@ sequenceDiagram
 
 If the server crashes, the supervisor restarts it after 1 second, backing off to 30 seconds while it keeps failing. A file change restarts it immediately. Stopping `npm run dev` stops running agents.
 
+The browser takes UI changes from a merge as hot updates, so the board and an open card stay where they were. When Vite has to reload the page instead, each tab reopens its own view, repository and open card.
+
 ## Safety
 
 - Pi is told not to commit, push, or publish during a run. **That instruction isn't a sandbox.** Only run agents on repositories you trust.

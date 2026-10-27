@@ -6,7 +6,6 @@ import {
   type CSSProperties,
   type FormEvent,
 } from "react";
-import { createRoot } from "react-dom/client";
 import {
   Archive,
   ArrowUpRight,
@@ -100,6 +99,25 @@ function filterCards(cards: Card[], query: string) {
       card.title.toLowerCase().includes(needle) ||
       card.body.toLowerCase().includes(needle),
   );
+}
+
+// Per-tab state in sessionStorage survives a page reload, such as Vite reloading
+// after Bakery merges a card into its own checkout, without leaking into other tabs.
+function readTab(key: string) {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeTab(key: string, value: string | null) {
+  try {
+    if (value === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, value);
+  } catch {
+    // Without storage, a reload opens the last viewed repo with no card open.
+  }
 }
 
 function cacheTheme(theme: BakerySettings["theme"]) {
@@ -429,7 +447,8 @@ function AgentModelFields({
     </form>
   );
 }
-function App() {
+// The entry module renders App, so edits here hot-swap instead of reloading the page.
+export function App() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardId, setBoardId] = useState<string | null>(null);
   const [settings, setSettings] = useState<BakerySettings | null>(null);
@@ -465,7 +484,9 @@ function App() {
   const [cards, setCards] = useState<Card[]>([]);
   // Today is the landing page until you pick a board; the last choice persists.
   const [view, setView] = useState<"today" | "board">(() =>
-    localStorage.getItem("bakery-view") === "board" ? "board" : "today",
+    (readTab("bakery-view") ?? localStorage.getItem("bakery-view")) === "board"
+      ? "board"
+      : "today",
   );
   const [allCards, setAllCards] = useState<Card[]>([]);
   const [since] = useState(
@@ -511,6 +532,19 @@ function App() {
   }, []);
   const seenStatuses = useRef(new Map<string, Map<string, CountKey>>());
   const [selected, setSelected] = useState<string | null>(null);
+  // The card this tab had open before a reload; reopened once the first poll finds it.
+  const restoreCard = useRef(readTab("bakery-card"));
+  useEffect(() => {
+    if (selected === null && restoreCard.current) return;
+    writeTab("bakery-card", selected);
+  }, [selected]);
+  const reopenCard = (scope: Card[]) => {
+    const id = restoreCard.current;
+    if (!id) return;
+    restoreCard.current = null;
+    if (scope.some((item) => item.id === id)) setSelected(id);
+    else writeTab("bakery-card", null);
+  };
   const [verificationDraft, setVerificationDraft] = useState("");
   const [remoteUrlDraft, setRemoteUrlDraft] = useState("");
   const [budgetDraft, setBudgetDraft] = useState("");
@@ -539,8 +573,10 @@ function App() {
       .then((items) => {
         setBoards(items);
         setBoardId(
-          items.find((item) => item.id === localStorage.getItem("bakery-board"))
-            ?.id ??
+          items.find((item) => item.id === readTab("bakery-board"))?.id ??
+            items.find(
+              (item) => item.id === localStorage.getItem("bakery-board"),
+            )?.id ??
             items[0]?.id ??
             null,
         );
@@ -573,11 +609,16 @@ function App() {
       document.removeEventListener("visibilitychange", remember);
     };
   }, [view, boardId]);
+  useEffect(() => {
+    writeTab("bakery-view", view);
+    if (boardId) writeTab("bakery-board", boardId);
+  }, [view, boardId]);
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = () => setRefreshKey((value) => value + 1);
   const openBoard = (id: string) => {
     setView("board");
     localStorage.setItem("bakery-view", "board");
+    restoreCard.current = null;
     if (boardId === id) return;
     setBoardId(id);
     localStorage.setItem("bakery-board", id);
@@ -588,6 +629,7 @@ function App() {
   const openToday = () => {
     setView("today");
     localStorage.setItem("bakery-view", "today");
+    restoreCard.current = null;
     setSelected(null);
   };
   // Notify once per card as it starts needing your review, comparing against the last poll of the same scope.
@@ -648,6 +690,7 @@ function App() {
           setAllCards(next as Card[]);
           setMergeConflicts((conflicts as MergeConflict[][]).flat());
           setBoards(nextBoards);
+          reopenCard(next as Card[]);
           return;
         }
         if (!boardId) return;
@@ -661,6 +704,7 @@ function App() {
         setCards(next);
         setMergeConflicts(conflicts);
         setBoards(nextBoards);
+        reopenCard(next);
       } catch (err) {
         if (current) setError(String(err));
       } finally {
@@ -2719,4 +2763,3 @@ function CardForm({
     </form>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);

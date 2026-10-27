@@ -136,8 +136,8 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.notEqual(light.details, dark.details);
     releasePatch();
     await page.waitForFunction(() => localStorage.getItem("bakery-theme") === "light");
+    // The reload reopens the card this tab had open.
     await page.reload();
-    await page.getByRole("button", { name: /Review card/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), light);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
