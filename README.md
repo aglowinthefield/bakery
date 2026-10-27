@@ -14,7 +14,7 @@ flowchart LR
   server -->|one per card| wt[Git worktree<br/>branch bakery/CARD_ID]
   server -->|spawns| pi[pi agent]
   pi -->|edits| wt
-  wt -->|Approve and merge| main[local main]
+  wt -->|Approve and merge into local main| main[local main]
 ```
 
 ## Contents
@@ -51,7 +51,7 @@ Then:
 1. Add a repository by entering its Git root, either an absolute path or a `~/` path. The repository needs at least one commit, because worktrees start from `HEAD`.
 2. Create a card. New cards start in **Triage**.
 3. Move the card to **Ready**, then start it. Starting a run uses paid model tokens.
-4. When Pi finishes, the card moves to **Review**. Read the diff, then **Approve and merge** or **Request changes**.
+4. When Pi finishes, the card moves to **Review**. Read the diff, then **Approve and merge into local main** (or **Approve and open PR** on a github-pr board) or **Request changes**.
 
 Uncommitted or untracked files in your checkout don't appear in card worktrees.
 
@@ -130,7 +130,7 @@ When you approve:
 
 ```mermaid
 flowchart TD
-  A[Approve and merge] --> B{Worktree or main changed<br/>since the diff loaded?}
+  A[Approve and merge into local main] --> B{Worktree or main changed<br/>since the diff loaded?}
   B -->|yes| R[Refuse: refresh the diff]
   B -->|no| C[Commit all unignored changes<br/>on the card branch]
   C --> D[Merge with current main<br/>in a temporary worktree]

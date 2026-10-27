@@ -156,7 +156,7 @@ export class Integration {
   /** `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it. */
   async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, automatic = false): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
-    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge");
+    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
     await github.check();
