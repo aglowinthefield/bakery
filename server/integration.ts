@@ -29,6 +29,23 @@ export class IntegrationConflictError extends Error {
   }
 }
 function clean(repo: string) { return git(repo, "status", "--porcelain") === ""; }
+function hasCommit(repo: string, rev: string) {
+  try { execFileSync("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { stdio: "ignore" }); return true; }
+  catch { return false; }
+}
+/** A Done card Bakery merged into local main, offered as "Publish as PR". `blocker` says why it cannot be published. */
+export type LocalMerge = { card: Card; candidate: string; commits: number; blocker: string };
+/** Local main has commits origin/main lacks. `resettable` means they are only published card merges. */
+export type MainRecovery = { tip: string; originMain: string; recoveryBranch: string; localCommits: number; resettable: boolean; reason: string };
+/** Why a locally merged card's candidate cannot become a PR as it is, or "". */
+function publishBlocker(repo: string, card: Card, candidate: string): string {
+  if (card.prOverrideUrl) return `Linked to ${card.prOverrideUrl}; Bakery only pushes bakery/${card.id}`;
+  if (!hasCommit(repo, candidate)) return `The approved commit ${candidate.slice(0, 12)} is no longer in the repository`;
+  // The candidate was built on local main. Other local merges under it would ride along in this PR.
+  const merges = git(repo, "rev-list", "--merges", `refs/remotes/origin/main..${candidate}`).split("\n").filter(Boolean);
+  if (merges.length) return `bakery/${card.id} includes ${merges.length} merge commit${merges.length === 1 ? "" : "s"} from local main that origin/main lacks (${git(repo, "log", "-1", "--format=%s", merges[0])}), which would land in this pull request. Rebase the card branch onto origin/main yourself, then publish`;
+  return "";
+}
 function isAncestor(repo: string, ancestor: string, descendant: string) {
   try {
     execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant], { stdio: "ignore" });
@@ -156,8 +173,8 @@ export class Integration {
    * The operator's Approve is the authorization to push; the agent itself never pushes.
    * `draft` is the title and body the operator approved; without it the card title and body are used. A new PR's
    * title must pass the repository's semantic-PR check, when it has one, before anything is pushed.
+   * `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it.
    */
-  /** `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it. */
   async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, automatic = false): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
@@ -172,10 +189,10 @@ export class Integration {
     const branch = `bakery/${card.id}`;
     // An open PR keeps its title and body; only a new one must pass the repository's title check.
     const existing = await github.findByBranch(slug, branch);
-    let url = existing?.state === "OPEN" ? existing.url : "";
+    const hasOpenPr = existing?.state === "OPEN";
     const title = draft ? draft.title.replace(/\s+/g, " ").trim().slice(0, 250) : cardTitle(card);
     const semantic = readPullRequestRules(worktree).semantic;
-    const problem = !url && semantic ? semanticTitleProblem(title, semantic) : "";
+    const problem = !hasOpenPr && semantic ? semanticTitleProblem(title, semantic) : "";
     if (problem) throw new Error(`Pull request title "${title}" would fail ${semantic!.source}: ${problem}. Edit the title in the Approve dialog`);
     if (draft && !title) throw new Error("Pull request title is required");
     const candidate = this.commitReviewed(card, worktree, inspected.tree);
@@ -183,17 +200,113 @@ export class Integration {
     if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
     // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
     git(worktree, "push", "origin", `${candidate}:refs/heads/${branch}`);
-    const summary = (run.output || "").trim().slice(-3000);
-    const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
-    if (existing && url) {
-      const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
-      await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${candidate.slice(0, 12)}: ${why}.${details}`);
-    }
-    if (!url) url = await github.create(slug, branch, title, pullRequestBody(draft ? draft.body : card.body, card, run));
-    const number = Number(url.match(/\/pull\/(\d+)/)?.[1]);
-    this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
+    const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
+    const pr = await this.ensurePullRequest(card, run.output, slug, github, { sha: candidate, why }, { title, body: draft ? draft.body : card.body });
+    this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
     this.board.recordPullRequestPush(card.id, run.id);
     return this.board.getCard(card.id)!;
+  }
+
+  /** The open PR from `bakery/<id>`, or a new one with `content` (default: the card title and body) plus the footer and run summary. */
+  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string }, content?: { title: string; body: string }): Promise<{ number: number; url: string }> {
+    const branch = `bakery/${card.id}`;
+    const existing = await github.findByBranch(slug, branch);
+    let url = existing?.state === "OPEN" ? existing.url : "";
+    const summary = (output || "").trim().slice(-3000);
+    const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
+    if (existing && url) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
+    if (!url) url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
+    return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url };
+  }
+
+  /**
+   * Done cards Bakery merged into local main whose approved candidate is not on origin/main, after a fetch, and
+   * whether local main can be reset to origin/main. Works on a local board too, so switching to github-pr can list them.
+   */
+  async localMerges(repo: string): Promise<{ cards: LocalMerge[]; main: MainRecovery | null }> {
+    await fetchOrigin(repo);
+    const cards: LocalMerge[] = [];
+    for (const { card, candidate } of this.board.listLocalMerges(repo)) {
+      if (hasCommit(repo, candidate) && isAncestor(repo, candidate, "refs/remotes/origin/main")) continue;
+      cards.push({ card, candidate, commits: hasCommit(repo, candidate) ? Number(git(repo, "rev-list", "--count", `refs/remotes/origin/main..${candidate}`)) : 0, blocker: publishBlocker(repo, card, candidate) });
+    }
+    return { cards, main: this.mainRecovery(repo) };
+  }
+
+  /**
+   * "Publish as PR" for a Done card that Bakery merged into local main on a github-pr board: push the approved
+   * candidate to `bakery/<id>`, open its PR (or reuse the open one) as Approve does, then clear the local integration
+   * record and move the card back to Review, so it reaches Done when the PR merges. Local main is not touched here;
+   * the result says whether it can be reset, which needs a separate confirmation.
+   */
+  async publishLocalMerge(card: Card, github: GitHub): Promise<{ card: Card; main: MainRecovery | null }> {
+    const repoBoard = this.board.boardForRepo(card.repo);
+    if (repoBoard?.integration !== "github-pr") throw new Error("Switch this board to GitHub pull requests before publishing a card as a pull request");
+    if (card.status !== "done") throw new Error("Only a Done card that was merged into local main can be published as a pull request");
+    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; clear the link first`);
+    const slug = boardGithubRepo(repoBoard);
+    await github.check();
+    const repo = card.repo;
+    await fetchOrigin(repo);
+    const merge = this.board.listLocalMerges(repo).find(item => item.card.id === card.id);
+    if (!merge) throw new Error("This card was not merged into local main by Bakery; there is nothing to publish");
+    const { candidate } = merge;
+    const blocker = publishBlocker(repo, card, candidate);
+    if (blocker) throw new Error(blocker);
+    if (isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
+    // A plain push: if bakery/<id> on GitHub holds other commits, Git refuses instead of overwriting them.
+    git(repo, "push", "origin", `${candidate}:refs/heads/bakery/${card.id}`);
+    const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, { sha: candidate, why: "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" });
+    return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: this.mainRecovery(repo) };
+  }
+
+  /**
+   * Whether local main can go back to origin/main without losing anything: it is checked out with no uncommitted
+   * tracked changes, and every local commit on its first-parent line is a Bakery card merge whose card branch is
+   * on origin. Null when local main has no commits that origin/main lacks.
+   */
+  mainRecovery(repo: string): MainRecovery | null {
+    let head = "";
+    try { head = git(repo, "symbolic-ref", "--quiet", "--short", "HEAD"); } catch { /* Detached HEAD. */ }
+    if (!hasCommit(repo, "refs/remotes/origin/main") || !hasCommit(repo, "refs/heads/main")) return null;
+    const tip = git(repo, "rev-parse", "refs/heads/main"), originMain = git(repo, "rev-parse", "refs/remotes/origin/main");
+    const local = git(repo, "rev-list", "--first-parent", `${originMain}..${tip}`).split("\n").filter(Boolean);
+    if (!local.length) return null;
+    const recovery = { tip, originMain, recoveryBranch: `bakery-recovery/${tip.slice(0, 12)}`, localCommits: local.length };
+    const refuse = (reason: string): MainRecovery => ({ ...recovery, resettable: false, reason });
+    if (head !== "main") return refuse(`The repository root is ${head ? `on branch ${head}` : "in detached HEAD"}, not main`);
+    const dirty = git(repo, "status", "--porcelain", "--untracked-files=no");
+    if (dirty) return refuse("Local main has uncommitted changes");
+    for (const commit of local) {
+      const [, ...parents] = git(repo, "rev-list", "--parents", "-n", "1", commit).split(" ");
+      const id = git(repo, "log", "-1", "--format=%B", commit).match(/^Card: ([\w-]+)$/m)?.[1];
+      const subject = git(repo, "log", "-1", "--format=%s", commit);
+      if (parents.length < 2 || !id || !subject.startsWith("Merge card: ")) return refuse(`Local main has commit ${commit.slice(0, 12)} (${subject}) that is not a Bakery card merge`);
+      const card = this.board.getCard(id);
+      if (card?.locallyMerged) return refuse(`${card.title} (${id}) is still merged only into local main; publish it as a pull request first`);
+      const onOrigin = (ref: string) => hasCommit(repo, ref) && parents.slice(1).every(parent => isAncestor(repo, parent, ref));
+      if (!onOrigin(`refs/remotes/origin/bakery/${id}`) && !onOrigin("refs/remotes/origin/main")) return refuse(`Card ${id}'s merged work is not on origin yet; publish it as a pull request first`);
+    }
+    return { ...recovery, resettable: true, reason: "" };
+  }
+
+  /**
+   * Resets local main to origin/main after saving its tip as `bakery-recovery/<sha>`. Only on the operator's
+   * confirmation of the exact tip they saw, and only while `mainRecovery` still allows it. `reset --keep`
+   * refuses instead of overwriting untracked files.
+   */
+  async resetLocalMain(repo: string, confirmedTip: string): Promise<MainRecovery | null> {
+    await fetchOrigin(repo);
+    const recovery = this.mainRecovery(repo);
+    if (!recovery) throw new Error("Local main has no commits that origin/main lacks; nothing to reset");
+    if (recovery.tip !== confirmedTip) throw new Error("Local main moved since you confirmed; review it again before resetting");
+    if (!recovery.resettable) throw new Error(recovery.reason);
+    const branch = `refs/heads/${recovery.recoveryBranch}`;
+    if (hasCommit(repo, branch)) {
+      if (git(repo, "rev-parse", branch) !== recovery.tip) throw new Error(`${recovery.recoveryBranch} already exists at another commit`);
+    } else git(repo, "branch", recovery.recoveryBranch, recovery.tip);
+    git(repo, "reset", "--keep", recovery.originMain);
+    return this.mainRecovery(repo);
   }
 
   /** Commits the reviewed worktree on the card branch, if it has uncommitted changes, and returns the commit. */

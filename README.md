@@ -178,6 +178,14 @@ In this mode the main checkout is never a workspace. Every card works in its own
 
 Main only ever fast-forwards. If it has uncommitted changes, has local commits, has diverged, or isn't checked out, Bakery doesn't reset, rebase, stash, or force anything. It shows the problem on the board and pauses automatic pickup there until a later sync succeeds. Untracked files don't block the sync unless the fast-forward would overwrite them.
 
+### Cards merged locally before the switch
+
+A card approved while the board used local merge is Done, but its work may only be on local `main`. Board settings list these cards (Done, merged by Bakery, approved commit not on `origin/main`). On a GitHub pull request board each has **Publish as PR**, also shown on the card. It pushes the approved commit to `bakery/<card>`, opens the PR the same way Approve does, clears the local merge record, and moves the card back to Review. The card goes Done again when the PR merges and reaches `origin/main`.
+
+Publishing is refused when the approved commit sits on top of other local merges that `origin/main` lacks, since they would ride along in the PR. Publish the earlier card first, or rebase the card branch onto `origin/main` yourself. A plain push is used, so an existing `bakery/<card>` on GitHub with other commits is never overwritten.
+
+Publishing doesn't touch local `main`. Once every local commit on `main` is a Bakery card merge whose work is on `origin`, Bakery offers to reset `main` to `origin/main`. It saves the old tip as `bakery-recovery/<sha>` first and resets only after you confirm that tip. It won't offer the reset if `main` isn't checked out, has uncommitted changes, or holds any other commit, and `git reset --keep` refuses rather than overwrite untracked files.
+
 ### Not detected
 
 - **Reverts after merge.** Once a card is Done, Bakery doesn't watch for its PR being reverted.
