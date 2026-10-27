@@ -24,7 +24,7 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/boards") return route.fulfill({ json: boards });
       if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
-      if (path === "/api/boards/gh/pull-requests/8") return route.fulfill({ json: { body: "Does **things**", baseRefName: "main", changedFiles: 1, files: [{ path: "src/a.ts", additions: 3, deletions: 1, changeType: "MODIFIED" }], commits: [{ oid: "abcdef123456", messageHeadline: "Do things", authors: [{ login: "you" }], committedDate: "2025-01-02T00:00:00Z" }], comments: [], latestReviews: [], statusCheckRollup: [{ name: "build", conclusion: "SUCCESS" }] } });
+      if (path === "/api/boards/gh/pull-requests/8") return route.fulfill({ json: { body: "Does **things**\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<details><summary>More</summary>hidden text</details>\n\n- [x] done item\n\n<script>window.pwned=1</script>", baseRefName: "main", changedFiles: 1, files: [{ path: "src/a.ts", additions: 3, deletions: 1, changeType: "MODIFIED" }], commits: [{ oid: "abcdef123456", messageHeadline: "Do things", authors: [{ login: "you" }], committedDate: "2025-01-02T00:00:00Z" }], comments: [], latestReviews: [], statusCheckRollup: [{ name: "build", conclusion: "SUCCESS" }] } });
       if (path === "/api/boards/gh/pull-requests") return route.fulfill({ json: pulls });
       await route.fulfill({ json: [] });
     });
@@ -45,6 +45,10 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
     assert.equal(await dialog.getByText("Do things").count(), 1);
     assert.equal(await dialog.getByText("build").count(), 1);
     assert.equal(await dialog.locator("strong", { hasText: "things" }).count(), 1);
+    assert.equal(await dialog.locator("table td", { hasText: "2" }).count(), 1);
+    assert.equal(await dialog.locator("details summary", { hasText: "More" }).count(), 1);
+    assert.equal(await dialog.locator("input[type=checkbox]:checked").count(), 1);
+    assert.equal(await page.evaluate(() => (window as unknown as { pwned?: number }).pwned), undefined);
     assert.equal(await page.getByRole("dialog").count(), 0);
     await dialog.getByRole("button", { name: /Outside change/ }).click();
     await dialog.getByText("src/a.ts").waitFor({ state: "detached" });

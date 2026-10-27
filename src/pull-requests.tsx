@@ -34,7 +34,10 @@ export function PullRequests({
   onOpenCard: (cardId: string) => void;
 }) {
   const [error, setError] = useState("");
-  const [opened, setOpened] = useState<Set<number>>(new Set());
+  const [opened, setOpened] = useState<Set<number>>(
+    () => new Set(highlight ? [highlight] : []),
+  );
+
   const toggle = (number: number) =>
     setOpened((previous) => {
       const next = new Set(previous);
@@ -44,6 +47,17 @@ export function PullRequests({
   const [pulls, setPulls] = useState<PullRequest[] | null>(
     () => remembered.get(boardId) ?? null,
   );
+  // Arriving from a card's PR badge opens that pull request and brings it into view.
+  useEffect(() => {
+    if (!highlight) return;
+    setOpened((previous) => new Set(previous).add(highlight));
+  }, [highlight]);
+  useEffect(() => {
+    if (highlight && pulls)
+      document
+        .querySelector(`[data-pr="${highlight}"]`)
+        ?.scrollIntoView({ block: "start" });
+  }, [highlight, pulls !== null]);
   const [filters, setFilters] = useState<Filters>(noFilters);
   const [sort, setSort] = useState<Sort>(() =>
     (localStorage.getItem("bakery-pr-sort") as Sort) in sorts

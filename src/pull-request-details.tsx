@@ -7,7 +7,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { api, date } from "./api.js";
-import { Markdown } from "./markdown-view.js";
+import { GithubMarkdown } from "./github-markdown.js";
 import type { PullRequest } from "./pull-request-filter.js";
 
 type Check = {
@@ -155,7 +155,7 @@ export function PullRequestDetails({
           <>
             <Section title="Description">
               {detail.body.trim() ? (
-                <Markdown source={detail.body} />
+                <GithubMarkdown source={detail.body} />
               ) : (
                 <p className="text-sm text-muted-foreground">No description.</p>
               )}
@@ -286,7 +286,7 @@ export function PullRequestDetails({
                         </span>{" "}
                         · {date(comment.createdAt)}
                       </div>
-                      <Markdown source={comment.body} className="text-sm" />
+                      <GithubMarkdown source={comment.body} className="text-sm" />
                     </li>
                   ))}
                 </ul>
