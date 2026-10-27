@@ -312,7 +312,6 @@ export class Board {
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {
     const result: { card: Card; run: Run; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled)) {
-      if (this.autoReviewMergesToday(repoBoard.repo) >= 3) continue;
       for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
         const run = this.listRuns(card.id)[0];
         if (run?.status === "review" && run.finishedAt && repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&

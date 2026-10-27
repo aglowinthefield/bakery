@@ -83,6 +83,26 @@ export class Integration {
     } finally { rmSync(temp, { recursive: true, force: true }); }
   }
 
+  // Git refuses a fast-forward that would overwrite uncommitted edits at the repository root. Name the overlap
+  // before approval starts so it fails early and clearly instead of as a raw "merge failed" after verification.
+  localConflicts(card: Card): string[] {
+    const { repo, worktree } = this.location(card);
+    const fields = gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true).split("\0");
+    const dirty: string[] = [];
+    for (let i = 0; i < fields.length; i++) {
+      const entry = fields[i];
+      if (entry.length < 4) continue;
+      dirty.push(entry.slice(3));
+      if (entry[0] === "R" || entry[0] === "C") dirty.push(fields[++i]); // Renames and copies carry their source path next.
+    }
+    if (!dirty.length) return [];
+    const { tree } = this.snapshot(card, false);
+    const base = git(worktree, "merge-base", git(repo, "rev-parse", "main"), git(worktree, "rev-parse", "HEAD"));
+    const changed = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
+    const overlaps = (a: string, b: string) => a === b || a.startsWith(b.endsWith("/") ? b : b + "/") || b.startsWith(a.endsWith("/") ? a : a + "/");
+    return [...new Set(dirty.filter(path => changed.some(file => overlaps(path, file))))];
+  }
+
   review(card: Card): ReviewDiff {
     const { fingerprint, files } = this.snapshot(card, true);
     return { fingerprint, files };
@@ -133,6 +153,8 @@ export class Integration {
     if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
     if (git(repo, "symbolic-ref", "--short", "HEAD") !== "main") throw new Error("Check out main at the repository root before approving");
     const localStatus = gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true);
+    const blocked = this.localConflicts(card);
+    if (blocked.length) throw new Error(`Uncommitted changes on main would be overwritten: ${blocked.slice(0, 10).join(", ")}${blocked.length > 10 ? ", …" : ""}. Commit or stash them at ${repo}, then approve again`);
     const inspected = this.snapshot(card, false);
     if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
 

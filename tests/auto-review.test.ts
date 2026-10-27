@@ -199,23 +199,25 @@ test("opening another Board cannot invalidate an active review; explicit restart
   } finally { item.close(); }
 });
 
-test("the three-merge daily cap and disabling stop new autonomous reviews", async () => {
+test("unattended merges have no daily cap, and disabling stops new reviews", async () => {
   const item = fixture();
   try {
     item.board.setAutoReview(item.repoBoard.id, true, "true");
     await new Promise(resolve => setTimeout(resolve, 5));
-    for (let i = 0; i < 3; i++) {
-      const current = item.reviewedCard();
-      await item.auto.tick();
-      assert.equal(item.board.getCard(current.card.id)?.status, "done");
-    }
-    const fourth = item.reviewedCard();
-    assert.equal(item.board.autoReviewMergesToday(item.repo), 3);
-    assert.equal(item.board.listAutoReviewCandidates().length, 0);
+    const first = item.reviewedCard();
     await item.auto.tick();
-    assert.equal(item.board.getCard(fourth.card.id)?.status, "review");
+    assert.equal(item.board.getCard(first.card.id)?.status, "done");
+    // A busy day of earlier merges must not hold a card that passed every check in Review.
+    const db = new DatabaseSync(join(item.dir, "board.sqlite"));
+    for (let i = 0; i < 50; i++)
+      db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,finishedAt) VALUES (?,?,'merged',datetime('now'),datetime('now'))").run(first.card.id, `seeded-${i}`);
+    db.close();
+    const next = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getCard(next.card.id)?.status, "done");
     item.board.setAutoReview(item.repoBoard.id, false, "true");
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewEnabled, false);
+    item.reviewedCard();
     assert.equal(item.board.listAutoReviewCandidates().length, 0);
   } finally { item.close(); }
 });

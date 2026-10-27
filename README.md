@@ -163,7 +163,7 @@ flowchart LR
 
 - It's set per repository. Open the repository's edit (pencil) dialog, enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
 - Bakery only considers runs that reach Review after you enable it. Cards already in Review don't merge.
-- At most 3 automatic merges per repository in any 24 hours. Failed reviews aren't retried.
+- Failed reviews aren't retried.
 - Turning the setting off stops a review in progress from merging.
 - The verification command runs locally with your permissions.
 
@@ -175,6 +175,11 @@ The CLI talks to the running server's HTTP API, so it goes through the same chec
 npm run bakery -- boards
 npm run bakery -- cards
 npm run bakery -- create --title "..." --body "..." [--key KEY]
+npm run bakery -- show CARD_ID
+npm run bakery -- edit CARD_ID [--title "..."] [--body "..."]
+npm run bakery -- archive CARD_ID...
+npm run bakery -- restore CARD_ID
+npm run bakery -- stats
 npm run bakery -- ready CARD_ID [--yes]
 npm run bakery -- triage CARD_ID
 npm run bakery -- start CARD_ID... --yes
@@ -187,6 +192,10 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
 - `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
 - `cards` prints each card's ID, status, attempt count, review rounds, and title.
+- `show` prints a card's title, status, repository, description, each attempt's status, agent and error, and the latest auto-review verdict.
+- `edit` changes a card's title, description, or both. `--body ""` clears the description. You can't edit a running card.
+- `archive` follows the same rules as the UI: it accepts only Done cards, and if any card isn't Done, nothing is archived. `restore` moves one archived card back to Done.
+- `stats` prints the board's card count in each lane and its pickup state.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
