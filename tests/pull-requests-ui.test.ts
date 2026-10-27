@@ -25,7 +25,7 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
       if (path === "/api/boards") return route.fulfill({ json: boards });
       if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
       if (path === "/api/boards/gh/pull-requests/8") return route.fulfill({ json: { body: "Does **things**", baseRefName: "main", changedFiles: 1, files: [{ path: "src/a.ts", additions: 3, deletions: 1, changeType: "MODIFIED" }], commits: [{ oid: "abcdef123456", messageHeadline: "Do things", authors: [{ login: "you" }], committedDate: "2025-01-02T00:00:00Z" }], comments: [], latestReviews: [], statusCheckRollup: [{ name: "build", conclusion: "SUCCESS" }] } });
-      if (path === "/api/boards/gh/pull-requests") return route.fulfill({ json: pulls }); route.fulfill({ json: pulls });
+      if (path === "/api/boards/gh/pull-requests") return route.fulfill({ json: pulls });
       await route.fulfill({ json: [] });
     });
     await page.goto(server.resolvedUrls!.local[0]);
