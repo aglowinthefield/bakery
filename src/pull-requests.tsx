@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { GitPullRequest } from "lucide-react";
 import { api, date } from "./api.js";
+import { PullRequestDetails } from "./pull-request-details.js";
 import {
   filterOptions,
   filterPullRequests,
@@ -33,6 +34,7 @@ export function PullRequests({
   onOpenCard: (cardId: string) => void;
 }) {
   const [error, setError] = useState("");
+  const [opened, setOpened] = useState<number | null>(null);
   const [pulls, setPulls] = useState<PullRequest[] | null>(() => remembered.get(boardId) ?? null);
   const [filters, setFilters] = useState<Filters>(noFilters);
   const [sort, setSort] = useState<Sort>(() => (localStorage.getItem("bakery-pr-sort") as Sort) in sorts ? (localStorage.getItem("bakery-pr-sort") as Sort) : "updated");
@@ -154,13 +156,13 @@ export function PullRequests({
               aria-label={pr.isDraft ? "Draft" : "Open"}
               className={`shrink-0 ${pr.isDraft ? "text-muted-foreground" : "text-emerald-500"}`}
             />
-            <a href={pr.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
+            <button onClick={() => setOpened(pr.number)} className="min-w-0 flex-1 text-left">
               <span className="block truncate font-medium">{pr.title}</span>
               <span className="block truncate text-xs text-muted-foreground">
                 #{pr.number} · {pr.author?.login ?? "unknown"} · {pr.headRefName} · {`updated ${date(pr.updatedAt)}`}
                 {pr.additions !== undefined && ` · +${pr.additions} −${pr.deletions ?? 0}`}
               </span>
-            </a>
+            </button>
             {(pr.labels ?? []).slice(0, 3).map((label) => (
               <button key={label.name} onClick={() => set({ label: label.name })} title={`Filter by ${label.name}`} className="shrink-0 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/50">{label.name}</button>
             ))}
@@ -187,6 +189,17 @@ export function PullRequests({
           </li>
         ))}
       </ul>
+      {pulls?.find((pr) => pr.number === opened) && (
+        <PullRequestDetails
+          boardId={boardId}
+          pr={pulls.find((pr) => pr.number === opened)!}
+          onClose={() => setOpened(null)}
+          onOpenCard={(id) => {
+            setOpened(null);
+            onOpenCard(id);
+          }}
+        />
+      )}
     </div>
   );
 }

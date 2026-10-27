@@ -24,7 +24,8 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/boards") return route.fulfill({ json: boards });
       if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
-      if (path === "/api/boards/gh/pull-requests") return route.fulfill({ json: pulls });
+      if (path === "/api/boards/gh/pull-requests/8") return route.fulfill({ json: { body: "Does **things**", baseRefName: "main", changedFiles: 1, files: [{ path: "src/a.ts", additions: 3, deletions: 1, changeType: "MODIFIED" }], commits: [{ oid: "abcdef123456", messageHeadline: "Do things", authors: [{ login: "you" }], committedDate: "2025-01-02T00:00:00Z" }], comments: [], latestReviews: [], statusCheckRollup: [{ name: "build", conclusion: "SUCCESS" }] } });
+      if (path === "/api/boards/gh/pull-requests") return route.fulfill({ json: pulls }); route.fulfill({ json: pulls });
       await route.fulfill({ json: [] });
     });
     await page.goto(server.resolvedUrls!.local[0]);
@@ -38,6 +39,13 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
     await page.getByRole("list", { name: "Pull requests" }).waitFor();
     assert.equal(await page.locator("[data-pr]").count(), 2);
     assert.equal(await page.locator("[data-pr='8']").getByText("No card").count(), 1);
+    await page.locator("[data-pr='8']").getByRole("button", { name: /Outside change/ }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText("src/a.ts").waitFor();
+    assert.equal(await dialog.getByText("Do things").count(), 1);
+    assert.equal(await dialog.getByText("build").count(), 1);
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
     await page.locator("[data-pr='7']").getByRole("button", { name: /Card · review · passing/ }).click();
     await page.locator("h1").filter({ hasText: "gh" }).waitFor();
     assert.equal(await page.getByRole("list", { name: "Pull requests" }).count(), 0);
