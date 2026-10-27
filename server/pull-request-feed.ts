@@ -41,7 +41,7 @@ export class PullRequestFeed {
       this.entries.set(boardId, { at: Date.now(), pulls: list.map(pr => ({ ...pr, additions: before.get(pr.number)?.additions, deletions: before.get(pr.number)?.deletions, reviewDecision: before.get(pr.number)?.reviewDecision, mergeable: before.get(pr.number)?.mergeable, checks: before.get(pr.number)?.checks })) });
     });
     const whole = quick
-      .then(() => this.github.listOpenPullRequestExtras(repo))
+      .then(() => this.github.listOpenPullRequestExtras(repo).catch(() => this.github.listOpenPullRequestExtras(repo)))
       .then(extras => {
         const entry = this.entries.get(boardId);
         if (!entry) return;
