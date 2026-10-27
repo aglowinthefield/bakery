@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "./components/ui/dialog";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
+import { PullRequestDialog } from "./pr-dialog.js";
 import {
   priorities,
   type AutoReviewJob,
@@ -76,6 +77,7 @@ export function CardDetails({
   const [approvalPending, setApprovalPending] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [prDialog, setPrDialog] = useState(false);
   const [reload, setReload] = useState(0);
   const refresh = () => {
     setReload((value) => value + 1);
@@ -577,14 +579,24 @@ export function CardDetails({
                 )
               }
               onClick={() => {
+                // A new PR's title and body are drafted from the repository's rules and edited in a dialog.
+                if (
+                  currentReview &&
+                  integration === "github-pr" &&
+                  card.prState !== "OPEN"
+                ) {
+                  setError("");
+                  setPrDialog(true);
+                  return;
+                }
                 if (
                   !currentReview ||
                   !window.confirm(
                     integration === "github-pr" && card.prState === "OPEN"
                       ? `Approve the reviewed diff and push it to pull request #${card.prNumber}? Bakery commits unignored files on bakery/${card.id} and pushes that branch to origin, which updates the open PR. The card is Done once the PR merges on GitHub.`
                       : integration === "github-pr"
-                      ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
-                      : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
+                        ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
+                        : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
                   )
                 )
                   return;
@@ -602,9 +614,35 @@ export function CardDetails({
               {integration === "github-pr" && card.prState === "OPEN"
                 ? `Approve and update PR #${card.prNumber}`
                 : integration === "github-pr"
-                ? "Approve and open PR"
-                : "Approve and merge"}
+                  ? "Approve and open PR"
+                  : "Approve and merge"}
             </Button>
+          )}
+          {card?.status === "review" && currentReview && (
+            <PullRequestDialog
+              boardId={boardId}
+              card={card}
+              fingerprint={currentReview.fingerprint}
+              open={prDialog}
+              busy={busy}
+              submitError={error}
+              onOpenChange={setPrDialog}
+              onSubmit={(title, body) => {
+                onConflict(null);
+                void action(() =>
+                  api(`/boards/${boardId}/cards/${card.id}/approve`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      fingerprint: currentReview.fingerprint,
+                      title,
+                      body,
+                    }),
+                  }),
+                ).then((ok) => {
+                  if (ok) setPrDialog(false);
+                });
+              }}
+            />
           )}
           {card?.status === "review" && !changesRequested && (
             <Button

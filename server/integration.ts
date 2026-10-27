@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "./board.js";
 import { boardGithubRepo, fetchOrigin, type GitHub } from "./github.js";
+import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
+import { semanticTitleProblem } from "../src/pr-title.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false): string {
   try {
@@ -149,8 +151,10 @@ export class Integration {
    * Approve on a github-pr board: commit the reviewed work on `bakery/<id>`, push that branch to origin, and open
    * a PR (or reuse the open one). Nothing merges locally; the card stays in Review until the PR merges on GitHub.
    * The operator's Approve is the authorization to push; the agent itself never pushes.
+   * `draft` is the title and body the operator approved; without it the card title and body are used. A new PR's
+   * title must pass the repository's semantic-PR check, when it has one, before anything is pushed.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub): Promise<Card> {
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
@@ -161,20 +165,21 @@ export class Integration {
     if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
     const inspected = this.snapshot(card, false);
     if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
+    const branch = `bakery/${card.id}`;
+    // An open PR keeps its title and body; only a new one must pass the repository's title check.
+    const existing = await github.findByBranch(slug, branch);
+    let url = existing?.state === "OPEN" ? existing.url : "";
+    const title = draft ? draft.title.replace(/\s+/g, " ").trim().slice(0, 250) : cardTitle(card);
+    const semantic = readPullRequestRules(worktree).semantic;
+    const problem = !url && semantic ? semanticTitleProblem(title, semantic) : "";
+    if (problem) throw new Error(`Pull request title "${title}" would fail ${semantic!.source}: ${problem}. Edit the title in the Approve dialog`);
+    if (draft && !title) throw new Error("Pull request title is required");
     const candidate = this.commitReviewed(card, worktree, inspected.tree);
     await fetchOrigin(repo);
     if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
-    const branch = `bakery/${card.id}`;
     // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
     git(worktree, "push", "origin", `${candidate}:refs/heads/${branch}`);
-    const existing = await github.findByBranch(slug, branch);
-    let url = existing?.state === "OPEN" ? existing.url : "";
-    if (!url) {
-      const summary = (run.output || "").trim().slice(-3000);
-      const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
-      const body = `${card.body.trim()}\n\n---\n\nOpened by Bakery for card \`${card.id}\`.${details}`;
-      url = await github.create(slug, branch, card.title.replace(/\s+/g, " ").trim().slice(0, 250) || `Bakery card ${card.id}`, body);
-    }
+    if (!url) url = await github.create(slug, branch, title, pullRequestBody(draft ? draft.body : card.body, card, run));
     const number = Number(url.match(/\/pull\/(\d+)/)?.[1]);
     this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
     return this.board.getCard(card.id)!;
