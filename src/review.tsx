@@ -43,6 +43,7 @@ function initialDiffStyle(): DiffStyle {
     return "unified";
   }
 }
+import { themeType } from "./themes.js";
 import type { ReviewComment, ReviewDiff, MergeConflict } from "./model.js";
 
 export function ReviewPanel({
@@ -443,7 +444,7 @@ function ReviewFile({
 type Note = { kind: "comment"; comment: ReviewComment } | { kind: "form" };
 function useThemeType(): "light" | "dark" {
   const read = (): "light" | "dark" =>
-    document.documentElement.dataset.theme === "light" ? "light" : "dark";
+    themeType(document.documentElement.dataset.theme);
   const [type, setType] = useState(read);
   useEffect(() => {
     const observer = new MutationObserver(() => setType(read()));

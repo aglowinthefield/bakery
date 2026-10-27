@@ -1,4 +1,5 @@
 import type { SemanticTitleRules } from "./pr-title.js";
+import type { ThemeName } from "./themes.js";
 import type { UsageFields } from "./usage.js";
 import type { AgentModels } from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
@@ -64,7 +65,7 @@ export type BakerySettings = {
   confirmRunStart: boolean;
   notifyOnReview: boolean;
   cardDetailsLayout: "dialog" | "side";
-  theme: "default" | "compline" | "light" | "hearth";
+  theme: ThemeName;
   density: "compact" | "default" | "cozy";
   agentModels?: AgentModels;
 };
