@@ -21,7 +21,8 @@ export type Check = {
 /** One open PR as the Pull requests page shows it. */
 export type RepoPullRequest = {
   number: number; title: string; url: string; headRefName: string; isDraft: boolean; updatedAt: string;
-  author?: { login?: string } | null; additions?: number; deletions?: number; reviewDecision?: string | null; checks?: string | null;
+  author?: { login?: string } | null; createdAt?: string; closedAt?: string | null; mergedAt?: string | null;
+  labels?: { name: string; color?: string }[]; assignees?: { login: string }[]; additions?: number; deletions?: number; reviewDecision?: string | null; checks?: string | null;
 };
 const prFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,statusCheckRollup";
 // statusCheckRollup is expensive: across 200 PRs on a busy repo GitHub's GraphQL API times out (HTTP 504).
@@ -141,9 +142,9 @@ export class GitHub {
   async listPullRequests(repo: string): Promise<PullRequest[]> {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "all", "--limit", "200", "--json", listFields])) as PullRequest[];
   }
-  /** Open PRs for the Pull requests page: the cheap fields, about half a second even on a busy repo. */
-  async listOpenPullRequests(repo: string): Promise<RepoPullRequest[]> {
-    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,title,url,author,headRefName,isDraft,updatedAt"])) as RepoPullRequest[];
+  /** PRs in one state for the Pull requests page: the cheap fields, about a second even on a busy repo. */
+  async listOpenPullRequests(repo: string, state: "open" | "closed" | "merged" = "open"): Promise<RepoPullRequest[]> {
+    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", state, "--limit", "100", "--json", "number,title,url,author,headRefName,isDraft,updatedAt,createdAt,closedAt,mergedAt,labels,assignees"])) as RepoPullRequest[];
   }
   /** The fields GitHub is slow to compute (seconds on a busy repo), fetched apart so they never hold up the list. */
   async listOpenPullRequestExtras(repo: string): Promise<(Pick<RepoPullRequest, "number" | "additions" | "deletions" | "reviewDecision"> & { statusCheckRollup?: Check[] })[]> {

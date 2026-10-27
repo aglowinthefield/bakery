@@ -27,6 +27,16 @@ export class PullRequestFeed {
   }
   /** What is known now: the pulls and when they were fetched, or undefined before the first fetch lands. */
   get(boardId: string): Entry | undefined { return this.entries.get(boardId); }
+  /** Merged or closed PRs, read on demand and kept for a minute: they change rarely and nothing polls them. */
+  async history(boardId: string, state: "closed" | "merged"): Promise<RepoPullRequest[]> {
+    const key = `${boardId}:${state}`, kept = this.entries.get(key);
+    if (kept && Date.now() - kept.at < 60_000) return kept.pulls;
+    const repoBoard = this.board.getBoard(boardId);
+    if (!repoBoard) return [];
+    const pulls = await this.github.listOpenPullRequests(boardGithubRepo(repoBoard), state);
+    this.entries.set(key, { pulls, at: Date.now() });
+    return pulls;
+  }
   /** Refreshes one board, sharing an in-flight pass. Resolves once the quick list is published. */
   refresh(boardId: string): Promise<void> {
     const existing = this.inFlight.get(boardId);

@@ -35,12 +35,12 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
     }
     assert.equal(await page.getByRole("button", { name: "Pull requests" }).count(), 1);
     await page.getByRole("button", { name: "Pull requests" }).click();
-    await page.getByRole("list", { name: "Open pull requests" }).waitFor();
+    await page.getByRole("list", { name: "Pull requests" }).waitFor();
     assert.equal(await page.locator("[data-pr]").count(), 2);
     assert.equal(await page.locator("[data-pr='8']").getByText("No card").count(), 1);
     await page.locator("[data-pr='7']").getByRole("button", { name: /Card · review · passing/ }).click();
     await page.locator("h1").filter({ hasText: "gh" }).waitFor();
-    assert.equal(await page.getByRole("list", { name: "Open pull requests" }).count(), 0);
+    assert.equal(await page.getByRole("list", { name: "Pull requests" }).count(), 0);
   } finally {
     await browser.close();
     await server.close();
