@@ -52,6 +52,16 @@ Then:
 
 Uncommitted or untracked files in your checkout don't appear in card worktrees.
 
+### Worktrunk hooks
+
+If [Worktrunk](https://worktrunk.dev) is installed, Bakery runs your repository's creation hooks in each new card worktree before Pi starts. Use them to install dependencies or copy `.env` and other ignored files (`wt step copy-ignored`). Hooks live in `.config/wt.toml` in the repository, or in `~/.config/worktrunk/config.toml`.
+
+- `pre-start` hooks run first, and Pi waits for them. If one fails, the attempt fails with the hook output in its transcript. Bakery removes the new worktree and branch so the next attempt runs the hooks again.
+- `post-start` hooks start in the background, as they do under `wt switch`.
+- Hooks run only when Bakery creates the worktree. Retries and conflict repairs reuse it without running them.
+- Bakery passes `--yes`, so project hooks run without Worktrunk's approval prompt. Pi runs commands in the same worktree anyway.
+- Bakery still picks the worktree path and handles review and merge itself. It doesn't call `wt switch` or `wt merge`.
+
 ## Card lifecycle
 
 ```mermaid
@@ -163,7 +173,7 @@ flowchart LR
 
 - It's set per repository. Open the repository's edit (pencil) dialog, enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
 - Bakery only considers runs that reach Review after you enable it. Cards already in Review don't merge.
-- At most 3 automatic merges per repository in any 24 hours. Failed reviews aren't retried.
+- Failed reviews aren't retried.
 - Turning the setting off stops a review in progress from merging.
 - The verification command runs locally with your permissions.
 
@@ -174,7 +184,12 @@ The CLI talks to the running server's HTTP API, so it goes through the same chec
 ```sh
 npm run bakery -- boards
 npm run bakery -- cards
-npm run bakery -- create --title "..." --body "..." [--priority low|normal|high|urgent]
+npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority low|normal|high|urgent]
+npm run bakery -- show CARD_ID
+npm run bakery -- edit CARD_ID [--title "..."] [--body "..."]
+npm run bakery -- archive CARD_ID...
+npm run bakery -- restore CARD_ID
+npm run bakery -- stats
 npm run bakery -- ready CARD_ID [--yes]
 npm run bakery -- triage CARD_ID
 npm run bakery -- start CARD_ID... --yes
@@ -185,7 +200,12 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 
 
 - Add `--board ID|PATH` if you have more than one board, and `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
+- `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
 - `cards` prints each card's ID, status, attempt count, review rounds, and title.
+- `show` prints a card's title, status, repository, description, each attempt's status, agent and error, and the latest auto-review verdict.
+- `edit` changes a card's title, description, or both. `--body ""` clears the description. You can't edit a running card.
+- `archive` follows the same rules as the UI: it accepts only Done cards, and if any card isn't Done, nothing is archived. `restore` moves one archived card back to Done.
+- `stats` prints the board's card count in each lane and its pickup state.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
@@ -216,7 +236,7 @@ A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-c
 ## Server, data, and restarts
 
 - The server listens only on `127.0.0.1` and has no authentication. Don't expose it on a network.
-- Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, and `BAKERY_PI_BIN` to use a different `pi` binary.
+- Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, `BAKERY_PI_BIN` to use a different `pi` binary, and `BAKERY_WT_BIN` to use a different `wt` binary. Set `BAKERY_WT_BIN=` (empty) to turn off Worktrunk hooks.
 - Only one server can own a data directory, which it locks with `server.lock`. If the PID in the lock is no longer running, the next server takes over the lock.
 - **Stop** ends a run and marks it Failed. Runs time out after 30 minutes.
 

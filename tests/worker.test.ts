@@ -330,3 +330,89 @@ test("card runs and conflict repairs pass their resolved Pi model and thinking l
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+function worktrunkFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), fakeWt = join(dir, "wt-fake"), log = join(dir, "wt.log");
+  execFileSync("git", ["init", "-q", repo]);
+  writeFileSync(join(repo, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  // Pi only settles if the pre-start hook already ran in its worktree.
+  writeFileSync(fakePi, `#!/bin/sh\necho pi >> '${log}'\n[ -f hooked ] || exit 1\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  writeFileSync(fakeWt, `#!/bin/sh\n[ "$1" = --version ] && { echo "wt v0.81.0"; exit 0; }\necho "$3 $4" >> '${log}'\nif [ "$4" = pre-start ]; then\n  [ -f '${join(dir, "fail")}' ] && { echo "npm ci failed"; exit 3; }\n  touch "$2/hooked"\nfi\n`);
+  chmodSync(fakePi, 0o755); chmodSync(fakeWt, 0o755);
+  const board = new Board(join(dir, "board.sqlite"));
+  const card = board.createCard({ title: "Hooks", body: "", repo });
+  board.setStatus(card.id, "ready");
+  return { dir, repo, fakePi, fakeWt, log, board, card };
+}
+
+test("a new card worktree runs Worktrunk pre-start hooks before Pi, and a retry does not run them again", async () => {
+  const { dir, fakePi, fakeWt, log, board, card } = worktrunkFixture();
+  try {
+    const worker = new Worker(board, join(dir, "data"), fakePi, fakeWt);
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(run.id)?.status === "review");
+    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["hook pre-start", "hook post-start", "pi"]);
+    assert.match(board.getRun(run.id)!.output, /Worktrunk hooks done/);
+    board.setStatus(card.id, "ready");
+    const retry = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(retry.id)?.status === "review");
+    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["hook pre-start", "hook post-start", "pi", "pi"]);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a failed Worktrunk pre-start hook fails the attempt and removes the fresh worktree so a retry runs hooks again", async () => {
+  const { dir, repo, fakePi, fakeWt, log, board, card } = worktrunkFixture();
+  try {
+    writeFileSync(join(dir, "fail"), "");
+    const worker = new Worker(board, join(dir, "data"), fakePi, fakeWt);
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(run.id)?.status === "failed");
+    const failed = board.getRun(run.id)!;
+    assert.match(failed.error ?? "", /Worktrunk pre-start hooks failed \(3\)/);
+    assert.match(failed.output, /npm ci failed/);
+    assert.equal(readFileSync(log, "utf8").trim(), "hook pre-start");
+    assert.equal(execFileSync("git", ["-C", repo, "branch", "--list", `bakery/${card.id}`], { encoding: "utf8" }).trim(), "");
+    assert.throws(() => readFileSync(join(dir, "data", "worktrees", card.id, "README.md")));
+    rmSync(join(dir, "fail"));
+    board.setStatus(card.id, "ready");
+    const retry = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(retry.id)?.status === "review");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a `wt` binary that is not Worktrunk is ignored", async () => {
+  const { dir, fakePi, log, board, card } = worktrunkFixture();
+  try {
+    const other = join(dir, "wiredtiger-wt");
+    writeFileSync(other, `#!/bin/sh\necho "WiredTiger 11.2"\n`);
+    chmodSync(other, 0o755);
+    writeFileSync(fakePi, `#!/bin/sh\necho pi >> '${log}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    const run = new Worker(board, join(dir, "data"), fakePi, other).start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(run.id)?.status === "review");
+    assert.equal(readFileSync(log, "utf8").trim(), "pi");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("stopping a run during Worktrunk pre-start hooks fails it without starting Pi", async () => {
+  const { dir, fakePi, log, board, card } = worktrunkFixture();
+  try {
+    const slowWt = join(dir, "wt-slow");
+    writeFileSync(slowWt, `#!/bin/sh\n[ "$1" = --version ] && { echo "wt v0.81.0"; exit 0; }\necho "$3 $4" >> '${log}'\nexec sleep 5\n`);
+    chmodSync(slowWt, 0o755);
+    const worker = new Worker(board, join(dir, "data"), fakePi, slowWt);
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => readFileSync(log, { encoding: "utf8", flag: "a+" }).includes("pre-start"));
+    worker.stop(run.id);
+    await waitFor(() => board.getRun(run.id)?.status === "failed");
+    assert.match(board.getRun(run.id)!.error ?? "", /Bakery sent SIGTERM: manual stop/);
+    assert.equal(readFileSync(log, "utf8").trim(), "hook pre-start");
+    assert.equal(worker.activeCount, 0);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

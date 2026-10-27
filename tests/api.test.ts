@@ -150,6 +150,17 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: "high" })).data.priority, 1);
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "Edited" })).data.priority, 1, "omitting priority on edit keeps it");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: 0 })).data.priority, 0);
+    assert.equal(card.idempotencyKey, null);
+    const keyed = await request(`/boards/${first.id}/cards`, "POST", { title: "Keyed", body: "", idempotencyKey: "script-1" });
+    assert.equal(keyed.status, 201);
+    const repeated = await request(`/boards/${first.id}/cards`, "POST", { title: "Keyed again", body: "", idempotencyKey: "script-1" });
+    assert.equal(repeated.status, 200);
+    assert.equal(repeated.data.id, keyed.data.id);
+    assert.equal(repeated.data.title, "Keyed");
+    assert.equal((await request(`/boards/${second.id}/cards`, "POST", { title: "Beta keyed", body: "", idempotencyKey: "script-1" })).status, 201);
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Long", body: "", idempotencyKey: "k".repeat(201) })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Blank", body: "", idempotencyKey: " " })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Number", body: "", idempotencyKey: 7 })).status, 400);
     assert.match((await request(`/boards/${first.id}/cards/${card.id}/start`, "POST")).data.error, /Move.*Ready/);
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "running" })).status, 400);
@@ -165,7 +176,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards/unarchive`, "POST", { cardIds: [finished.id] })).data[0].status, "done");
     assert.equal((await request(`/boards/${first.id}/cards/archive`, "POST", { cardIds: [finished.id] })).data[0].status, "archived");
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
-    assert.equal((await request(`/boards/${second.id}/cards`)).data.length, 0);
+    assert.deepEqual((await request(`/boards/${second.id}/cards`)).data.map((item: { title: string }) => item.title), ["Beta keyed"]);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/runs`)).status, 404);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/start`, "POST")).status, 404);
     assert.equal((await request(`/boards/${second.id}/cards/${card.id}/approve`, "POST")).status, 404);
