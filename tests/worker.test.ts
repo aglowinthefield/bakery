@@ -317,7 +317,7 @@ test("card runs and conflict repairs pass their resolved Pi model and thinking l
     const unset = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(unset.id)?.status === "review");
     assert.deepEqual(args().slice(0, 5), ["--mode", "json", "--session-id", unset.sessionId, "--"]);
-    board.updateSettings({ agentModels: { work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, conflict: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, review: { model: "", thinking: "" } } });
+    board.updateSettings({ agentModels: { work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, conflict: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, review: { model: "", thinking: "" }, draft: { model: "", thinking: "" } } });
     board.setAgentModels(board.listBoards()[0].id, { conflict: { model: "openai-codex/gpt-5.5", thinking: "xhigh" } });
     const work = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(work.id)?.status === "review");

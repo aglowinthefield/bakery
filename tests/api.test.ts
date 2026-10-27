@@ -257,7 +257,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
 
     for (const agentModels of [{ work: { model: "--help", thinking: "" } }, { work: { model: "a b" } }, { review: { thinking: "huge" } }, { deploy: {} }, "anthropic/x"])
       assert.equal((await request("/settings", "PATCH", { agentModels })).status, 400, JSON.stringify(agentModels));
-    const global = { work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, conflict: { model: "", thinking: "" }, review: { model: "", thinking: "high" } };
+    const global = { work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, conflict: { model: "", thinking: "" }, review: { model: "", thinking: "high" }, draft: { model: "", thinking: "" } };
     assert.deepEqual((await request("/settings", "PATCH", { agentModels: global })).data.agentModels, global);
     const board = (await request("/boards", "POST", { repo })).data;
     assert.deepEqual(board.agentModels, emptyAgentModels());

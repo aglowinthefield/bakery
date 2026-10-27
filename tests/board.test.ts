@@ -458,13 +458,15 @@ test("older databases gain inheriting Pi model settings; repository overrides re
     assert.throws(() => board.setAgentModels("old", { merge: {} }), /Unknown agent phase/);
     assert.throws(() => board.setAgentModels("missing", {}), /Board not found/);
     board.updateSettings({ agentModels: validateAgentModels({ work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, review: { model: "openai-codex/gpt-5.5" } }) });
-    board.setAgentModels("old", { work: { model: "openai-codex/gpt-5.5" }, review: { thinking: "high" } });
+    board.setAgentModels("old", { work: { model: "openai-codex/gpt-5.5" }, review: { thinking: "high" }, draft: { model: "anthropic/claude-haiku-4-5", thinking: "off" } });
     const other = board.addRepo(join(dir, "other"));
     board.close();
     const reopened = new Board(path);
     assert.deepEqual(reopened.agentModelFor(dir, "work"), { model: "openai-codex/gpt-5.5", thinking: "medium" });
     assert.deepEqual(reopened.agentModelFor(dir, "conflict"), { model: "", thinking: "" });
     assert.deepEqual(reopened.agentModelFor(dir, "review"), { model: "openai-codex/gpt-5.5", thinking: "high" });
+    assert.deepEqual(reopened.agentModelFor(dir, "draft"), { model: "anthropic/claude-haiku-4-5", thinking: "off" });
+    assert.deepEqual(reopened.agentModelFor(other.repo, "draft"), { model: "", thinking: "" });
     assert.deepEqual(reopened.agentModelFor(other.repo, "work"), { model: "anthropic/claude-sonnet-4-5", thinking: "medium" });
     assert.equal(reopened.getSettings().theme, "light");
     reopened.close();

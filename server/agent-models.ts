@@ -1,5 +1,5 @@
 // Pure helpers shared by the server and the UI; keep this module free of Node imports.
-export const agentPhases = ["work", "conflict", "review"] as const;
+export const agentPhases = ["work", "conflict", "review", "draft"] as const;
 export type AgentPhase = typeof agentPhases[number];
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = typeof thinkingLevels[number];
@@ -7,7 +7,7 @@ export type ThinkingLevel = typeof thinkingLevels[number];
 export type AgentModel = { model: string; thinking: ThinkingLevel | "" };
 export type AgentModels = Record<AgentPhase, AgentModel>;
 
-export const emptyAgentModels = (): AgentModels => ({ work: { model: "", thinking: "" }, conflict: { model: "", thinking: "" }, review: { model: "", thinking: "" } });
+export const emptyAgentModels = (): AgentModels => ({ work: { model: "", thinking: "" }, conflict: { model: "", thinking: "" }, review: { model: "", thinking: "" }, draft: { model: "", thinking: "" } });
 // No spaces or leading "-": the value becomes a Pi CLI argument and must never read as a flag.
 const modelPattern = /^[A-Za-z0-9._:/][A-Za-z0-9._:/-]*$/;
 

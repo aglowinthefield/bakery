@@ -334,6 +334,7 @@ const phaseLabels: Record<AgentPhase, string> = {
   work: "Card runs",
   conflict: "Conflict fixes",
   review: "Agent review",
+  draft: "PR drafts",
 };
 // Shared across dialogs; listing spawns Pi, so only ask once a model field is used.
 let modelList: Promise<{ models: string[]; error?: string }> | undefined;
@@ -374,6 +375,7 @@ function AgentModelFields({
           work: { ...draft.work, model: draft.work.model.trim() },
           conflict: { ...draft.conflict, model: draft.conflict.model.trim() },
           review: { ...draft.review, model: draft.review.model.trim() },
+          draft: { ...draft.draft, model: draft.draft.model.trim() },
         });
       }}
     >
