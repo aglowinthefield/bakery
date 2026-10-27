@@ -227,6 +227,9 @@ export class Integration {
     return [...new Set(dirty.filter(path => changed.some(file => overlaps(path, file))))];
   }
 
+  // Cheap staleness check: the fingerprint alone, without building any patches.
+  reviewFingerprint(card: Card): string { return this.snapshot(card, false).fingerprint; }
+
   review(card: Card): ReviewDiff {
     const { fingerprint, files } = this.snapshot(card, true);
     return { fingerprint, files };
