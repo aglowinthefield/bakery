@@ -65,7 +65,7 @@ const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
 type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "locallyMerged"> & { dependsOn: string; blocked: number; locallyMerged: number };
-export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number } & UsageFields;
+export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
@@ -85,6 +85,16 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   FROM cards LEFT JOIN runs ON runs.cardId=cards.id
   LEFT JOIN (SELECT cardId, ${usageColumns.map(column => `SUM(${column}) AS ${column}`).join(", ")}, MAX(cost IS NULL) AS unrecorded
     FROM (SELECT cardId, ${usageColumns.join(", ")} FROM runs UNION ALL SELECT cardId, ${usageColumns.join(", ")} FROM auto_review_jobs) GROUP BY cardId) spend ON spend.cardId=cards.id`;
+
+/**
+ * Older runs kept only the transcript. Their final message is the text after the last turn summary, since Bakery
+ * writes a "Turn N:" line only for turns that used tools and the final reply uses none.
+ */
+export function reportFromOutput(output: string): string | null {
+  const marker = [...output.matchAll(/(?:^|\n)Turn \d+:[^\n]*\n(?:worktree: [^\n]*\n)?/g)].at(-1);
+  if (!marker) return null;
+  return output.slice(marker.index + marker[0].length).trim() || null;
+}
 
 export class Board {
   private db: DatabaseSync;
@@ -191,6 +201,13 @@ export class Board {
     if (!runColumns.has("lastActivityAt")) this.db.exec("ALTER TABLE runs ADD COLUMN lastActivityAt TEXT");
     // 1 when the run was handed a PR's CI failures; its result is pushed to the PR without a manual Approve.
     if (!runColumns.has("ciFix")) this.db.exec("ALTER TABLE runs ADD COLUMN ciFix INTEGER NOT NULL DEFAULT 0");
+    // The agent's final message, kept apart from the transcript so the card can show it as markdown.
+    if (!runColumns.has("report")) {
+      this.db.exec("ALTER TABLE runs ADD COLUMN report TEXT");
+      const update = this.db.prepare("UPDATE runs SET report=? WHERE id=?");
+      for (const row of this.db.prepare("SELECT id, output FROM runs WHERE status!='running'").all() as { id: string; output: string }[])
+        update.run(reportFromOutput(row.output), row.id);
+    }
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
@@ -917,6 +934,23 @@ export class Board {
   }
   recordUsage(id: string, usage: Usage) {
     this.db.prepare(`UPDATE runs SET ${usageUpdate} WHERE id=? AND status='running'`).run(...usageValues(usage), id);
+  }
+  /** Each assistant message replaces the last, so a settled run keeps its final message. */
+  recordReport(id: string, text: string) {
+    const report = text.trim();
+    if (report) this.db.prepare("UPDATE runs SET report=? WHERE id=? AND status='running'").run(report.slice(0, 60000), id);
+  }
+  /** Closes a reviewed run that changed no files. The report is the card's result; nothing is merged. */
+  acceptFindings(cardId: string, runId: string): Card {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
+      if (card?.status !== "review" || run?.id !== runId || run.status !== "review") throw new Error("Card changed since review; refresh and try again");
+      if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry or withdraw it first");
+      this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), cardId);
+      this.db.exec("COMMIT");
+      return this.getCard(cardId)!;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
   append(id: string, chunk: string) {

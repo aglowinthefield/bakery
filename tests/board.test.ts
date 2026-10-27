@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Board } from "../server/board.js";
+import { Board, reportFromOutput } from "../server/board.js";
 import { emptyAgentModels, validateAgentModels } from "../server/agent-models.js";
 import { DatabaseSync } from "node:sqlite";
 
@@ -490,4 +490,10 @@ test("older databases gain inheriting Pi model settings; repository overrides re
     assert.equal(reopened.getSettings().theme, "light");
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("older transcripts yield the text after the last turn summary as the report", () => {
+  assert.equal(reportFromOutput("Starting Pi.\n\nTurn 1: bash ×1\nNarration.\nTurn 2: read ×2\nworktree: 1 changed file (a.ts)\n**Answer:** yes\n\n- a\n"), "**Answer:** yes\n\n- a");
+  assert.equal(reportFromOutput("No tools were used."), null);
+  assert.equal(reportFromOutput("Turn 1: bash ×1\n"), null);
 });

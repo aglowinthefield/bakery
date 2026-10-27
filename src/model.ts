@@ -233,4 +233,6 @@ export type Run = {
   finishedAt: string | null;
   startedBy: "manual" | "auto";
   agent: string;
+  /** The agent's final message, in markdown. Null for runs that never replied. */
+  report: string | null;
 } & UsageFields;

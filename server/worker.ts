@@ -195,6 +195,8 @@ export class Worker {
           if (event.type === "message_end" && event.message?.role === "assistant") {
             const usage = messageUsage(event.message);
             if (usage) this.board.recordUsage(run.id, usage);
+            if (event.message.stopReason !== "error" && Array.isArray(event.message.content))
+              this.board.recordReport(run.id, event.message.content.filter((part: { type?: string }) => part?.type === "text").map((part: { text?: unknown }) => typeof part.text === "string" ? part.text : "").join(""));
             if (event.message.stopReason === "error") {
               terminalModelError = providerFailure(event.message.errorMessage);
               this.board.append(run.id, `\n${terminalModelError}; Pi may retry.\n`);

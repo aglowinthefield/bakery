@@ -70,6 +70,37 @@ test("card transcript groups tool activity by turn without storing tool argument
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a run keeps the agent's final message as its markdown report, separate from the transcript", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    const events = [
+      { type: "turn_start" },
+      { type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "Reading the code." }, { type: "toolCall", name: "read" }] } },
+      { type: "tool_execution_start", toolCallId: "a", toolName: "read" },
+      { type: "tool_execution_end", toolCallId: "a", isError: false },
+      { type: "turn_end" },
+      { type: "turn_start" },
+      { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "**Answer: yes.**\n\n- one\n- two\n" }] } },
+      { type: "turn_end" },
+      { type: "agent_settled", aborted: false },
+    ];
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' ${events.map(event => `'${JSON.stringify(event)}'`).join(" ")}\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Research", body: "", repo });
+    board.setStatus(card.id, "ready");
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(run.id)?.status === "review");
+    assert.equal(board.getRun(run.id)!.report, "**Answer: yes.**\n\n- one\n- two");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a transient provider error followed by successful Pi settlement is Review, while a terminal error is diagnosed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");

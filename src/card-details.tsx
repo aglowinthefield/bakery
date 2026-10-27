@@ -494,6 +494,22 @@ export function CardDetails({
             No description.
           </p>
         )}
+        {card &&
+          ["review", "done", "archived"].includes(card.status) &&
+          runs[0]?.status === "review" &&
+          runs[0].report && (
+            <RunReport
+              report={runs[0].report}
+              findingsOnly={
+                card.status === "review" && currentReview?.files.length === 0
+              }
+              onCopyError={() =>
+                setError(
+                  "Could not copy the report. Select its text to copy it manually.",
+                )
+              }
+            />
+          )}
         {card?.status === "failed" && runs[0]?.error && (
           <div
             role="alert"
@@ -643,7 +659,38 @@ export function CardDetails({
               <Square size={13} /> Stop run
             </Button>
           )}
-          {card?.status === "review" && (
+          {card?.status === "review" && currentReview?.files.length === 0 && (
+            <Button
+              variant="outline"
+              disabled={
+                busy ||
+                approvalPending ||
+                autoJobs.some(
+                  (item) =>
+                    item.runId === runs[0]?.id && item.state === "running",
+                )
+              }
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "Accept this run's report and move the card to Done? The run changed no files, so nothing is merged or pushed.",
+                  )
+                )
+                  return;
+                void action(() =>
+                  api(`/boards/${boardId}/cards/${card.id}/accept-findings`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      fingerprint: currentReview.fingerprint,
+                    }),
+                  }),
+                );
+              }}
+            >
+              <Check size={13} /> Accept findings
+            </Button>
+          )}
+          {card?.status === "review" && currentReview?.files.length !== 0 && (
             <Button
               variant="outline"
               disabled={
@@ -1137,6 +1184,69 @@ function Dependencies({
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+/**
+ * The run's final message, rendered as markdown. A run that changed no files (a research card) has nothing else
+ * to review, so its report is labelled as the card's findings.
+ */
+function RunReport({
+  report,
+  findingsOnly,
+  onCopyError,
+}: {
+  report: string;
+  findingsOnly: boolean;
+  onCopyError: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return (
+    <section
+      aria-label={findingsOnly ? "Findings" : "Agent report"}
+      className="mt-6 rounded-md border border-border bg-accent/10 p-4"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">
+          {findingsOnly ? "Findings" : "Agent report"}
+        </h3>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label="Copy report as markdown"
+          onClick={() => {
+            void navigator.clipboard
+              .writeText(report)
+              .then(() => setCopied(true))
+              .catch(onCopyError);
+          }}
+        >
+          {copied ? (
+            <>
+              <Check size={13} /> Copied
+            </>
+          ) : (
+            <>
+              <Copy size={13} /> Copy markdown
+            </>
+          )}
+        </Button>
+      </div>
+      {findingsOnly && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          This run changed no files. Its final message is the result.
+        </p>
+      )}
+      <Markdown
+        source={report}
+        className="mt-3 text-sm leading-6 text-foreground/80"
+      />
     </section>
   );
 }

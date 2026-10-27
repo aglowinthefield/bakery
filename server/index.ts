@@ -257,7 +257,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -326,6 +326,11 @@ const server = createServer(async (req, res) => {
             send(res, 200, card); return;
           }
           send(res, 200, integration.approve(item, fingerprint)); return;
+        }
+        if (req.method === "POST" && action === "accept-findings") {
+          const { fingerprint } = await body(req);
+          if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review before accepting findings");
+          send(res, 200, integration.acceptFindings(item, fingerprint)); return;
         }
         if (req.method === "POST" && action === "publish") {
           const result = await integration.publishLocalMerge(item, github);

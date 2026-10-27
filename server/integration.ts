@@ -420,6 +420,16 @@ export class Integration {
     if (blocked) throw new Error(blocked);
   }
 
+  /** A research run answers in its final message and leaves no diff; accepting it closes the card without Git. */
+  acceptFindings(card: Card, reviewedFingerprint: string): Card {
+    const { run } = this.location(card);
+    if (this.board.getAutoReviewJob(run.id)?.state === "running") throw new Error("Agent review is in progress; wait for its result");
+    const inspected = this.snapshot(card, true);
+    if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before accepting");
+    if (inspected.files.length) throw new Error("This run changed files; approve or request changes instead");
+    return this.board.acceptFindings(card.id, run.id);
+  }
+
   approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const repoBoard = this.board.boardForRepo(card.repo);

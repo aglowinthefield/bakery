@@ -58,6 +58,34 @@ test("approval commits reviewed work, reconciles with newer main, and only then 
   } finally { item.close(); }
 });
 
+test("a reviewed run that changed no files closes on Accept findings without touching Git", () => {
+  const item = fixture("Research");
+  try {
+    const mainBefore = git(item.repo, "rev-parse", "main"), branchBefore = git(item.worktree, "rev-parse", "HEAD");
+    const review = item.integration.review(item.card);
+    assert.deepEqual(review.files, []);
+    assert.throws(() => item.approve(item.card), /no unmerged commits/);
+    assert.throws(() => item.integration.acceptFindings(item.card, "0".repeat(64)), /changed since review/);
+    const done = item.integration.acceptFindings(item.card, review.fingerprint);
+    assert.equal(done.status, "done");
+    assert.equal(item.board.wasIntegrated(item.card.id), false);
+    assert.equal(git(item.repo, "rev-parse", "main"), mainBefore);
+    assert.equal(git(item.worktree, "rev-parse", "HEAD"), branchBefore);
+    // Reopening returns the accepted run to Review rather than starting over.
+    assert.equal(item.board.setStatus(item.card.id, "ready").status, "review");
+  } finally { item.close(); }
+});
+
+test("Accept findings refuses a run that changed files", () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.worktree, "README.md"), "changed\n");
+    const review = item.integration.review(item.card);
+    assert.throws(() => item.integration.acceptFindings(item.card, review.fingerprint), /changed files/);
+    assert.equal(item.board.getCard(item.card.id)!.status, "review");
+  } finally { item.close(); }
+});
+
 test("merge commit subject truncates long titles and keeps shell text literal", () => {
   const title = "Fix `rm -rf $HOME` && \"quotes\"; $(whoami)\n" + "x".repeat(100);
   const item = fixture(title);
