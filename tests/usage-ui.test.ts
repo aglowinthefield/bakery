@@ -20,6 +20,8 @@ async function open(board: Record<string, unknown>, onPatch: (input: Record<stri
   assert.ok(address && typeof address !== "string");
   const browser = await chromium.launch();
   const page = await browser.newPage();
+  // These tests cover the board, not the Today landing page.
+  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   let current = board;
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;

@@ -20,6 +20,7 @@ flowchart LR
 ## Contents
 
 - [Quick start](#quick-start)
+- [Today](#today)
 - [Card lifecycle](#card-lifecycle)
 - [Reviewing and merging](#reviewing-and-merging)
 - [Watching a run](#watching-a-run)
@@ -51,6 +52,16 @@ Then:
 4. When Pi finishes, the card moves to **Review**. Read the diff, then **Approve and merge** or **Request changes**.
 
 Uncommitted or untracked files in your checkout don't appear in card worktrees.
+
+## Today
+
+Bakery opens on **Today**, which covers every repository at once. After you open a board, Bakery reopens on that board until you click **Today** in the sidebar again.
+
+- **Since your last visit** gives a count of cards merged since you last opened Bakery, how many cards need you, and the last-24h cost across repositories.
+- **Capture** adds a Triage card to the repository you pick. Bakery remembers the repository. From a terminal, `bakery-cli add ...` does the same thing for the repository you're in.
+- **Needs you** lists Review cards (longest-waiting first), then Failed and Interrupted cards. The sidebar shows the same count next to **Today**.
+- **Review N cards** opens Review cards one at a time, oldest first. When a card leaves Review, either because you approved it or because it ran again, the next card opens. **Next card** skips ahead. Closing the card ends the queue.
+- **Running** and **Finished since your last visit** list the rest. Click any card to open its details.
 
 ### Worktrunk hooks
 

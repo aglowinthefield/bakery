@@ -9,6 +9,8 @@ test("cards that needed rework show their attempt count in every lane and review
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     const card = (id: string, status: string, attempts: number, reviewRounds: number) => ({ id, title: `${id} card`, body: "", repo: "/tmp/repo", source: "manual", status,
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts, reviewRounds, runAgent: "", reviewAgent: "" });
     const run = (attempt: number) => ({ id: `run-${attempt}`, attempt, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual", agent: "" });

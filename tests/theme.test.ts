@@ -16,6 +16,8 @@ after(async () => { await browser?.close(); await server?.close(); });
 
 test("cached theme colors the first paint while the database request is pending", async () => {
   const page = await browser.newPage();
+  // These tests cover the board, not the Today landing page.
+  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.addInitScript(() => localStorage.setItem("bakery-theme", "light"));
   let reply!: () => void;
   const pending = new Promise<void>(resolve => { reply = resolve; });
@@ -42,6 +44,8 @@ test("cached theme colors the first paint while the database request is pending"
 
 test("database theme still loads when browser storage rejects writes", async () => {
   const page = await browser.newPage();
+  // These tests cover the board, not the Today landing page.
+  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.addInitScript(() => {
     Storage.prototype.setItem = () => { throw new Error("Storage disabled"); };
   });
@@ -64,6 +68,8 @@ test("database theme still loads when browser storage rejects writes", async () 
 
 test("theme picker changes board and reopened review, then loads the saved palette before rendering", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  // These tests cover the board, not the Today landing page.
+  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   let theme: "default" | "light" = "default";
   let failPatch = false;
   let releasePatch!: () => void;
@@ -144,7 +150,8 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.deepEqual(await palette(), dark);
     failPatch = true;
     await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByRole("radio", { name: "Light" }).check();
+    // click, not check: the rejected save reverts the radio, which check() reports as a failure when it lands first.
+    await page.getByRole("radio", { name: "Light" }).click();
     await page.getByRole("alert").filter({ hasText: "Save rejected" }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();

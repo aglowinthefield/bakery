@@ -9,6 +9,8 @@ test("every repo in the sidebar shows an icon and card count for every status", 
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     const card = (id: string, status: string) => ({ id, title: `${id} card`, body: "", repo: "/tmp/repo", source: "manual", status,
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 });
     const cards = [card("a", "ready"), card("b", "ready"), card("c", "review"), card("d", "done"), card("e", "done"), card("f", "done")];

@@ -20,37 +20,15 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
-  Orbit,
-  Rocket,
-  FlaskConical,
-  Bot,
-  Terminal,
-  Blocks,
-  Mountain,
-  Waves,
-  Flower2,
-  Sparkles,
-  Zap,
-  Puzzle,
-  Compass,
-  Gem,
-  Ghost,
-  Coffee,
-  Trees,
-  Telescope,
-  Shapes,
-  Bug,
-  Palette,
-  Origami,
-  Globe2,
   GitBranch,
-  LayoutGrid,
   Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
   Search,
   Settings2,
+  Sun,
+  Globe2,
   ExternalLink,
   Github,
   Gitlab,
@@ -79,6 +57,8 @@ import {
 import { AgentBadge, reworkSummary } from "./attempts.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
+import { appearanceIcons, RepoBadge } from "./repo-badge.js";
+import { needsYouStatuses, reviewOrder, Today } from "./today.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
@@ -159,49 +139,6 @@ function RemoteLink({ url }: { url: string }) {
   );
 }
 
-const appearanceIcons: Record<RepoIcon, LucideIcon> = {
-  "layout-grid": LayoutGrid,
-  rocket: Rocket,
-  orbit: Orbit,
-  "flask-conical": FlaskConical,
-  bot: Bot,
-  terminal: Terminal,
-  blocks: Blocks,
-  mountain: Mountain,
-  waves: Waves,
-  "flower-2": Flower2,
-  sparkles: Sparkles,
-  zap: Zap,
-  puzzle: Puzzle,
-  compass: Compass,
-  gem: Gem,
-  ghost: Ghost,
-  coffee: Coffee,
-  trees: Trees,
-  telescope: Telescope,
-  shapes: Shapes,
-  bug: Bug,
-  palette: Palette,
-  origami: Origami,
-  "globe-2": Globe2,
-};
-function RepoBadge({ board, size = 16 }: { board: Board; size?: number }) {
-  const Icon = appearanceIcons[board.icon] ?? LayoutGrid;
-  const color = repoColors[board.color] ?? repoColors.violet;
-  return (
-    <span
-      className="repo-badge grid size-8 shrink-0 place-items-center rounded-lg"
-      style={
-        {
-          "--repo-color": color,
-          backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`,
-        } as CSSProperties
-      }
-    >
-      <Icon size={size} aria-hidden="true" />
-    </span>
-  );
-}
 function RepositoryPathInput({
   value,
   onChange,
@@ -473,6 +410,25 @@ function App() {
     };
   }, [repoPath, addingRepo, editingBoard]);
   const [cards, setCards] = useState<Card[]>([]);
+  // Today is the landing page until you pick a board; the last choice persists.
+  const [view, setView] = useState<"today" | "board">(() =>
+    localStorage.getItem("bakery-view") === "board" ? "board" : "today",
+  );
+  const [allCards, setAllCards] = useState<Card[]>([]);
+  const [since] = useState(
+    () =>
+      localStorage.getItem("bakery-last-visit") ??
+      new Date(Date.now() - 86_400_000).toISOString(),
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem("bakery-last-visit", new Date().toISOString());
+    } catch {
+      // Without storage, "since your last visit" falls back to the last 24 hours.
+    }
+  }, []);
+  // A snapshot of Review card IDs, walked one at a time from Today.
+  const [reviewQueue, setReviewQueue] = useState<string[] | null>(null);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => setQuery(""), [boardId]);
@@ -541,55 +497,88 @@ function App() {
   }, []);
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = () => setRefreshKey((value) => value + 1);
+  const openBoard = (id: string) => {
+    setView("board");
+    localStorage.setItem("bakery-view", "board");
+    if (boardId === id) return;
+    setBoardId(id);
+    localStorage.setItem("bakery-board", id);
+    setSelected(null);
+    setCards([]);
+    setMergeConflicts([]);
+  };
+  const openToday = () => {
+    setView("today");
+    localStorage.setItem("bakery-view", "today");
+    setSelected(null);
+  };
+  // Notify once per card as it enters Review, comparing against the last poll of the same scope.
+  const notifyNewReviews = (scope: string, next: Card[]) => {
+    const previous = seenStatuses.current.get(scope);
+    seenStatuses.current.set(
+      scope,
+      new Map(next.map((card) => [card.id, card.status])),
+    );
+    if (
+      !previous ||
+      !settings?.notifyOnReview ||
+      !("Notification" in window) ||
+      Notification.permission !== "granted"
+    )
+      return;
+    for (const card of next) {
+      if (
+        card.status !== "review" ||
+        !previous.has(card.id) ||
+        previous.get(card.id) === "review"
+      )
+        continue;
+      try {
+        const notice = new Notification("Card ready for review", {
+          body: card.title,
+          tag: `review-${card.id}`,
+        });
+        notice.onclick = () => {
+          window.focus();
+          if (scope !== "today") openBoard(scope);
+          setSelected(card.id);
+          notice.close();
+        };
+      } catch {
+        setError(
+          "The browser could not show a Review notification. Check its notification settings.",
+        );
+      }
+    }
+  };
   useEffect(() => {
     let current = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      if (!boardId) return;
       try {
+        if (view === "today") {
+          const nextBoards = await api<Board[]>("/boards");
+          const [next, ...conflicts] = await Promise.all([
+            api<Card[]>("/cards"),
+            ...nextBoards.map((item) =>
+              api<MergeConflict[]>(`/boards/${item.id}/conflicts`),
+            ),
+          ]);
+          if (!current) return;
+          notifyNewReviews("today", next as Card[]);
+          setAllCards(next as Card[]);
+          setMergeConflicts((conflicts as MergeConflict[][]).flat());
+          setBoards(nextBoards);
+          return;
+        }
+        if (!boardId) return;
         const [next, conflicts, nextBoards] = await Promise.all([
           api<Card[]>(`/boards/${boardId}/cards`),
           api<MergeConflict[]>(`/boards/${boardId}/conflicts`),
           api<Board[]>("/boards"),
         ]);
         if (!current) return;
-        const previous = seenStatuses.current.get(boardId);
-        if (
-          previous &&
-          settings?.notifyOnReview &&
-          "Notification" in window &&
-          Notification.permission === "granted"
-        ) {
-          for (const card of next) {
-            if (
-              card.status !== "review" ||
-              !previous.has(card.id) ||
-              previous.get(card.id) === "review"
-            )
-              continue;
-            try {
-              const notice = new Notification("Card ready for review", {
-                body: card.title,
-                tag: `review-${card.id}`,
-              });
-              notice.onclick = () => {
-                window.focus();
-                setBoardId(boardId);
-                localStorage.setItem("bakery-board", boardId);
-                setSelected(card.id);
-                notice.close();
-              };
-            } catch {
-              setError(
-                "The browser could not show a Review notification. Check its notification settings.",
-              );
-            }
-          }
-        }
-        seenStatuses.current.set(
-          boardId,
-          new Map(next.map((card) => [card.id, card.status])),
-        );
+        notifyNewReviews(boardId, next);
         setCards(next);
         setMergeConflicts(conflicts);
         setBoards(nextBoards);
@@ -604,9 +593,31 @@ function App() {
       current = false;
       clearTimeout(timer);
     };
-  }, [boardId, refreshKey, settings?.notifyOnReview]);
+  }, [view, boardId, refreshKey, settings?.notifyOnReview]);
   const currentBoard = boards.find((item) => item.id === boardId);
-  const card = cards.find((item) => item.id === selected);
+  const scopeCards = view === "today" ? allCards : cards;
+  const card = scopeCards.find((item) => item.id === selected);
+  // Today opens cards from any repository, so details use the card's own board.
+  const detailBoardId =
+    view === "today"
+      ? boards.find((item) => item.repo === card?.repo)?.id
+      : boardId;
+  const nextInQueue = (queue: string[], after: string | null) =>
+    queue
+      .slice(after === null ? 0 : queue.indexOf(after) + 1)
+      .find(
+        (id) => allCards.find((item) => item.id === id)?.status === "review",
+      ) ?? null;
+  const advanceQueue = () => {
+    if (!reviewQueue) return;
+    const next = nextInQueue(reviewQueue, selected);
+    if (!next) setReviewQueue(null);
+    setSelected(next);
+  };
+  // A queued card that leaves Review (approved, or run again) hands over to the next one.
+  useEffect(() => {
+    if (reviewQueue && card && card.status !== "review") advanceQueue();
+  }, [reviewQueue, card?.id, card?.status]);
   const savedBudget = currentBoard?.pickupCostBudget ?? null;
   useEffect(() => {
     setBudgetDraft(savedBudget === null ? "" : String(savedBudget));
@@ -736,6 +747,15 @@ function App() {
     });
   };
   const active = cards.filter((item) => item.status === "running").length;
+  const needsYouCount = boards.reduce(
+    (sum, item) =>
+      sum +
+      needsYouStatuses.reduce(
+        (count, status) => count + (item.cardCounts?.[status] ?? 0),
+        0,
+      ),
+    0,
+  );
   const visibleCards = filterCards(cards, query);
   // Bulk selection only covers cards the search leaves visible.
   const doneIds = visibleCards
@@ -780,24 +800,29 @@ function App() {
           </span>
         </div>
         <div className="px-4 pt-5">
+          <button
+            onClick={openToday}
+            className={`mb-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm ${view === "today" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+          >
+            <Sun size={16} aria-hidden="true" className="text-primary" />
+            Today
+            {needsYouCount > 0 && (
+              <span className="ml-auto rounded-full bg-primary/15 px-2 font-mono text-xs text-primary">
+                {needsYouCount}
+              </span>
+            )}
+          </button>
           <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground">
             Repositories
           </div>
           {boards.map((item) => (
             <div
               key={item.id}
-              className={`rounded-lg ${boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
+              className={`rounded-lg ${view === "board" && boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
             >
               <div className="flex items-center">
                 <button
-                  onClick={() => {
-                    if (boardId === item.id) return;
-                    setBoardId(item.id);
-                    localStorage.setItem("bakery-board", item.id);
-                    setSelected(null);
-                    setCards([]);
-                    setMergeConflicts([]);
-                  }}
+                  onClick={() => openBoard(item.id)}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
                   title={item.repo}
                 >
@@ -830,7 +855,9 @@ function App() {
                 {columns.map((column) => {
                   const Icon = column.icon;
                   const count =
-                    boardId === item.id && (cards.length || !item.cardCounts)
+                    view === "board" &&
+                    boardId === item.id &&
+                    (cards.length || !item.cardCounts)
                       ? cards.filter((c) => c.status === column.id).length
                       : (item.cardCounts?.[column.id] ?? 0);
                   return (
@@ -881,7 +908,30 @@ function App() {
           </div>
         </div>
       </aside>
-      <main className="min-w-0 flex-1">
+      {view === "today" && (
+        <main className="min-w-0 flex-1">
+          <Today
+            boards={boards}
+            cards={allCards}
+            since={since}
+            onOpen={(item) => setSelected(item.id)}
+            onReview={() => {
+              const queue = reviewOrder(allCards).map((item) => item.id);
+              setReviewQueue(queue);
+              setSelected(queue[0] ?? null);
+            }}
+            onCapture={(board, title) =>
+              action(() =>
+                api(`/boards/${board.id}/cards`, {
+                  method: "POST",
+                  body: JSON.stringify({ title, body: "" }),
+                }),
+              )
+            }
+          />
+        </main>
+      )}
+      <main className="min-w-0 flex-1" hidden={view === "today"}>
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-6 lg:px-10">
           <div>
             <div className="mb-2 text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">
@@ -1799,11 +1849,7 @@ function App() {
                     item,
                   ].sort((a, b) => a.repo.localeCompare(b.repo)),
                 );
-                setBoardId(item.id);
-                localStorage.setItem("bakery-board", item.id);
-                setCards([]);
-                setSelected(null);
-                setMergeConflicts([]);
+                openBoard(item.id);
                 setRepoPath("");
                 setAddingRepo(false);
                 setEditingBoard(null);
@@ -2102,7 +2148,7 @@ function App() {
             {editing ? "Edit card" : "New card"}
           </DialogTitle>
           <DialogDescription className="mt-1 text-sm text-muted-foreground">
-            Work in {currentBoard && currentBoard.repo}.
+            Work in {editing?.repo ?? currentBoard?.repo}.
           </DialogDescription>
           <CardForm
             key={editing?.id ?? "new"}
@@ -2110,7 +2156,7 @@ function App() {
             onSubmit={(value) =>
               action(async () => {
                 const saved = await api<Card>(
-                  `/boards/${boardId}/cards${editing ? `/${editing.id}` : ""}`,
+                  `/boards/${editing ? boards.find((item) => item.repo === editing.repo)?.id : boardId}/cards${editing ? `/${editing.id}` : ""}`,
                   {
                     method: editing ? "PATCH" : "POST",
                     body: JSON.stringify(value),
@@ -2125,14 +2171,26 @@ function App() {
           />
         </DialogContent>
       </Dialog>
-      {boardId && selected && (
+      {detailBoardId && selected && (
         <CardDetails
           key={selected}
-          boardId={boardId}
+          boardId={detailBoardId}
           card={card}
           settings={settings}
           conflict={mergeConflicts.find((item) => item.cardId === selected)}
-          onClose={() => setSelected(null)}
+          queue={
+            reviewQueue && selected
+              ? {
+                  position: reviewQueue.indexOf(selected) + 1,
+                  total: reviewQueue.length,
+                  onNext: advanceQueue,
+                }
+              : undefined
+          }
+          onClose={() => {
+            setSelected(null);
+            setReviewQueue(null);
+          }}
           onEdit={(item) => {
             setEditing(item);
             setSelected(null);

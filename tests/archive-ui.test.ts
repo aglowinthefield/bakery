@@ -9,6 +9,8 @@ test("Done cards can be multi-selected or all selected and archived into the Arc
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     const card = (id: string, status: string) => ({ id, title: `${id} card`, body: "", repo: "/tmp/repo", source: "manual", status,
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 });
     let cards = [card("one", "done"), card("two", "done"), card("three", "done"), card("open", "ready")];

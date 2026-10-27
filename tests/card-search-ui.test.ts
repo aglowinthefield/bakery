@@ -22,6 +22,8 @@ test("search filters cards by title, body, and ID prefix and clears", async () =
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       const data: Record<string, unknown> = {

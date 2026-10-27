@@ -22,6 +22,8 @@ async function openAttempts() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"], viewport: { width: 390, height: 800 } });
   const page = await context.newPage();
+  // These tests cover the board, not the Today landing page.
+  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.route("**/api/**", route => {
     const path = new URL(route.request().url()).pathname;
     const data = path === "/api/boards" ? [{ id: "board", repo: "/Users/example/projects/repo" }]

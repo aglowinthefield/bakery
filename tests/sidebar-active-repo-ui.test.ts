@@ -9,6 +9,8 @@ test("clicking the already open repo in the sidebar does nothing", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let cardLoads = 0;
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;

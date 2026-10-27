@@ -11,6 +11,8 @@ test("unattended review is configured per repository, not in global Settings", a
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     const boards = [
       { id: "first", repo: "/tmp/first/app", icon: "layout-grid", color: "violet", autoReviewEnabled: true, verificationCommand: "npm test", autoCollapseEmptySwimlanes: false },
       { id: "second", repo: "/tmp/second/app", icon: "layout-grid", color: "violet", autoReviewEnabled: false, verificationCommand: "npm run check", autoCollapseEmptySwimlanes: false },

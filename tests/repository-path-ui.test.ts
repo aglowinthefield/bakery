@@ -11,6 +11,8 @@ test("repository path suggestions can be picked by keyboard or pointer without s
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     const submitted: string[] = [];
     await page.route("**/api/**", async route => {
       const url = new URL(route.request().url());

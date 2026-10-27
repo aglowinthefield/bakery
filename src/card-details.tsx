@@ -33,6 +33,8 @@ type Props = {
   onRefresh: () => void;
   onError: (message: string) => void;
   onConflict: (conflict: MergeConflict | null) => void;
+  /** Set while reviewing cards one at a time from Today. */
+  queue?: { position: number; total: number; onNext: () => void };
 };
 
 export function CardDetails({
@@ -45,6 +47,7 @@ export function CardDetails({
   onRefresh,
   onError,
   onConflict,
+  queue,
 }: Props) {
   const cardId = card?.id;
   const [runs, setRuns] = useState<Run[]>([]);
@@ -247,6 +250,28 @@ export function CardDetails({
           </span>{" "}
           Manual card · {card && card.repo}
         </DialogDescription>
+        {queue && (
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-accent/30 px-3 py-2 text-xs">
+            <span
+              role="status"
+              aria-label="Review queue"
+              className="text-muted-foreground"
+            >
+              Reviewing{" "}
+              <strong className="font-mono text-foreground">
+                {queue.position} of {queue.total}
+              </strong>
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto"
+              onClick={queue.onNext}
+            >
+              {queue.position < queue.total ? "Next card" : "Finish"}
+            </Button>
+          </div>
+        )}
         {card && (
           <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
             Priority

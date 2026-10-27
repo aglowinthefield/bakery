@@ -11,6 +11,8 @@ test("Settings switches between the preserved default and Compline after reload"
     await server.listen();
     browser = await chromium.launch();
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let theme: "default" | "compline" = "default";
     let delaySettings = false;
     const settingsReady = new Promise<void>((resolve) => { releaseSettings = resolve; });

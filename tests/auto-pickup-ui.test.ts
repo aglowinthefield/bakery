@@ -11,6 +11,8 @@ test("a capped board shows the reason, next slot, and a confirmed reset in Setti
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let board = { id: "board", repo: "/tmp/bakery", autoPickupEnabled: true, pickupConcurrency: 2,
       pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z" as string | null,
       autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false, verificationCommand: "" };

@@ -32,6 +32,8 @@ const body = [
 
 test("card details render description markdown without injecting HTML", async () => {
   const page = await browser.newPage();
+  // These tests cover the board, not the Today landing page.
+  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {

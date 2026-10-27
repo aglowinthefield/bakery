@@ -10,6 +10,8 @@ test("repository icon and color picker updates navigation and heading after save
     await server.listen();
     browser = await chromium.launch();
     const page = await browser.newPage();
+    // These tests cover the board, not the Today landing page.
+    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let board = { id: "board", repo: "/tmp/example", icon: "layout-grid", color: "violet", autoCollapseEmptySwimlanes: false };
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
