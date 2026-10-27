@@ -7,7 +7,7 @@
     <script>
       try {
         const theme = localStorage.getItem("bakery-theme");
-        if (theme === "compline" || theme === "light") document.documentElement.dataset.theme = theme;
+        if (theme === "compline" || theme === "light" || theme === "hearth") document.documentElement.dataset.theme = theme;
         const density = localStorage.getItem("bakery-density");
         if (density === "compact" || density === "cozy") document.documentElement.dataset.density = density;
       } catch { /* Storage can be disabled. The database still supplies the theme. */ }

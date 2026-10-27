@@ -64,7 +64,7 @@ export type BakerySettings = {
   confirmRunStart: boolean;
   notifyOnReview: boolean;
   cardDetailsLayout: "dialog" | "side";
-  theme: "default" | "compline" | "light";
+  theme: "default" | "compline" | "light" | "hearth";
   density: "compact" | "default" | "cozy";
   agentModels?: AgentModels;
 };

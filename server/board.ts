@@ -9,7 +9,7 @@ export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | 
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
-export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light"; density: "compact" | "default" | "cozy"; agentModels: AgentModels };
+export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light" | "hearth"; density: "compact" | "default" | "cozy"; agentModels: AgentModels };
 type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationChosen: number; githubMainProtected: number | null; integrationNote: string };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
@@ -103,7 +103,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS card_dependencies (cardId TEXT NOT NULL REFERENCES cards(id), dependsOn TEXT NOT NULL REFERENCES cards(id), PRIMARY KEY (cardId, dependsOn));
       CREATE INDEX IF NOT EXISTS card_dependencies_parent ON card_dependencies(dependsOn);
       DELETE FROM card_dependencies WHERE cardId NOT IN (SELECT id FROM cards) OR dependsOn NOT IN (SELECT id FROM cards);
-      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
+      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light', 'hearth')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
     // Scripts may pass an idempotency key so a re-run returns the card it already created on that board.
     const cardColumns = new Set((this.db.prepare("PRAGMA table_info(cards)").all() as { name: string }[]).map(column => column.name));
@@ -125,15 +125,15 @@ export class Board {
     const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
     if (!settingsColumns.has("cardDetailsLayout")) this.db.exec("ALTER TABLE settings ADD COLUMN cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side'))");
     if (!settingsColumns.has("theme")) {
-      this.db.exec("ALTER TABLE settings ADD COLUMN theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light'))");
+      this.db.exec("ALTER TABLE settings ADD COLUMN theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light', 'hearth'))");
     } else {
-      // Main's original theme column only accepts default and compline. Rebuild it
-      // before a light selection so existing preferences survive the expanded check.
+      // Older theme columns reject newer themes (light, hearth). Rebuild the table
+      // so existing preferences, density included, survive the expanded check.
       const schema = (this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='settings'").get() as { sql: string }).sql;
-      if (!["'default'", "'compline'", "'light'"].every(value => schema.includes(value))) {
+      if (!["'default'", "'compline'", "'light'", "'hearth'"].every(value => schema.includes(value))) {
         this.db.exec(`BEGIN IMMEDIATE;
-          CREATE TABLE settings_new (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
-          INSERT INTO settings_new SELECT id, confirmRunStart, cardDetailsLayout, CASE WHEN theme='dark' THEN 'default' ELSE theme END, ${settingsColumns.has("notifyOnReview") ? "notifyOnReview" : "0"}, ${settingsColumns.has("agentModels") ? "agentModels" : "'{}'"} FROM settings;
+          CREATE TABLE settings_new (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light', 'hearth')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}', density TEXT NOT NULL DEFAULT 'default' CHECK(density IN ('compact', 'default', 'cozy')));
+          INSERT INTO settings_new SELECT id, confirmRunStart, cardDetailsLayout, CASE WHEN theme='dark' THEN 'default' ELSE theme END, ${settingsColumns.has("notifyOnReview") ? "notifyOnReview" : "0"}, ${settingsColumns.has("agentModels") ? "agentModels" : "'{}'"}, ${settingsColumns.has("density") ? "density" : "'default'"} FROM settings;
           DROP TABLE settings;
           ALTER TABLE settings_new RENAME TO settings;
           COMMIT;`);
