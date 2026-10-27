@@ -1554,7 +1554,7 @@ export function App() {
                     endDrag();
                     moveCard(card, column.id);
                   }}
-                  className={`${collapsed ? "w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
+                  className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
                   {collapsed ? (
                     <button
