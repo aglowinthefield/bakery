@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-test("a capped board shows the reason, next slot, and a confirmed reset in Settings", async () => {
+test("a capped board shows the reason, next slot, and a confirmed reset in the repository settings", async () => {
   const server = await createServer({ server: { port: 0 } });
   await server.listen();
   const address = server.httpServer!.address();
@@ -41,6 +41,10 @@ test("a capped board shows the reason, next slot, and a confirmed reset in Setti
     await page.getByText(/Auto pickup waiting/).waitFor({ state: "hidden" });
     assert.equal(resets, 1);
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByText("Auto pickup is set per repository.", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("combobox", { name: "Auto pickup daily start limit" }).count(), 0, "global Settings has no pickup controls");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Edit /tmp/bakery" }).click();
     await page.getByRole("combobox", { name: "Auto pickup daily start limit" }).selectOption("99");
     await page.getByText(/0 \/ 99 starts/).waitFor();
     assert.equal(board.pickupDailyLimit, 99);
