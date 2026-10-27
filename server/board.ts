@@ -67,7 +67,7 @@ export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) =>
 type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "locallyMerged"> & { dependsOn: string; blocked: number; locallyMerged: number };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string } & UsageFields;
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationChosen, githubMainProtected, integrationNote";
@@ -192,6 +192,8 @@ export class Board {
     if (!runColumns.has("ciFix")) this.db.exec("ALTER TABLE runs ADD COLUMN ciFix INTEGER NOT NULL DEFAULT 0");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
+    if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
+    if (!jobColumns.has("requeued")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN requeued INTEGER NOT NULL DEFAULT 0");
     // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
       for (const definition of usageDefinitions.split(", "))
@@ -209,7 +211,12 @@ export class Board {
   }
   recoverAutoReviews(): void {
     // Only the server may call this, after obtaining its exclusive data-directory lock.
-    this.db.prepare("UPDATE auto_review_jobs SET state='needs_human', details='Server restarted during agent review; inspect manually', finishedAt=? WHERE state='running'").run(now());
+    // A review cut off by a restart goes back in the queue once. A second interruption is left for a person, so a
+    // review that keeps taking the server down cannot loop.
+    this.db.prepare(`UPDATE auto_review_jobs SET state='needs_human', finishedAt=?, interruptions=interruptions+1,
+      requeued=CASE WHEN interruptions=0 THEN 1 ELSE 0 END,
+      details=CASE WHEN interruptions=0 THEN 'Server restarted during agent review; it will be reviewed again'
+        ELSE 'Server restarted during agent review twice; inspect manually' END WHERE state='running'`).run(now());
   }
   close() { this.db.close(); }
   getSettings(): BakerySettings {
@@ -531,7 +538,7 @@ export class Board {
   private awaitsAutoReview(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
     return repoBoard.autoReviewEnabled && repoBoard.integration === "local" &&
       run.status === "review" && !!run.finishedAt && !!repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&
-      !this.getAutoReviewJob(run.id) && !this.getApproval(cardId) && !this.getMergeFailure(cardId) &&
+      !(this.getAutoReviewJob(run.id)?.requeued === 0) && !this.getApproval(cardId) && !this.getMergeFailure(cardId) &&
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
   }
   /** See `ReviewWait`. Anything this does not recognize as someone else's turn is the person's turn. */
@@ -571,7 +578,9 @@ export class Board {
     try {
       const candidate = this.listAutoReviewCandidates().find(item => item.card.id === cardId && item.run.id === runId);
       if (!candidate) throw new Error("Auto-review is not eligible for this card");
-      this.db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,cost) VALUES (?,?,'running',?,0,0,0,0,0)").run(cardId, runId, now());
+      // A requeued job keeps its row, so the interrupted attempt's spend and agent still count.
+      this.db.prepare(`INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,cost) VALUES (?,?,'running',?,0,0,0,0,0)
+        ON CONFLICT(runId) DO UPDATE SET state='running', details='', fingerprint='', startedAt=excluded.startedAt, finishedAt=NULL, requeued=0 WHERE requeued=1`).run(cardId, runId, now());
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }

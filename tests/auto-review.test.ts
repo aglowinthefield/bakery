@@ -219,6 +219,53 @@ test("opening another Board cannot invalidate an active review; explicit restart
   } finally { item.close(); }
 });
 
+test("a review interrupted by a restart is queued again once, then left for a person", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    item.board.beginAutoReview(current.card.id, current.run.id);
+    item.board.recordAutoReviewUsage(current.run.id, { inputTokens: 10, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0.5 });
+    item.board.recoverAutoReviews();
+    let job = item.board.getAutoReviewJob(current.run.id)!;
+    assert.equal(job.requeued, 1);
+    assert.match(job.details, /reviewed again/);
+    assert.equal(item.board.getCard(current.card.id)!.reviewWait, "agent_review");
+    item.board.beginAutoReview(current.card.id, current.run.id);
+    job = item.board.getAutoReviewJob(current.run.id)!;
+    assert.equal(job.state, "running");
+    assert.equal(job.cost, 0.5, "the interrupted attempt's spend still counts");
+    item.board.recoverAutoReviews();
+    job = item.board.getAutoReviewJob(current.run.id)!;
+    assert.equal(job.state, "needs_human");
+    assert.equal(job.requeued, 0);
+    assert.match(job.details, /twice; inspect manually/);
+    assert.equal(item.board.listAutoReviewCandidates().length, 0);
+    assert.throws(() => item.board.beginAutoReview(current.card.id, current.run.id), /not eligible/);
+  } finally { item.close(); }
+});
+
+test("draining waits for the review in progress and claims no new ones", async () => {
+  const item = fixture();
+  try {
+    // The fake reviewer takes a moment, so the drain starts while it is still running.
+    const fake = join(item.dir, "fake-pi");
+    writeFileSync(fake, `#!/bin/sh\nsleep 0.5\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Check manually"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const first = item.reviewedCard(), second = item.reviewedCard();
+    const ticking = item.auto.tick();
+    while (!item.auto.active) await new Promise(resolve => setTimeout(resolve, 10));
+    await item.auto.drain();
+    assert.equal(item.auto.active, false);
+    assert.equal(item.board.getAutoReviewJob(first.run.id)?.state, "needs_human", "the active review finished instead of being killed");
+    await ticking;
+    await item.auto.tick();
+    assert.equal(item.board.getAutoReviewJob(second.run.id), undefined, "no new review starts while draining");
+  } finally { item.close(); }
+});
+
 test("unattended merges have no daily cap, and disabling stops new reviews", async () => {
   const item = fixture();
   try {

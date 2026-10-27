@@ -385,7 +385,8 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.
 process.on("message", (message: unknown) => {
   if ((message as { type?: unknown } | null)?.type !== "drain") return;
   autoPickup.shutdown();
-  process.send?.({ type: "draining", activeRuns: worker.activeCount });
-  void worker.drain().then(() => process.send?.({ type: "drained" }));
+  // Agent reviews count too: a restart would kill the reviewer mid-review.
+  process.send?.({ type: "draining", activeRuns: worker.activeCount + (autoReview.active ? 1 : 0) });
+  void Promise.all([worker.drain(), autoReview.drain()]).then(() => process.send?.({ type: "drained" }));
 });
 process.once("SIGINT", () => shutdown("SIGINT")); process.once("SIGTERM", () => shutdown("SIGTERM"));

@@ -55,6 +55,10 @@ export type AutoReviewJob = {
   startedAt: string;
   finishedAt: string | null;
   agent: string;
+  /** Restarts that cut this review off. */
+  interruptions: number;
+  /** 1 when a restart cut the review off and it is queued to run again. */
+  requeued: number;
 } & UsageFields;
 export type BakerySettings = {
   confirmRunStart: boolean;

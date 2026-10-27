@@ -41,6 +41,7 @@ export function reviewerVerdict(stream: string): { verdict: "approve" | "needs_h
 
 export class AutoReview {
   private busy = false;
+  private draining = false;
   private timer: ReturnType<typeof setInterval> | undefined;
   private reviewer: ChildProcess | undefined;
   constructor(private board: Board, private integration: Integration, private piBin = "pi") {}
@@ -53,8 +54,14 @@ export class AutoReview {
     if (this.reviewer) this.reviewer.kill("SIGTERM");
     while (this.busy) await new Promise(resolve => setTimeout(resolve, 50));
   }
+  /** Stops claiming new reviews and resolves once the review in progress, if any, has finished. */
+  async drain(): Promise<void> {
+    this.draining = true;
+    while (this.busy) await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  get active(): boolean { return this.busy; }
   async tick(): Promise<void> {
-    if (this.busy) return;
+    if (this.busy || this.draining) return;
     // This is the server's unconditional periodic tick, not an auto-review opt-in.
     this.integration.reconcileExternallyMerged();
     const candidate = this.board.listAutoReviewCandidates()[0];

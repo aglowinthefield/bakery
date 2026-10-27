@@ -332,11 +332,13 @@ sequenceDiagram
   participant P as running Pi agents
   Note over S: server file changes,<br/>for example after a merge
   S->>B: drain
-  B->>B: refuse new runs, pause pickup
-  P-->>B: finish on their own
+  B->>B: refuse new runs and reviews, pause pickup
+  P-->>B: runs and the agent review in progress finish on their own
   B->>S: drained
   S->>B: restart with the new code
 ```
+
+If the server stops during an agent review anyway (a crash, or stopping `npm run dev`), the review is queued again when it starts. A second interruption of the same review leaves the card for you.
 
 If the server crashes, the supervisor restarts it after 1 second, backing off to 30 seconds while it keeps failing. A file change restarts it immediately. Stopping `npm run dev` stops running agents.
 

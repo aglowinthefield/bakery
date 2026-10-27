@@ -515,7 +515,9 @@ export function CardDetails({
                 ? "checking"
                 : autoJobs[0].state === "merged"
                   ? "merged locally"
-                  : "needs human review"}
+                  : autoJobs[0].requeued
+                    ? "interrupted by a restart, queued again"
+                    : "needs human review"}
             </strong>{" "}
             <AgentBadge
               phase="Review"
