@@ -37,7 +37,8 @@ export type Board = {
   cost24h?: number;
   autoPickupBudgetReached?: boolean;
   agentModels?: AgentModels;
-  cardCounts?: Partial<Record<Status, number>>;
+  /** Per status; `review` counts only Review cards that need you, `reviewWaiting` the rest. */
+  cardCounts?: Partial<Record<CountKey, number>>;
 };
 export type AutoReviewJob = {
   cardId: string;
@@ -133,7 +134,43 @@ export type Card = {
   prError?: string | null;
   /** Times Bakery sent this card back because its PR failed CI. */
   ciReworks?: number;
+  /** Set on Review cards that are not your turn yet; see `reviewWaitLabels`. */
+  reviewWait?: ReviewWait | null;
+  /** Last time the latest run's agent reported anything. */
+  lastActivityAt?: string | null;
 } & UsageFields;
+export type CountKey = Status | "reviewWaiting";
+/** The `cardCounts` bucket a card falls in. */
+export const countKey = (card: Card): CountKey =>
+  card.status === "review" && card.reviewWait ? "reviewWaiting" : card.status;
+export type ReviewWait = "agent_review" | "ci_fix" | "github";
+export const reviewWaitLabels: Record<ReviewWait, string> = {
+  agent_review: "Agent reviewing",
+  ci_fix: "CI fix queued",
+  github: "Waiting on GitHub",
+};
+/** A Review card you can act on now, rather than one an agent, CI or GitHub still has. */
+export const needsYourReview = (card: Card) =>
+  card.status === "review" && !card.reviewWait;
+/** A running agent silent for this long is shown as quiet. Long tool calls (a test suite) can be quiet too. */
+export const quietAfterMs = 5 * 60_000;
+/**
+ * Whether work is happening on the card right now: an agent is `working`, the card is `waiting` on something
+ * outside Bakery, or a running agent has gone `quiet`. Null when nothing is in flight.
+ */
+export function cardActivity(
+  card: Card,
+  now = Date.now(),
+): "working" | "waiting" | "quiet" | null {
+  if (card.status === "running")
+    return card.lastActivityAt &&
+      now - Date.parse(card.lastActivityAt) > quietAfterMs
+      ? "quiet"
+      : "working";
+  if (card.status === "review" && card.reviewWait)
+    return card.reviewWait === "agent_review" ? "working" : "waiting";
+  return null;
+}
 const finished = (status: Status) => status === "done" || status === "archived";
 /**
  * The cards this card still waits on, from the cards the page already has. Only Today's list

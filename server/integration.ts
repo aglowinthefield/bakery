@@ -7,6 +7,7 @@ import { Board, type Card } from "./board.js";
 import { boardGithubRepo, fetchOrigin, type GitHub } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
+import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false): string {
   try {
@@ -49,7 +50,9 @@ export function mergeMessage(card: Pick<Card, "id" | "title">): string[] {
 
 export class Integration {
   private reconciliationErrors = new Set<string>();
-  constructor(private board: Board, private dataDir: string) {}
+  /** Non-blocking problems seen while approving, such as an offline fetch. Kept for inspection; also logged. */
+  readonly warnings: string[] = [];
+  constructor(private board: Board, private dataDir: string, private fetchTimeoutMs = 30_000) {}
 
   private location(card: Card, allowFailed = false) {
     const run = this.board.listRuns(card.id)[0];
@@ -182,6 +185,7 @@ export class Integration {
     if (!url) url = await github.create(slug, branch, title, pullRequestBody(draft ? draft.body : card.body, card, run));
     const number = Number(url.match(/\/pull\/(\d+)/)?.[1]);
     this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
+    this.board.recordPullRequestPush(card.id, run.id);
     return this.board.getCard(card.id)!;
   }
 
@@ -199,6 +203,19 @@ export class Integration {
     return candidate;
   }
 
+  /**
+   * When the repository has an `origin`, fetch it and refuse to merge into a main that is behind origin/main, so a
+   * card never lands on a stale main. Ahead is fine (local work not yet pushed). A failed fetch only warns.
+   */
+  private requireMainCurrent(repo: string) {
+    if (!hasOrigin(repo)) return;
+    const warning = fetchOriginBestEffort(repo, this.fetchTimeoutMs);
+    if (warning) { this.warnings.push(warning); this.warnings.splice(0, this.warnings.length - 20); console.warn(`${repo}: ${warning}`); }
+    const state = compareWithOriginMain(repo);
+    const blocked = state && behindOriginMessage(repo, state);
+    if (blocked) throw new Error(blocked);
+  }
+
   approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const { repo, worktree, run } = this.location(card);
@@ -208,6 +225,8 @@ export class Integration {
     if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
     if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
     if (git(repo, "symbolic-ref", "--short", "HEAD") !== "main") throw new Error("Check out main at the repository root before approving");
+    const pending = this.board.getApproval(card.id);
+    if (!(pending?.preparedHead && isAncestor(repo, pending.preparedHead, "main"))) this.requireMainCurrent(repo);
     const localStatus = gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true);
     const blocked = this.localConflicts(card);
     if (blocked.length) throw new Error(`Uncommitted changes on main would be overwritten: ${blocked.slice(0, 10).join(", ")}${blocked.length > 10 ? ", …" : ""}. Commit or stash them at ${repo}, then approve again`);
