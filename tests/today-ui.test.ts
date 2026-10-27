@@ -114,6 +114,7 @@ test("sidebar switches between Today and a repository board, and the choice pers
   try {
     await page.getByRole("heading", { name: "Today" }).waitFor();
     await page.getByRole("button", { name: "beta", exact: true }).click();
+    await page.getByRole("button", { name: "Kanban" }).click();
     await page.getByRole("heading", { name: "beta" }).waitFor();
     await page.reload();
     await page.getByRole("heading", { name: "beta" }).waitFor();
