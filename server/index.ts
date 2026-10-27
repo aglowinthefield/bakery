@@ -11,7 +11,7 @@ import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { draftPullRequest } from "./pr-draft.js";
-import { GitHub, GitHubSync, detectGithubIntegration } from "./github.js";
+import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
@@ -164,6 +164,12 @@ const server = createServer(async (req, res) => {
       if (!item) { send(res, 404, { error: "Board not found" }); return; }
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
+    }
+    const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
+    if (pullsRoute && req.method === "GET") {
+      const repoBoard = board.getBoard(pullsRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      send(res, 200, await github.listOpenPullRequests(boardGithubRepo(repoBoard))); return;
     }
     const pickupResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/auto-pickup\/reset-limit$/);
     if (pickupResetRoute && req.method === "POST") {
