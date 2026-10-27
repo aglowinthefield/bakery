@@ -24,6 +24,11 @@ import {
   type Status,
 } from "./model.js";
 import { MainReset, type MainRecovery } from "./local-merges.js";
+import {
+  asPushProgress,
+  PushProgressPanel,
+  type PushProgress,
+} from "./push-progress.js";
 
 type Props = {
   boardId: string;
@@ -77,6 +82,8 @@ export function CardDetails({
   const [mainRecovery, setMainRecovery] = useState<MainRecovery | null>(null);
   useEffect(() => setMainRecovery(null), [cardId]);
   const [approvalPending, setApprovalPending] = useState(false);
+  const [pushProgress, setPushProgress] = useState<PushProgress | null>(null);
+  useEffect(() => setPushProgress(null), [cardId]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
@@ -101,17 +108,23 @@ export function CardDetails({
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const [attempts, approval, annotations, jobs] = await Promise.all([
-          api<Run[]>(`/boards/${boardId}/cards/${cardId}/runs`),
-          api<{ pending: boolean }>(
-            `/boards/${boardId}/cards/${cardId}/approval`,
-          ),
-          api<ReviewComment[]>(`/boards/${boardId}/cards/${cardId}/comments`),
-          api<AutoReviewJob[]>(
-            `/boards/${boardId}/cards/${cardId}/auto-review`,
-          ),
-        ]);
+        const [attempts, approval, annotations, jobs, push] = await Promise.all(
+          [
+            api<Run[]>(`/boards/${boardId}/cards/${cardId}/runs`),
+            api<{ pending: boolean }>(
+              `/boards/${boardId}/cards/${cardId}/approval`,
+            ),
+            api<ReviewComment[]>(`/boards/${boardId}/cards/${cardId}/comments`),
+            api<AutoReviewJob[]>(
+              `/boards/${boardId}/cards/${cardId}/auto-review`,
+            ),
+            api<PushProgress | null>(
+              `/boards/${boardId}/cards/${cardId}/push-progress`,
+            ),
+          ],
+        );
         if (current) {
+          setPushProgress(asPushProgress(push));
           setRuns(attempts);
           setApprovalPending(approval.pending);
           setComments(annotations);
@@ -162,6 +175,25 @@ export function CardDetails({
     currentComments.some(
       (item) => item.runId === runs[0]?.id && item.state === "requested",
     );
+  // While a push runs (Approve, or an automatic CI fix), follow its output more often than the 2s board poll.
+  const pushing = !!pushProgress && !pushProgress.finishedAt;
+  useEffect(() => {
+    if (!cardId || !(busy || pushing)) return;
+    let current = true;
+    const timer = window.setInterval(() => {
+      void api<PushProgress | null>(
+        `/boards/${boardId}/cards/${cardId}/push-progress`,
+      )
+        .then((value) => {
+          if (current) setPushProgress(asPushProgress(value));
+        })
+        .catch(() => {});
+    }, 700);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+    };
+  }, [boardId, cardId, busy, pushing]);
   const side = settings?.cardDetailsLayout === "side";
   const action = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -828,6 +860,10 @@ export function CardDetails({
             </Button>
           </div>
         )}
+        {pushProgress &&
+          (pushing || (pushProgress.error && card?.status === "review")) && (
+            <PushProgressPanel progress={pushProgress} />
+          )}
         {error && (
           <p role="alert" className="mt-4 text-sm text-destructive">
             {error}

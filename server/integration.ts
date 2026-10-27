@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,11 +64,81 @@ export function mergeMessage(card: Pick<Card, "id" | "title">): string[] {
   return ["-m", subject, "-m", `Card: ${card.id}\nBranch: bakery/${card.id}`];
 }
 
+/**
+ * What Bakery is doing while it pushes a card to GitHub: the current step and the output Git and the repository's
+ * pre-push hooks printed so far. Kept per card after it finishes, so the board can show how the last push ended.
+ */
+export type PushProgress = { step: string; log: string[]; startedAt: string; finishedAt: string | null; error: string | null };
+const progressLogLines = 400;
+
+/**
+ * `git push` without blocking the server, streaming stdout and stderr together, in order, into `onLine`. A
+ * pre-push hook's own stdout is part of the push output, so a failure message carries everything it printed, not
+ * only stderr. `\r` progress redraws replace the line they redraw.
+ */
+export function pushBranch(cwd: string, refspec: string, onLine: (line: string, replace: boolean) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["-C", cwd, "push", "--progress", "origin", refspec], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    const output: string[] = [];
+    // Per stream: text not yet ended by a newline, and whether the next line redraws the last (after a bare \r).
+    const state = { stdout: { pending: "", redraw: false }, stderr: { pending: "", redraw: false } };
+    const emit = (line: string, replace: boolean) => {
+      const text = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trimEnd();
+      if (replace && output.length) output[output.length - 1] = text; else output.push(text);
+      onLine(text, replace);
+    };
+    const read = (stream: "stdout" | "stderr") => (chunk: Buffer) => {
+      const current = state[stream];
+      const parts = (current.pending + chunk.toString("utf8")).split(/(\r\n|\r|\n)/);
+      current.pending = parts.pop() ?? "";
+      for (let i = 0; i < parts.length; i += 2) {
+        emit(parts[i], current.redraw);
+        current.redraw = parts[i + 1] === "\r";
+      }
+    };
+    child.stdout.on("data", read("stdout"));
+    child.stderr.on("data", read("stderr"));
+    child.on("error", reject);
+    child.on("close", code => {
+      for (const stream of ["stdout", "stderr"] as const) if (state[stream].pending) emit(state[stream].pending, state[stream].redraw);
+      if (code === 0) { resolve(); return; }
+      const detail = output.filter(line => line.trim()).join("\n") || `git push exited with code ${code}`;
+      // The end of the output names the failing check; keep it when the output is long.
+      reject(new Error(`push failed: ${detail.length > 6000 ? "…" + detail.slice(-6000) : detail}`));
+    });
+  });
+}
+
 export class Integration {
   private reconciliationErrors = new Set<string>();
+  private progress = new Map<string, PushProgress>();
   /** Non-blocking problems seen while approving, such as an offline fetch. Kept for inspection; also logged. */
   readonly warnings: string[] = [];
   constructor(private board: Board, private dataDir: string, private fetchTimeoutMs = 30_000) {}
+
+  /** The current or last push of `cardId` to GitHub, or null when Bakery has not pushed it since starting. */
+  pushProgress(cardId: string): PushProgress | null { return this.progress.get(cardId) ?? null; }
+
+  /** Runs `work` as a tracked push of `cardId`: steps and push output go to `pushProgress`, and so does the outcome. */
+  private async trackPush<T>(cardId: string, work: (step: (name: string) => void, push: (cwd: string, refspec: string) => Promise<void>) => Promise<T>): Promise<T> {
+    const entry: PushProgress = { step: "Starting", log: [], startedAt: new Date().toISOString(), finishedAt: null, error: null };
+    this.progress.set(cardId, entry);
+    const step = (name: string) => { entry.step = name; };
+    const push = (cwd: string, refspec: string) => pushBranch(cwd, refspec, (line, replace) => {
+      if (replace && entry.log.length) entry.log[entry.log.length - 1] = line; else entry.log.push(line);
+      if (entry.log.length > progressLogLines) entry.log.splice(0, entry.log.length - progressLogLines);
+    });
+    try {
+      const result = await work(step, push);
+      entry.step = "Done";
+      return result;
+    } catch (error) {
+      entry.error = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      entry.finishedAt = new Date().toISOString();
+    }
+  }
 
   private location(card: Card, allowFailed = false) {
     const run = this.board.listRuns(card.id)[0];
@@ -177,23 +247,30 @@ export class Integration {
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
-    await github.check();
-    const { repo, worktree, run } = this.location(card);
-    if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
-    if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
-    const inspected = this.snapshot(card, false);
-    if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
-    const candidate = this.commitReviewed(card, worktree, inspected.tree);
-    await fetchOrigin(repo);
-    if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
-    const branch = `bakery/${card.id}`;
-    // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
-    git(worktree, "push", "origin", `${candidate}:refs/heads/${branch}`);
-    const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
-    const { number, url } = await this.ensurePullRequest(card, run.output, slug, github, { sha: candidate, why });
-    this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
-    this.board.recordPullRequestPush(card.id, run.id);
-    return this.board.getCard(card.id)!;
+    return this.trackPush(card.id, async (step, push) => {
+      step("Checking GitHub access");
+      await github.check();
+      const { repo, worktree, run } = this.location(card);
+      if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
+      if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
+      step("Committing the reviewed work");
+      const inspected = this.snapshot(card, false);
+      if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
+      const candidate = this.commitReviewed(card, worktree, inspected.tree);
+      step("Fetching origin");
+      await fetchOrigin(repo);
+      if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
+      const branch = `bakery/${card.id}`;
+      step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
+      // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
+      await push(worktree, `${candidate}:refs/heads/${branch}`);
+      step(card.prState === "OPEN" ? "Updating the pull request" : "Opening the pull request");
+      const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
+      const { number, url } = await this.ensurePullRequest(card, run.output, slug, github, { sha: candidate, why });
+      this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
+      this.board.recordPullRequestPush(card.id, run.id);
+      return this.board.getCard(card.id)!;
+    });
   }
 
   /** The open PR from `bakery/<id>`, or a new one with the card title and the card body plus the run summary. */
@@ -237,19 +314,25 @@ export class Integration {
     if (card.status !== "done") throw new Error("Only a Done card that was merged into local main can be published as a pull request");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; clear the link first`);
     const slug = boardGithubRepo(repoBoard);
-    await github.check();
-    const repo = card.repo;
-    await fetchOrigin(repo);
-    const merge = this.board.listLocalMerges(repo).find(item => item.card.id === card.id);
-    if (!merge) throw new Error("This card was not merged into local main by Bakery; there is nothing to publish");
-    const { candidate } = merge;
-    const blocker = publishBlocker(repo, card, candidate);
-    if (blocker) throw new Error(blocker);
-    if (isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
-    // A plain push: if bakery/<id> on GitHub holds other commits, Git refuses instead of overwriting them.
-    git(repo, "push", "origin", `${candidate}:refs/heads/bakery/${card.id}`);
-    const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, { sha: candidate, why: "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" });
-    return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: this.mainRecovery(repo) };
+    return this.trackPush(card.id, async (step, push) => {
+      step("Checking GitHub access");
+      await github.check();
+      const repo = card.repo;
+      step("Fetching origin");
+      await fetchOrigin(repo);
+      const merge = this.board.listLocalMerges(repo).find(item => item.card.id === card.id);
+      if (!merge) throw new Error("This card was not merged into local main by Bakery; there is nothing to publish");
+      const { candidate } = merge;
+      const blocker = publishBlocker(repo, card, candidate);
+      if (blocker) throw new Error(blocker);
+      if (isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
+      step(`Pushing bakery/${card.id} (the repository's pre-push hooks run first)`);
+      // A plain push: if bakery/<id> on GitHub holds other commits, Git refuses instead of overwriting them.
+      await push(repo, `${candidate}:refs/heads/bakery/${card.id}`);
+      step("Opening the pull request");
+      const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, { sha: candidate, why: "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" });
+      return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: this.mainRecovery(repo) };
+    });
   }
 
   /**

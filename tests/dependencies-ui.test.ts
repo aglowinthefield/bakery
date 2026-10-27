@@ -23,6 +23,7 @@ test("a blocked Ready card shows a waiting badge, and details list, link, add an
     for (const id of ["child", "parent"]) Object.assign(data, {
       [`/api/boards/board/cards/${id}/runs`]: [],
       [`/api/boards/board/cards/${id}/approval`]: { pending: false },
+      [`/api/boards/board/cards/${id}/push-progress`]: null,
       [`/api/boards/board/cards/${id}/comments`]: [],
       [`/api/boards/board/cards/${id}/auto-review`]: [],
     });
