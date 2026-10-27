@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-test("Review cards an agent or GitHub still has sit apart, show who has them, and only notify once they need you", async () => {
+test("Review cards marked as your turn come first, cards an agent or GitHub still has sit apart and show who has them, and only notify once they need you", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0 } });
   await server.listen();
   const browser = await chromium.launch();
@@ -48,6 +48,10 @@ test("Review cards an agent or GitHub still has sit apart, show who has them, an
     assert.equal(await tile("github").getAttribute("data-activity"), "waiting");
     assert.match(await tile("github").innerText(), /Waiting on GitHub/);
     assert.equal(await tile("mine").getAttribute("data-activity"), null);
+    assert.equal(await tile("mine").getAttribute("data-turn"), "yours");
+    assert.match(await tile("mine").innerText(), /Your turn/i);
+    assert.equal(await tile("github").getAttribute("data-turn"), null);
+    assert.doesNotMatch(await tile("github").innerText(), /Your turn/i);
     const nav = page.getByRole("list", { name: "Card counts" });
     assert.equal(await nav.locator('[data-group="review"]').getAttribute("aria-label"), "Review: 1", "only the card you can act on counts as Review");
     assert.equal(await nav.locator('[data-group="in-progress"]').getAttribute("aria-label"), "In progress: 4");
@@ -58,8 +62,8 @@ test("Review cards an agent or GitHub still has sit apart, show who has them, an
     assert.equal(await tile("agent").getAttribute("data-activity"), "working");
     const lane = page.getByRole("region", { name: "Review lane" });
     const order = await lane.locator('button[data-activity], button:not([data-activity]), [role="separator"]').evaluateAll(els =>
-      els.map(el => el.getAttribute("role") === "separator" ? "|" : el.textContent?.match(/(mine|agent|github) card/)?.[1]).filter(Boolean));
-    assert.deepEqual(order, ["mine", "|", "agent", "github"]);
+      els.map(el => el.getAttribute("role") === "separator" ? el.getAttribute("aria-label") : el.textContent?.match(/(mine|agent|github) card/)?.[1]).filter(Boolean));
+    assert.deepEqual(order, ["Your turn", "mine", "Not your turn yet", "agent", "github"]);
     assert.deepEqual(await notices(), []);
 
     // The agent hands it to you: now it notifies.
