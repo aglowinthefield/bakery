@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { Board, type Card, type RepoBoard, type Run } from "./board.js";
+import { Board, autoReviewDailyMerges, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, usageInStream } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
 import { Integration } from "./integration.js";
@@ -88,6 +88,8 @@ export class AutoReview {
       if (!diff.files.length || diff.files.length > 40 || patch.length > 100_000) throw new Error("Diff is empty or too large for automatic review");
       if (diff.files.some(file => /^Binary files .+ differ$|^GIT binary patch|^(new|deleted) file mode 120000|^Submodule /m.test(file.patch))) throw new Error("Binary, symlink, or submodule changes require human review");
       if (!run.worktree) throw new Error("Card worktree is missing");
+      const blocked = this.integration.localConflicts(card);
+      if (blocked.length) throw new Error(`Uncommitted changes on main overlap this card (${blocked.slice(0, 10).join(", ")}); commit or stash them, then approve`);
       // A failed verifier never spends review tokens. Its output is deliberately not persisted.
       await execute("/bin/sh", ["-c", repoBoard.verificationCommand], run.worktree, 5 * 60_000);
       if (this.integration.review(this.board.getCard(card.id)!).fingerprint !== fingerprint) throw new Error("Work changed during verification");
@@ -97,7 +99,7 @@ export class AutoReview {
       if (verdict.verdict !== "approve") throw new Error(`Agent requested human review: ${verdict.reason}`);
       const current = this.board.getBoard(repoBoard.id);
       if (!current?.autoReviewEnabled || current.autoReviewEnabledAt !== repoBoard.autoReviewEnabledAt || current.verificationCommand !== repoBoard.verificationCommand ||
-        this.board.autoReviewMergesToday(card.repo) >= 3) throw new Error("Auto-review was disabled, changed, or reached its three-merge daily limit");
+        this.board.autoReviewMergesToday(card.repo) >= autoReviewDailyMerges) throw new Error(`Auto-review was disabled, changed, or reached its ${autoReviewDailyMerges}-merge daily limit`);
       const currentCard = this.board.getCard(card.id);
       if (!currentCard || currentCard.title !== card.title || currentCard.body !== card.body) throw new Error("Card changed during agent review");
       if (this.integration.review(currentCard).fingerprint !== fingerprint) throw new Error("Work changed during agent review");
@@ -107,7 +109,7 @@ export class AutoReview {
         const latestCard = this.board.getCard(card.id), latestBoard = this.board.getBoard(repoBoard.id);
         if (!latestCard || latestCard.title !== card.title || latestCard.body !== card.body ||
           !latestBoard?.autoReviewEnabled || latestBoard.autoReviewEnabledAt !== repoBoard.autoReviewEnabledAt ||
-          latestBoard.verificationCommand !== repoBoard.verificationCommand || this.board.autoReviewMergesToday(card.repo) >= 3)
+          latestBoard.verificationCommand !== repoBoard.verificationCommand || this.board.autoReviewMergesToday(card.repo) >= autoReviewDailyMerges)
           throw new Error("Card or auto-review settings changed before merge; human review required");
       });
       this.board.finishAutoReview(run.id, "merged", verdict.reason, fingerprint);

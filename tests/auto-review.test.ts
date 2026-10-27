@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Board } from "../server/board.js";
+import { Board, autoReviewDailyMerges } from "../server/board.js";
 import { Integration } from "../server/integration.js";
 import { AutoReview, reviewerVerdict } from "../server/auto-review.js";
 
@@ -199,18 +199,21 @@ test("opening another Board cannot invalidate an active review; explicit restart
   } finally { item.close(); }
 });
 
-test("the three-merge daily cap and disabling stop new autonomous reviews", async () => {
+test("the daily merge cap and disabling stop new autonomous reviews", async () => {
   const item = fixture();
   try {
     item.board.setAutoReview(item.repoBoard.id, true, "true");
     await new Promise(resolve => setTimeout(resolve, 5));
-    for (let i = 0; i < 3; i++) {
-      const current = item.reviewedCard();
-      await item.auto.tick();
-      assert.equal(item.board.getCard(current.card.id)?.status, "done");
-    }
+    const first = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getCard(first.card.id)?.status, "done");
+    // Seed the rest of the day's merges directly; real merges here would make the test slow.
+    const db = new DatabaseSync(join(item.dir, "board.sqlite"));
+    for (let i = 1; i < autoReviewDailyMerges; i++)
+      db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,finishedAt) VALUES (?,?,'merged',datetime('now'),datetime('now'))").run(first.card.id, `seeded-${i}`);
+    db.close();
     const fourth = item.reviewedCard();
-    assert.equal(item.board.autoReviewMergesToday(item.repo), 3);
+    assert.equal(item.board.autoReviewMergesToday(item.repo), autoReviewDailyMerges);
     assert.equal(item.board.listAutoReviewCandidates().length, 0);
     await item.auto.tick();
     assert.equal(item.board.getCard(fourth.card.id)?.status, "review");

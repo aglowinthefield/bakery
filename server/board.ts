@@ -5,6 +5,8 @@ import { parseAgentModels, resolveAgentModel, validateAgentModels, type AgentMod
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
+// A safety valve on unattended merges per repository per rolling 24h, not a cost control: pickup's start limit bounds paid runs.
+export const autoReviewDailyMerges = 20;
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean };
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light"; agentModels: AgentModels };
 type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null };
@@ -308,7 +310,7 @@ export class Board {
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {
     const result: { card: Card; run: Run; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled)) {
-      if (this.autoReviewMergesToday(repoBoard.repo) >= 3) continue;
+      if (this.autoReviewMergesToday(repoBoard.repo) >= autoReviewDailyMerges) continue;
       for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
         const run = this.listRuns(card.id)[0];
         if (run?.status === "review" && run.finishedAt && repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&
