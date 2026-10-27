@@ -76,6 +76,7 @@ import {
   priorityLabel,
   cardActivity,
   countKey,
+  dropTargets,
   needsYourReview,
   reviewWaitLabels,
   type BakerySettings,
@@ -518,6 +519,12 @@ function App() {
   const [error, setError] = useState("");
   const [mergeConflicts, setMergeConflicts] = useState<MergeConflict[]>([]);
   const [busy, setBusy] = useState(false);
+  // The card being dragged and the lanes it may drop on; see dropTargets.
+  const [dragging, setDragging] = useState<{
+    card: Card;
+    targets: Status[];
+  } | null>(null);
+  const [dropLane, setDropLane] = useState<Status | null>(null);
   const [selectingDone, setSelectingDone] = useState(false);
   const [doneSelection, setDoneSelection] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -832,6 +839,38 @@ function App() {
       setSelectingDone(false);
       setDoneSelection(new Set());
     });
+  };
+  // Each drop calls the same endpoint as the matching button in the card's details.
+  const moveCard = (card: Card, to: Status) => {
+    if (!boardId || !dropTargets(card).includes(to)) return;
+    const path = `/boards/${boardId}/cards`;
+    if (to === "running") {
+      if (
+        settings?.confirmRunStart &&
+        !window.confirm(
+          `Start Pi on "${card.title}"? This run may use paid model tokens and can edit its Git worktree.`,
+        )
+      )
+        return;
+      void action(() => api(`${path}/${card.id}/start`, { method: "POST" }));
+    } else if (to === "archived" || card.status === "archived")
+      void action(() =>
+        api(`${path}/${to === "archived" ? "archive" : "unarchive"}`, {
+          method: "POST",
+          body: JSON.stringify({ cardIds: [card.id] }),
+        }),
+      );
+    else
+      void action(() =>
+        api(`${path}/${card.id}/status`, {
+          method: "POST",
+          body: JSON.stringify({ status: to }),
+        }),
+      );
+  };
+  const endDrag = () => {
+    setDragging(null);
+    setDropLane(null);
   };
   const toggleLane = (status: Status, collapsed: boolean) => {
     if (!boardId) return;
@@ -1292,12 +1331,44 @@ function App() {
                     (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
               const selecting =
                 column.id === "done" && selectingDone && laneCards.length > 0;
+              const droppable = !!dragging?.targets.includes(column.id);
               return (
                 <section
                   key={column.id}
                   aria-label={`${column.label} lane`}
                   data-status={column.id}
-                  className={`${collapsed ? "w-12" : "w-[280px]"} shrink-0`}
+                  data-drop={
+                    dragging
+                      ? droppable
+                        ? dropLane === column.id
+                          ? "over"
+                          : "valid"
+                        : "invalid"
+                      : undefined
+                  }
+                  onDragOver={(event) => {
+                    if (!droppable) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    if (dropLane !== column.id) setDropLane(column.id);
+                  }}
+                  onDragLeave={(event) => {
+                    if (
+                      dropLane === column.id &&
+                      !event.currentTarget.contains(
+                        event.relatedTarget as Node | null,
+                      )
+                    )
+                      setDropLane(null);
+                  }}
+                  onDrop={(event) => {
+                    if (!dragging || !droppable) return;
+                    event.preventDefault();
+                    const { card } = dragging;
+                    endDrag();
+                    moveCard(card, column.id);
+                  }}
+                  className={`${collapsed ? "w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
                   {collapsed ? (
                     <button
@@ -1524,14 +1595,28 @@ function App() {
                               </label>
                             );
                           }
+                          const targets = dropTargets(item);
                           const tile = (
                             <button
                               key={item.id}
                               onClick={() => {
                                 setSelected(item.id);
                               }}
+                              draggable={!busy && targets.length > 0}
+                              onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData(
+                                  "text/plain",
+                                  item.id,
+                                );
+                                setDragging({ card: item, targets });
+                              }}
+                              onDragEnd={endDrag}
                               data-activity={activity ?? undefined}
-                              className={`${cardClass} card-activity border-border/80`}
+                              data-dragging={
+                                dragging?.card.id === item.id || undefined
+                              }
+                              className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50`}
                             >
                               {content}
                             </button>
