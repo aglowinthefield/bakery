@@ -147,9 +147,13 @@ export function PullRequests({
             key={pr.number}
             data-pr={pr.number}
             aria-current={highlight === pr.number ? "true" : undefined}
-            className={`flex items-center gap-3 px-2 py-3 ${highlight === pr.number ? "bg-accent/50" : "hover:bg-accent/30"}`}
+            className={`flex items-center gap-3 border-l-2 px-2 py-3 ${pr.isDraft ? "border-l-transparent opacity-80" : "border-l-emerald-500/60"} ${highlight === pr.number ? "bg-accent/50" : "hover:bg-accent/30"}`}
           >
-            <GitPullRequest size={15} aria-hidden="true" className="shrink-0" />
+            <GitPullRequest
+              size={15}
+              aria-label={pr.isDraft ? "Draft" : "Open"}
+              className={`shrink-0 ${pr.isDraft ? "text-muted-foreground" : "text-emerald-500"}`}
+            />
             <a href={pr.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
               <span className="block truncate font-medium">{pr.title}</span>
               <span className="block truncate text-xs text-muted-foreground">
@@ -165,7 +169,7 @@ export function PullRequests({
                 Conflicts
               </button>
             )}
-            {pr.isDraft && <span className="text-xs text-muted-foreground">Draft</span>}
+            {pr.isDraft && <span className="shrink-0 rounded border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground">Draft</span>}
             {pr.checks && <span className="text-xs text-muted-foreground">Checks {pr.checks}</span>}
             {pr.reviewDecision && <span className="text-xs text-muted-foreground">{decisions[pr.reviewDecision] ?? pr.reviewDecision}</span>}
             {pr.card ? (
