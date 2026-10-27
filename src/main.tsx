@@ -59,6 +59,7 @@ import {
 import { AgentBadge, reworkSummary } from "./attempts.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
+import { LocalMerges } from "./local-merges.js";
 import { appearanceIcons, RepoBadge } from "./repo-badge.js";
 import { needsYouStatuses, reviewOrder, Today } from "./today.js";
 import { markdownToPlainText } from "./markdown.js";
@@ -2210,6 +2211,11 @@ function App() {
                   {editingBoard.integrationError}
                 </p>
               )}
+              <LocalMerges
+                boardId={editingBoard.id}
+                integration={editingBoard.integration ?? "local"}
+                onChanged={refresh}
+              />
             </div>
           )}
           {editingBoard && (

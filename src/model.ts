@@ -135,6 +135,8 @@ export type Card = {
   originMain?: "pushed" | "local";
   /** Times Bakery sent this card back because its PR failed CI. */
   ciReworks?: number;
+  /** Bakery merged this card into local main (local integration), not through a PR. */
+  locallyMerged?: boolean;
   /** Set on Review cards that are not your turn yet; see `reviewWaitLabels`. */
   reviewWait?: ReviewWait | null;
   /** Last time the latest run's agent reported anything. */

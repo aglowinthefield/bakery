@@ -26,6 +26,7 @@ test("remote repository link is saved in repository settings and listed below th
       else if (path === "/api/path-suggestions") await route.fulfill({ json: [] });
       else if (path === "/api/settings") await route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
       else if (path.endsWith("/cards") || path.endsWith("/conflicts")) await route.fulfill({ json: [] });
+      else if (path.endsWith("/local-merges")) await route.fulfill({ json: { cards: [], main: null } });
       else throw new Error(`Unexpected API request: ${path}`);
     });
     await page.goto(server.resolvedUrls!.local[0]);

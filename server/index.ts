@@ -211,6 +211,23 @@ const server = createServer(async (req, res) => {
       if (typeof input.autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
       send(res, 200, board.setAutoCollapseEmptySwimlanes(repoBoard.id, input.autoCollapseEmptySwimlanes)); return;
     }
+    // Done cards Bakery merged into local main whose work is not on origin/main, offered as "Publish as PR".
+    const localMergesRoute = path.match(/^\/api\/boards\/([\w-]+)\/local-merges$/);
+    if (localMergesRoute && req.method === "GET") {
+      const repoBoard = board.getBoard(localMergesRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      send(res, 200, await integration.localMerges(repoBoard.repo)); return;
+    }
+    const mainResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/main\/reset$/);
+    if (mainResetRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(mainResetRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      const { tip } = await body(req);
+      if (typeof tip !== "string" || !/^[a-f0-9]{40,64}$/.test(tip)) throw new Error("Confirm the local main commit to reset (tip)");
+      const main = await integration.resetLocalMain(repoBoard.repo, tip);
+      if (repoBoard.integration === "github-pr") void githubSync.syncBoard(repoBoard.id);
+      send(res, 200, { main }); return;
+    }
     const conflictsRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflicts$/);
     if (conflictsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(conflictsRoute[1]);
@@ -237,7 +254,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|dependencies|pull-request))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|dependencies|pull-request|publish))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -295,6 +312,11 @@ const server = createServer(async (req, res) => {
             send(res, 200, card); return;
           }
           send(res, 200, integration.approve(item, fingerprint)); return;
+        }
+        if (req.method === "POST" && action === "publish") {
+          const result = await integration.publishLocalMerge(item, github);
+          void githubSync.syncBoard(repoBoard.id);
+          send(res, 200, result); return;
         }
         if (req.method === "PUT" && action === "pull-request") {
           const { url } = await body(req);
