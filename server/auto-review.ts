@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { Board, autoReviewDailyMerges, type Card, type RepoBoard, type Run } from "./board.js";
+import { Board, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, usageInStream } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
 import { Integration } from "./integration.js";
@@ -98,8 +98,7 @@ export class AutoReview {
       const verdict = reviewerVerdict(stream);
       if (verdict.verdict !== "approve") throw new Error(`Agent requested human review: ${verdict.reason}`);
       const current = this.board.getBoard(repoBoard.id);
-      if (!current?.autoReviewEnabled || current.autoReviewEnabledAt !== repoBoard.autoReviewEnabledAt || current.verificationCommand !== repoBoard.verificationCommand ||
-        this.board.autoReviewMergesToday(card.repo) >= autoReviewDailyMerges) throw new Error(`Auto-review was disabled, changed, or reached its ${autoReviewDailyMerges}-merge daily limit`);
+      if (!current?.autoReviewEnabled || current.autoReviewEnabledAt !== repoBoard.autoReviewEnabledAt || current.verificationCommand !== repoBoard.verificationCommand) throw new Error("Auto-review was disabled or its settings changed");
       const currentCard = this.board.getCard(card.id);
       if (!currentCard || currentCard.title !== card.title || currentCard.body !== card.body) throw new Error("Card changed during agent review");
       if (this.integration.review(currentCard).fingerprint !== fingerprint) throw new Error("Work changed during agent review");
@@ -109,7 +108,7 @@ export class AutoReview {
         const latestCard = this.board.getCard(card.id), latestBoard = this.board.getBoard(repoBoard.id);
         if (!latestCard || latestCard.title !== card.title || latestCard.body !== card.body ||
           !latestBoard?.autoReviewEnabled || latestBoard.autoReviewEnabledAt !== repoBoard.autoReviewEnabledAt ||
-          latestBoard.verificationCommand !== repoBoard.verificationCommand || this.board.autoReviewMergesToday(card.repo) >= autoReviewDailyMerges)
+          latestBoard.verificationCommand !== repoBoard.verificationCommand)
           throw new Error("Card or auto-review settings changed before merge; human review required");
       });
       this.board.finishAutoReview(run.id, "merged", verdict.reason, fingerprint);
