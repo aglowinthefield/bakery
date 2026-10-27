@@ -237,7 +237,7 @@ Bakery reviews and merges finished cards without you.
 ```mermaid
 flowchart LR
   A[Run reaches Review] --> B[Verification command<br/>on the card worktree]
-  B --> C[Separate Pi reviewer<br/>reads the diff, no tools]
+  B --> C[Separate Pi reviewer<br/>full tools, read-only by instruction]
   C --> D[Verification command<br/>on the tentative merge]
   D --> E[Fast-forward main]
   B -. fails .-> H[Left for human review,<br/>with the reason]
@@ -250,6 +250,7 @@ flowchart LR
 - Failed reviews aren't retried.
 - Turning the setting off stops a review in progress from merging.
 - The verification command runs locally with your permissions.
+- The reviewer is a full Pi agent in the card's worktree, with the same tools, extensions, skills, and context files as a card run. It can read code and run builds or tests, and runs locally with your permissions. It's told not to change anything; if the work changes during review, the card is left for you.
 
 ## CLI
 

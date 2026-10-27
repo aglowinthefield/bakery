@@ -61,10 +61,12 @@ export function usageInStream(stream: string): Usage {
 }
 
 /**
- * The text of a tool-free Pi run's single, complete reply (`--print --mode json`). Throws naming what was wrong:
- * the run never settled, was aborted, sent other than one assistant message, stopped early, or replied with nothing.
+ * The text of a Pi run's final, complete reply (`--print --mode json`). A tool-free run must send exactly one
+ * assistant message; with `toolUse`, earlier messages may call tools and only the last one is the reply. Throws naming
+ * what was wrong: the run never settled, was aborted, sent the wrong number of assistant messages, stopped early,
+ * or replied with nothing.
  */
-export function settledReply(stream: string): string {
+export function settledReply(stream: string, { toolUse = false }: { toolUse?: boolean } = {}): string {
   let text: string | undefined, settled = false, aborted = false, stopReason: string | undefined, errorMessage: string | undefined, messages = 0;
   for (const line of stream.split("\n").filter(Boolean)) {
     const event = JSON.parse(line) as { type?: string; aborted?: boolean; message?: { role?: string; stopReason?: string; errorMessage?: string; content?: { type: string; text?: string }[] } };
@@ -79,7 +81,7 @@ export function settledReply(stream: string): string {
   // Pi normalizes provider stop reasons (Anthropic end_turn, OpenAI stop, ...) to "stop" for a finished reply.
   if (!settled) throw new Error("Pi never reported agent_settled");
   if (aborted) throw new Error("the run was aborted");
-  if (messages !== 1) throw new Error(`expected 1 assistant message, got ${messages}`);
+  if (toolUse ? messages < 1 : messages !== 1) throw new Error(`expected ${toolUse ? "an" : "1"} assistant message, got ${messages}`);
   if (stopReason !== "stop") throw new Error(`stop reason was ${JSON.stringify(stopReason ?? null)}${errorMessage ? ` (${errorMessage.slice(0, 500)})` : ""}`);
   if (!text?.trim()) throw new Error("the reply had no text");
   return text;

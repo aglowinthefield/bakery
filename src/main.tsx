@@ -2323,11 +2323,11 @@ function App() {
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Unattended review</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                A tool-free Pi reviewer inspects new Review cards; the
-                verification command runs first. At most 3 merges per 24 hours.
-                Findings, errors, or changes require human review. Local merge
-                only, never push. Auto-review alone does not start Ready cards;
-                enable Auto pickup above.
+                A Pi reviewer with full tools inspects new Review cards in their
+                worktrees; the verification command runs first. At most 3 merges
+                per 24 hours. Findings, errors, or changes require human review.
+                Local merge only, never push. Auto-review alone does not start
+                Ready cards; enable Auto pickup above.
               </p>
               <label className="mt-4 block text-xs">
                 Verification command
