@@ -290,7 +290,10 @@ const server = createServer(async (req, res) => {
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
         if (req.method === "GET" && action === "push-progress") { send(res, 200, integration.pushProgress(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
-        if (req.method === "GET" && action === "review") { send(res, 200, integration.review(item)); return; }
+        if (req.method === "GET" && action === "review") {
+          if (new URL(req.url ?? "/", "http://localhost").searchParams.has("fingerprint")) { send(res, 200, { fingerprint: integration.reviewFingerprint(item) }); return; }
+          send(res, 200, integration.review(item)); return;
+        }
         if (req.method === "GET" && action === "dependencies") { send(res, 200, board.listDependencies(id)); return; }
         if (req.method === "POST" && action === "dependencies") {
           const { dependsOn } = await body(req);

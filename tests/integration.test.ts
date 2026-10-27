@@ -32,6 +32,18 @@ function fixture(title = "Review work") {
     close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
+test("the fingerprint check matches the full review and changes when the worktree does", () => {
+  const item = fixture();
+  try {
+    const first = item.integration.review(item.card).fingerprint;
+    assert.equal(item.integration.reviewFingerprint(item.card), first);
+    writeFileSync(join(item.worktree, "README.md"), "edited after review\n");
+    const second = item.integration.reviewFingerprint(item.card);
+    assert.notEqual(second, first);
+    assert.equal(item.integration.review(item.card).fingerprint, second);
+  } finally { item.close(); }
+});
+
 test("approval commits reviewed work, reconciles with newer main, and only then marks Done", () => {
   const item = fixture();
   try {

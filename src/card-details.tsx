@@ -173,6 +173,30 @@ export function CardDetails({
       active = false;
     };
   }, [boardId, cardId, card?.status, reviewRefresh]);
+  // The diff is a snapshot. Watch its fingerprint so a change in the worktree or main is announced
+  // instead of surfacing later as a failed Approve. Never reload on its own: a comment may be half typed.
+  const [reviewStale, setReviewStale] = useState(false);
+  const loadedFingerprint =
+    review && review.cardId === cardId ? review.fingerprint : null;
+  useEffect(() => {
+    setReviewStale(false);
+    if (!cardId || !loadedFingerprint) return;
+    let active = true;
+    const timer = setInterval(() => {
+      void api<{ fingerprint: string }>(
+        `/boards/${boardId}/cards/${cardId}/review?fingerprint`,
+      )
+        .then((next) => {
+          if (active && next.fingerprint !== loadedFingerprint)
+            setReviewStale(true);
+        })
+        .catch(() => {});
+    }, 4000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [boardId, cardId, loadedFingerprint]);
   const currentReview = review?.cardId === cardId ? review : null;
   const currentComments = comments.filter((item) => item.cardId === cardId);
   const changesRequested =
@@ -967,6 +991,7 @@ export function CardDetails({
             comments={currentComments}
             runId={runs[0]?.id}
             busy={busy}
+            stale={reviewStale}
             onRefresh={() => setReviewRefresh((value) => value + 1)}
             onAdd={(path, line, body) =>
               action(async () => {

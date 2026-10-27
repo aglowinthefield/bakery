@@ -25,7 +25,6 @@ import {
   Hourglass,
   Pencil,
   Plus,
-  RefreshCw,
   RotateCcw,
   Search,
   Settings2,
@@ -1297,11 +1296,11 @@ export function App() {
                 </button>
               )}
             </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {currentBoard
-                ? currentBoard.repo
-                : "Add a Git repository to create its board."}
-            </p>
+            {!currentBoard && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Add a Git repository to create its board.
+              </p>
+            )}
             {currentBoard?.remoteUrl && (
               <RemoteLink url={currentBoard.remoteUrl} />
             )}
@@ -1364,14 +1363,6 @@ export function App() {
                 </span>
               )}
             </div>
-            <Button
-              variant="outline"
-              size="icon"
-              aria-label="Refresh board"
-              onClick={() => void refresh()}
-            >
-              <RefreshCw size={15} />
-            </Button>
             <Button disabled={!boardId} onClick={() => setCreating(true)}>
               <Plus size={16} /> New card
             </Button>

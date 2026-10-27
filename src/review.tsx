@@ -7,13 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  MessageSquarePlus,
-  RefreshCw,
-  XCircle,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, XCircle } from "lucide-react";
 import { parsePatchFiles, type FileDiffOptions } from "@pierre/diffs";
 import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { Button } from "./components/ui/button";
@@ -52,6 +46,7 @@ export function ReviewPanel({
   comments,
   runId,
   busy,
+  stale,
   onRefresh,
   onAdd,
   onDelete,
@@ -61,6 +56,7 @@ export function ReviewPanel({
   comments: ReviewComment[];
   runId?: string;
   busy: boolean;
+  stale: boolean;
   onRefresh: () => void;
   onAdd: (path: string, line: number, body: string) => Promise<boolean>;
   onDelete: (id: string) => Promise<boolean>;
@@ -131,11 +127,19 @@ export function ReviewPanel({
               </button>
             ))}
           </div>
-          <Button size="sm" variant="ghost" onClick={onRefresh}>
-            <RefreshCw size={13} /> Refresh diff
-          </Button>
         </div>
       </div>
+      {stale && (
+        <div
+          role="status"
+          className="mt-2 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
+        >
+          <span>The code changed since this diff was loaded.</span>
+          <Button size="sm" variant="outline" onClick={onRefresh}>
+            <RefreshCw size={13} /> Reload diff
+          </Button>
+        </div>
+      )}
       <p className="mt-2 text-xs text-muted-foreground">
         Card changes since its shared commit with main. Press + beside a code
         line to annotate it. Comments stay on this exact diff; older comments
@@ -401,30 +405,6 @@ function ReviewFile({
       </h4>
       {open && (
         <div id={panelId} className="border-t border-border">
-          {canComment && codeRows.length > 0 && (
-            <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
-              <MessageSquarePlus size={13} className="shrink-0" />
-              <span className="hidden sm:inline">
-                Hover a line and press + to comment, or
-              </span>
-              <select
-                aria-label={`Comment on a line in ${file.path}`}
-                value=""
-                onChange={(event) => {
-                  const row = Number(event.target.value);
-                  if (row) setSelectedLine(row);
-                }}
-                className="min-w-0 max-w-full flex-1 truncate rounded border border-border bg-card px-1.5 py-0.5 font-mono text-[11px] text-foreground sm:max-w-72 sm:flex-none"
-              >
-                <option value="">pick a line…</option>
-                {codeRows.map(({ line, row }) => (
-                  <option key={row} value={row}>
-                    {`${line.prefix}${line.newLine ?? line.oldLine}  ${line.code.trim().slice(0, 60)}`}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
           <DiffPatch
             path={file.path}
             patch={file.patch}
