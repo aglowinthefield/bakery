@@ -6,7 +6,7 @@ const usage = `bakery-cli — local Bakery API client
 
 Usage: bakery-cli boards [--json]
        bakery-cli cards [--board ID|PATH] [--json]
-       bakery-cli create --title TITLE [--body BODY] [--board ID|PATH] [--json]
+       bakery-cli create --title TITLE [--body BODY] [--priority low|normal|high|urgent] [--board ID|PATH] [--json]
        bakery-cli ready CARD_ID [--board ID|PATH] [--yes]
        bakery-cli triage CARD_ID [--board ID|PATH]
        bakery-cli start CARD_ID... [--board ID|PATH] --yes
@@ -23,7 +23,7 @@ board; each can start paid Pi runs. No command approves a merge.`;
 
 function options(argv) {
   const result = { positionals: [], json: false, yes: false };
-  const values = new Set(["board", "title", "body", "concurrency", "limit", "budget"]);
+  const values = new Set(["board", "title", "body", "priority", "concurrency", "limit", "budget"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
@@ -84,6 +84,9 @@ function usageTotal(items) {
   const total = Object.fromEntries(usageKeys.map(key => [key, recorded.length ? recorded.reduce((sum, item) => sum + (item[key] ?? 0), 0) : null]));
   return { ...total, incomplete: recorded.length < items.length };
 }
+// Mirrors server/board.ts cardPriorities; the API returns the stored integer.
+const priorities = { low: -1, normal: 0, high: 1, urgent: 2 };
+const priorityName = value => Object.keys(priorities).find(key => priorities[key] === (value ?? 0)) ?? String(value);
 const money = cost => typeof cost !== "number" ? "—" : cost > 0 && cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
 const usageText = item => typeof item.cost !== "number" ? "—"
   : `${money(item.cost)} (${item.inputTokens ?? 0} in, ${item.outputTokens ?? 0} out, ${item.cacheReadTokens ?? 0} cache read, ${item.cacheWriteTokens ?? 0} cache write)`;
@@ -100,7 +103,8 @@ async function main() {
   const expected = { boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0 };
   if (!(command in expected) && command !== "pickup" && command !== "start") throw new Error(`Unknown command: ${command}\n${usage}`);
   if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "start" ? !args.length : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
-  if (command !== "create" && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create");
+  if (command !== "create" && (opts.title !== undefined || opts.body !== undefined || opts.priority !== undefined)) throw new Error("--title, --body and --priority are only valid with create");
+  if (opts.priority !== undefined && !Object.hasOwn(priorities, opts.priority)) throw new Error("Priority must be low, normal, high, or urgent");
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
   if (opts.yes && !(command === "ready" || command === "pickup" || command === "start")) throw new Error("--yes is only valid with ready, start or pickup");
   if (command === "start") {
@@ -118,11 +122,11 @@ async function main() {
   const path = `/api/boards/${encodeURIComponent(board.id)}`;
   if (command === "cards") {
     const cards = await request(origin, `${path}/cards`);
-    print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
+    print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tpriority:${priorityName(item.priority)}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
   } else if (command === "create") {
     if (!opts.title?.trim()) throw new Error("create requires --title TITLE");
-    const card = await request(origin, `${path}/cards`, "POST", { title: opts.title, body: opts.body ?? "" });
-    print(card, opts.json, [`${card.id}\t${card.status}\t${card.title}`]);
+    const card = await request(origin, `${path}/cards`, "POST", { title: opts.title, body: opts.body ?? "", ...(opts.priority ? { priority: opts.priority } : {}) });
+    print(card, opts.json, [`${card.id}\t${card.status}\tpriority:${priorityName(card.priority)}\t${card.title}`]);
   } else if (command === "ready" || command === "triage") {
     if (command === "ready" && board.autoPickupEnabled && !opts.yes) throw new Error("Auto pickup is enabled: Ready may start paid Pi immediately. Repeat with --yes to confirm.");
     const card = await request(origin, `${path}/cards/${cardId(args[0])}/status`, "POST", { status: command });

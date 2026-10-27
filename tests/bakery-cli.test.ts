@@ -18,7 +18,7 @@ async function fixture(boards: object[] = [board]) {
     res.setHeader("content-type", "application/json");
     let data: unknown;
     if (path === "/api/boards") data = boards;
-    else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = [{ id: "card-one", title: "Make an improvement", status: "triage", attempts: 3, reviewRounds: 2 }];
+    else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = [{ id: "card-one", title: "Make an improvement", status: "triage", priority: 1, attempts: 3, reviewRounds: 2 }];
     else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
     else if (path === `/api/boards/${board.id}/cards/card-one/status` && req.method === "POST") data = { id: "card-one", status: (input as { status: string }).status };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|two)\/start$/.test(path) && req.method === "POST") data = { id: `run-${path.split("/")[5]}`, attempt: 2, status: "running" };
@@ -51,7 +51,7 @@ test("lists boards, cards, runs and conflicts through the HTTP API", async () =>
   const f = await fixture();
   try {
     assert.match((await f.run("boards")).stdout, /bakery-project/);
-    assert.match((await f.run("cards")).stdout, /card-one\ttriage\tattempts:3\treview-rounds:2\tMake an improvement/);
+    assert.match((await f.run("cards")).stdout, /card-one\ttriage\tpriority:high\tattempts:3\treview-rounds:2\tMake an improvement/);
     const runs = JSON.parse((await f.run("runs", "card-one", "--json")).stdout);
     assert.equal(runs.cardId, "card-one");
     assert.deepEqual(runs.runs.map((run: { id: string }) => run.id), ["run-two", "run-one"]);
@@ -79,9 +79,16 @@ test("card creation and status changes go through the API; Ready needs consent w
     const created = await f.run("create", "--title", "New task", "--body", "Do it safely", "--json");
     assert.equal(created.code, 0, created.stderr);
     assert.equal(JSON.parse(created.stdout).id, "new-card");
+    const urgent = await f.run("create", "--title", "Hotfix", "--priority", "urgent");
+    assert.equal(urgent.code, 0, urgent.stderr);
+    const bad = await f.run("create", "--title", "Nope", "--priority", "critical");
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.stderr, /Priority must be low, normal, high, or urgent/);
+    assert.match((await f.run("cards", "--priority", "high")).stderr, /only valid with create/);
     const triage = await f.run("triage", "card-one");
     assert.equal(triage.code, 0, triage.stderr);
-    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { status: "triage" }]);
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input),
+      [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { title: "Hotfix", body: "", priority: "urgent" }, { status: "triage" }]);
   } finally { await f.close(); }
 });
 

@@ -138,7 +138,7 @@ The board header shows **Last 24h**: the cost of attempts and agent reviews that
 
 ### Automatic pickup
 
-The server starts the oldest Ready cards for you.
+The server starts Ready cards for you, highest priority first (Urgent, High, Normal, Low), then oldest first. Set a card's priority when you create or edit it, or from its details. Lanes list higher-priority cards first, and cards that aren't Normal show a priority badge.
 
 - **Concurrency:** 1 to 4 runs at once (default 2). Manually started runs count toward it.
 - **Daily limit:** 1 to 99 automatic starts in any rolling 24 hours (default 6). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
@@ -174,7 +174,7 @@ The CLI talks to the running server's HTTP API, so it goes through the same chec
 ```sh
 npm run bakery -- boards
 npm run bakery -- cards
-npm run bakery -- create --title "..." --body "..."
+npm run bakery -- create --title "..." --body "..." [--priority low|normal|high|urgent]
 npm run bakery -- ready CARD_ID [--yes]
 npm run bakery -- triage CARD_ID
 npm run bakery -- start CARD_ID... --yes

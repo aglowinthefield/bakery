@@ -27,7 +27,16 @@ const usageDefinitions = "inputTokens INTEGER, outputTokens INTEGER, cacheReadTo
 const usageUpdate = usageColumns.map(column => `${column}=COALESCE(${column}, 0)+?`).join(", ");
 const usageValues = (usage: Usage) => usageColumns.map(column => usage[column]);
 // A card's usage sums its attempts and agent reviews; usageIncomplete is 1 when an older one has no record.
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number } & UsageFields;
+// Stored as an integer so pickup and lanes can ORDER BY it; higher runs first.
+export const cardPriorities = { low: -1, normal: 0, high: 1, urgent: 2 } as const;
+export type CardPriorityName = keyof typeof cardPriorities;
+export type CardPriority = (typeof cardPriorities)[CardPriorityName];
+export function parsePriority(value: unknown): CardPriority {
+  if (typeof value === "string" && Object.hasOwn(cardPriorities, value)) return cardPriorities[value as CardPriorityName];
+  if (typeof value === "number" && Object.values(cardPriorities).includes(value as CardPriority)) return value as CardPriority;
+  throw new Error("Priority must be low, normal, high, or urgent");
+}
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number } & UsageFields;
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string } & UsageFields;
@@ -50,7 +59,7 @@ export class Board {
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', ${usageDefinitions}, UNIQUE(cardId, attempt));
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'layout-grid', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0, agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
@@ -61,6 +70,8 @@ export class Board {
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
+    const cardColumns = new Set((this.db.prepare("PRAGMA table_info(cards)").all() as { name: string }[]).map(column => column.name));
+    if (!cardColumns.has("priority")) this.db.exec("ALTER TABLE cards ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
     const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
@@ -293,7 +304,7 @@ export class Board {
     const result: { card: Card; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
       if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached) continue;
-      const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY createdAt, rowid").all(repoBoard.repo) as { id: string }[];
+      const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY priority DESC, createdAt, rowid").all(repoBoard.repo) as { id: string }[];
       result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })));
     }
     return result;
@@ -375,21 +386,22 @@ export class Board {
     return counts;
   }
   listCards(repo?: string): Card[] { return (repo === undefined
-    ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.createdAt DESC`).all()
-    : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.createdAt DESC`).all(repo)) as Card[]; }
+    ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all()
+    : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all(repo)) as Card[]; }
   getCard(id: string): Card | undefined { return this.db.prepare(`${cardQuery} WHERE cards.id=? GROUP BY cards.id`).get(id) as Card | undefined; }
-  createCard(input: { title: string; body: string; repo: string }): Card {
+  createCard(input: { title: string; body: string; repo: string; priority?: CardPriority }): Card {
     const id = randomUUID(), time = now();
     this.addRepo(input.repo);
-    this.db.prepare("INSERT INTO cards VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?)").run(id, input.title, input.body, input.repo, time, time);
+    this.db.prepare("INSERT INTO cards (id, title, body, repo, status, source, createdAt, updatedAt, priority) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?)")
+      .run(id, input.title, input.body, input.repo, time, time, parsePriority(input.priority ?? 0));
     return this.getCard(id)!;
   }
-  updateCard(id: string, input: { title: string; body: string; repo: string }): Card {
+  updateCard(id: string, input: { title: string; body: string; repo: string; priority?: CardPriority }): Card {
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (card.status === "running") throw new Error("Cannot edit a running card");
     if (input.repo !== card.repo) throw new Error("Cannot change a card's repository; create a card on the other board");
-    this.db.prepare("UPDATE cards SET title=?, body=?, updatedAt=? WHERE id=?").run(input.title, input.body, now(), id);
+    this.db.prepare("UPDATE cards SET title=?, body=?, priority=?, updatedAt=? WHERE id=?").run(input.title, input.body, parsePriority(input.priority ?? card.priority), now(), id);
     return this.getCard(id)!;
   }
   setStatus(id: string, status: "triage" | "ready" | "done"): Card {

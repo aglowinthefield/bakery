@@ -85,12 +85,16 @@ import {
   type RepoIcon,
 } from "./repo-appearance.js";
 import { describeRemote, type RemoteHost } from "./remote-link.js";
-import type {
-  BakerySettings,
-  Board,
-  Card,
-  MergeConflict,
-  Status,
+import {
+  byPriority,
+  priorities,
+  priorityLabel,
+  type BakerySettings,
+  type Board,
+  type Card,
+  type MergeConflict,
+  type Priority,
+  type Status,
 } from "./model.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
@@ -1041,7 +1045,9 @@ function App() {
         <div className="overflow-x-auto p-6 lg:p-10">
           <div className="flex min-h-[500px] min-w-max gap-4">
             {columns.map((column) => {
-              const laneCards = cards.filter((c) => c.status === column.id);
+              const laneCards = byPriority(
+                cards.filter((c) => c.status === column.id),
+              );
               const collapsible = laneCards.every(
                 (c) => c.status === "done" || c.status === "archived",
               );
@@ -1180,6 +1186,9 @@ function App() {
                                   <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
                                     Manual
                                   </span>
+                                  {(item.priority ?? 0) !== 0 && (
+                                    <PriorityBadge priority={item.priority} />
+                                  )}
                                   {item.attempts > 1 && (
                                     <span
                                       data-testid="attempt-count"
@@ -2053,20 +2062,42 @@ function App() {
     </div>
   );
 }
+function PriorityBadge({ priority }: { priority: Priority }) {
+  const tone =
+    priority > 0
+      ? priority > 1
+        ? "border-red-500/40 bg-red-500/10 text-red-500"
+        : "border-orange-500/40 bg-orange-500/10 text-orange-500"
+      : "border-border bg-muted/40 text-muted-foreground";
+  return (
+    <span
+      data-testid="priority-badge"
+      title={`${priorityLabel(priority)} priority`}
+      className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[.1em] ${tone}`}
+    >
+      {priorityLabel(priority)}
+    </span>
+  );
+}
 function CardForm({
   onSubmit,
   busy,
   initial,
 }: {
-  onSubmit: (value: { title: string; body: string }) => void;
+  onSubmit: (value: {
+    title: string;
+    body: string;
+    priority: Priority;
+  }) => void;
   busy: boolean;
   initial?: Card;
 }) {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
+  const [priority, setPriority] = useState<Priority>(initial?.priority ?? 0);
   function submit(event: FormEvent) {
     event.preventDefault();
-    onSubmit({ title, body });
+    onSubmit({ title, body, priority });
   }
   const input =
     "w-full rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary";
@@ -2093,6 +2124,20 @@ function CardForm({
           rows={5}
           className={`mt-2 resize-y ${input}`}
         />
+      </label>
+      <label className="block text-xs font-medium">
+        Priority
+        <select
+          value={priority}
+          onChange={(e) => setPriority(Number(e.target.value) as Priority)}
+          className={`mt-2 ${input}`}
+        >
+          {priorities.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
       </label>
       <p className="text-xs leading-5 text-muted-foreground">
         This card uses the selected repository. New cards start in Triage. Move
