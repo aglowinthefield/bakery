@@ -63,7 +63,8 @@ export function RepoBadge({
   size?: number;
 }) {
   const Icon = appearanceIcons[board.icon] ?? LayoutGrid;
-  const color = repoColors[board.color] ?? repoColors.violet;
+  const name = board.color in repoColors ? board.color : "violet";
+  const color = `var(--repo-${name}, ${repoColors[name]})`;
   return (
     <span
       className="repo-badge grid size-8 shrink-0 place-items-center rounded-lg"

@@ -35,6 +35,8 @@ import {
   Gitlab,
   XCircle,
   X,
+  PanelLeftClose,
+  PanelLeftOpen,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -511,6 +513,40 @@ export function App() {
     setReposCollapsed(next);
     localStorage.setItem("bakery-repos-collapsed", String(next));
   };
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    Math.min(
+      480,
+      Math.max(
+        180,
+        Number(localStorage.getItem("bakery-sidebar-width")) || 228,
+      ),
+    ),
+  );
+  const [sidebarHidden, setSidebarHidden] = useState(
+    () => localStorage.getItem("bakery-sidebar-hidden") === "true",
+  );
+  const toggleSidebar = () => {
+    const next = !sidebarHidden;
+    setSidebarHidden(next);
+    localStorage.setItem("bakery-sidebar-hidden", String(next));
+  };
+  const startSidebarResize = (event: React.PointerEvent) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    let width = startWidth;
+    const move = (e: PointerEvent) => {
+      width = Math.min(480, Math.max(180, startWidth + e.clientX - startX));
+      setSidebarWidth(width);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      localStorage.setItem("bakery-sidebar-width", String(width));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const [allCards, setAllCards] = useState<Card[]>([]);
   const [since] = useState(
     () =>
@@ -742,6 +778,15 @@ export function App() {
     };
   }, [view, boardId, refreshKey, settings?.notifyOnReview]);
   const currentBoard = boards.find((item) => item.id === boardId);
+  function editBoard(item: Board) {
+    setError("");
+    setRepoPath(item.repo);
+    setIconDraft(item.icon);
+    setColorDraft(item.color);
+    setRemoteUrlDraft(item.remoteUrl ?? "");
+    setVerificationDraft(item.verificationCommand ?? "");
+    setEditingBoard(item);
+  }
   const scopeCards = view === "today" ? allCards : cards;
   const card = scopeCards.find((item) => item.id === selected);
   // Today opens cards from any repository, so details use the card's own board.
@@ -980,7 +1025,32 @@ export function App() {
   if (!settings && !error) return null;
   return (
     <div className="min-h-screen lg:flex">
-      <aside className="flex flex-col border-b border-border bg-sidebar lg:sticky lg:top-0 lg:h-screen lg:w-[228px] lg:shrink-0 lg:border-r lg:border-b-0">
+      {sidebarHidden && (
+        <button
+          aria-label="Show sidebar"
+          title="Show sidebar"
+          onClick={toggleSidebar}
+          className="fixed left-3 top-3 z-30 hidden rounded-md border border-border bg-sidebar p-1.5 text-muted-foreground hover:text-foreground lg:block"
+        >
+          <PanelLeftOpen size={15} />
+        </button>
+      )}
+      <aside
+        hidden={sidebarHidden}
+        style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
+        className="relative flex flex-col border-b border-border bg-sidebar lg:sticky lg:top-0 lg:h-screen lg:w-[var(--sidebar-w)] lg:shrink-0 lg:border-r lg:border-b-0"
+      >
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          onPointerDown={startSidebarResize}
+          onDoubleClick={() => {
+            setSidebarWidth(228);
+            localStorage.setItem("bakery-sidebar-width", "228");
+          }}
+          className="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize hover:bg-primary/30 lg:block"
+        />
         <div className="flex items-center gap-3 px-6 py-7">
           <div className="grid size-9 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
             <span className="text-xl leading-none">✳</span>
@@ -988,6 +1058,14 @@ export function App() {
           <span className="text-[18px] font-semibold tracking-[-.04em]">
             bakery<span className="text-primary">.</span>
           </span>
+          <button
+            aria-label="Hide sidebar"
+            title="Hide sidebar"
+            onClick={toggleSidebar}
+            className="ml-auto hidden p-1 text-muted-foreground hover:text-foreground lg:block"
+          >
+            <PanelLeftClose size={15} />
+          </button>
         </div>
         <div className="px-4 pt-5">
           <button
@@ -1006,7 +1084,7 @@ export function App() {
             onClick={toggleRepos}
             aria-expanded={!reposCollapsed}
             aria-controls="sidebar-repositories"
-            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[length:var(--text-sidebar-meta)] font-semibold uppercase tracking-[.18em] text-muted-foreground hover:text-foreground"
+            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[length:calc(0.625rem*var(--density-text))] font-normal uppercase tracking-[.16em] text-muted-foreground hover:text-foreground"
           >
             Repositories
             {reposCollapsed ? (
@@ -1032,61 +1110,45 @@ export function App() {
                       {item.repo.split("/").at(-1)}
                     </span>
                   </button>
-                  <button
-                    aria-label={`Edit ${item.repo}`}
-                    title="Edit repository"
-                    className="mr-2 p-1 text-muted-foreground hover:text-foreground"
-                    onClick={() => {
-                      setError("");
-                      setRepoPath(item.repo);
-                      setIconDraft(item.icon);
-                      setColorDraft(item.color);
-                      setRemoteUrlDraft(item.remoteUrl ?? "");
-                      setVerificationDraft(item.verificationCommand ?? "");
-                      setEditingBoard(item);
-                    }}
+                  <ul
+                    aria-label="Card counts"
+                    className="flex shrink-0 items-center justify-end gap-2 pr-3"
                   >
-                    <Pencil size={13} />
-                  </button>
+                    {sidebarCounts.map((group) => {
+                      const Icon = group.icon;
+                      const live =
+                        view === "board" &&
+                        boardId === item.id &&
+                        (cards.length || !item.cardCounts);
+                      const count = group.statuses.reduce(
+                        (sum, status) =>
+                          sum +
+                          (live
+                            ? cards.filter((c) => countKey(c) === status).length
+                            : (item.cardCounts?.[status] ?? 0)),
+                        0,
+                      );
+                      if (group.hideEmpty && !count) return null;
+                      return (
+                        <li
+                          key={group.id}
+                          data-group={group.id}
+                          data-status={group.color}
+                          title={`${count} ${group.label.toLowerCase()}`}
+                          aria-label={`${group.label}: ${count}`}
+                          className={`flex items-center gap-1 text-[length:var(--text-sidebar-meta)] ${count ? "" : "opacity-40"}`}
+                        >
+                          <Icon
+                            size={10}
+                            aria-hidden="true"
+                            className="lane-status-icon shrink-0"
+                          />
+                          <span className="font-mono">{count}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 </div>
-                <ul
-                  aria-label="Card counts"
-                  className="flex items-center gap-3 px-3 pb-2"
-                >
-                  {sidebarCounts.map((group) => {
-                    const Icon = group.icon;
-                    const live =
-                      view === "board" &&
-                      boardId === item.id &&
-                      (cards.length || !item.cardCounts);
-                    const count = group.statuses.reduce(
-                      (sum, status) =>
-                        sum +
-                        (live
-                          ? cards.filter((c) => countKey(c) === status).length
-                          : (item.cardCounts?.[status] ?? 0)),
-                      0,
-                    );
-                    if (group.hideEmpty && !count) return null;
-                    return (
-                      <li
-                        key={group.id}
-                        data-group={group.id}
-                        data-status={group.color}
-                        title={`${count} ${group.label.toLowerCase()}`}
-                        aria-label={`${group.label}: ${count}`}
-                        className={`flex items-center gap-1 text-[length:var(--text-sidebar-meta)] ${count ? "" : "opacity-40"}`}
-                      >
-                        <Icon
-                          size={12}
-                          aria-hidden="true"
-                          className="lane-status-icon shrink-0"
-                        />
-                        <span className="font-mono">{count}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
               </div>
             ))}
             <Button
@@ -1152,6 +1214,16 @@ export function App() {
               {currentBoard
                 ? currentBoard.repo.split("/").at(-1)
                 : "Choose a repository"}
+              {currentBoard && (
+                <button
+                  aria-label={`Edit ${currentBoard.repo}`}
+                  title="Edit repository"
+                  className="p-1 text-muted-foreground hover:text-foreground"
+                  onClick={() => editBoard(currentBoard)}
+                >
+                  <Pencil size={15} />
+                </button>
+              )}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {currentBoard
@@ -2095,7 +2167,9 @@ export function App() {
                     >
                       <span
                         className="block size-full rounded-full border-2 border-background"
-                        style={{ backgroundColor: hex }}
+                        style={{
+                          backgroundColor: `var(--repo-${name}, ${hex})`,
+                        }}
                       />
                     </button>
                   ),
