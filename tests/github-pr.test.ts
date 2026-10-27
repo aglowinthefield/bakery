@@ -561,13 +561,20 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
     assert.equal(f.board.getCiFeedback(card.id), undefined, "stale failures are dropped once CI passes");
     assert.equal(f.board.getCard(card.id)!.prChecks, "passing");
     assert.deepEqual(started, [card.id]);
+    assert.equal(f.board.getCard(card.id)!.ciReworks, 0, "a round that never ran is not counted");
+
+    // The same commit failing again after that rerun is sent back again.
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [{ ...lint, startedAt: new Date(Date.now() + 500).toISOString() }] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id, card.id]);
+    f.board.dropCiFeedback(card.id);
 
     // A new pushed commit that fails again, with the limit used up: the card stays in Review with the reason.
     f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [{ ...lint, startedAt: new Date(Date.now() + 1000).toISOString() }] }]);
     const db = new DatabaseSync(join(f.dir, "board.sqlite"));
     try { db.prepare("UPDATE cards SET ciReworks=?, ciReworkSha='0000' WHERE id=?").run(maxCiReworks, card.id); } finally { db.close(); }
     await sync.syncBoard(f.repoBoard.id);
-    assert.deepEqual(started, [card.id]);
+    assert.deepEqual(started, [card.id, card.id]);
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/);
     await sync.syncBoard(f.repoBoard.id);
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/, "the reason stays on the card");

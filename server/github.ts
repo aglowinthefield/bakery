@@ -288,8 +288,8 @@ export class GitHubSync {
   private async sendBackFailingCi(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown; pending?: boolean }> {
     const head = pr.headRefOid, failures = fixableFailures(pr);
     if (!this.rework || card.prOverrideUrl || !head) return {};
-    // CI went green (a rerun, or a label added) before the fix run started: those failures are stale.
-    if (!failures.length) { if (this.board.getCiFeedback(card.id)) this.board.clearCiFeedback(card.id); return {}; }
+    // CI is re-running or went green (a label added, say) before the fix run started: those failures are stale.
+    if (!failures.length) { this.board.dropCiFeedback(card.id); return {}; }
     const limit = `CI is failing after ${maxCiReworks} automatic fix runs. Fix it in the card worktree and run again, or push to the PR yourself.`;
     if (card.ciReworkSha === head) {
       // Sent back, but the fix run could not start (the board was at its run limit, say): try again.

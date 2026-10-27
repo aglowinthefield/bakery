@@ -325,6 +325,18 @@ export class Board {
   getCiFeedback(cardId: string): { headSha: string; failures: string } | undefined {
     return this.db.prepare("SELECT headSha, failures FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string } | undefined;
   }
+  /**
+   * The waiting failures went stale before a fix run took them (CI is re-running or passed). The round never ran,
+   * so it is not counted, and the head commit can be sent back again if it fails again.
+   */
+  dropCiFeedback(cardId: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId).changes)
+        this.db.prepare("UPDATE cards SET ciReworks=MAX(ciReworks-1, 0), ciReworkSha=NULL WHERE id=?").run(cardId);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   /** Marks a run as a CI fix run and hands it the waiting failures. */
   startCiFix(cardId: string, runId: string): void {
     this.db.prepare("UPDATE runs SET ciFix=1 WHERE id=?").run(runId);
