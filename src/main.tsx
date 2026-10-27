@@ -24,7 +24,6 @@ import {
   Hourglass,
   Pencil,
   Plus,
-  RefreshCw,
   RotateCcw,
   Search,
   Settings2,
@@ -1320,14 +1319,6 @@ export function App() {
                 </span>
               )}
             </div>
-            <Button
-              variant="outline"
-              size="icon"
-              aria-label="Refresh board"
-              onClick={() => void refresh()}
-            >
-              <RefreshCw size={15} />
-            </Button>
             <Button disabled={!boardId} onClick={() => setCreating(true)}>
               <Plus size={16} /> New card
             </Button>

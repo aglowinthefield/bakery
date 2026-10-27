@@ -7,12 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  RefreshCw,
-  XCircle,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, XCircle } from "lucide-react";
 import { parsePatchFiles, type FileDiffOptions } from "@pierre/diffs";
 import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { Button } from "./components/ui/button";
@@ -51,6 +46,7 @@ export function ReviewPanel({
   comments,
   runId,
   busy,
+  stale,
   onRefresh,
   onAdd,
   onDelete,
@@ -60,6 +56,7 @@ export function ReviewPanel({
   comments: ReviewComment[];
   runId?: string;
   busy: boolean;
+  stale: boolean;
   onRefresh: () => void;
   onAdd: (path: string, line: number, body: string) => Promise<boolean>;
   onDelete: (id: string) => Promise<boolean>;
@@ -130,11 +127,19 @@ export function ReviewPanel({
               </button>
             ))}
           </div>
-          <Button size="sm" variant="ghost" onClick={onRefresh}>
-            <RefreshCw size={13} /> Refresh diff
-          </Button>
         </div>
       </div>
+      {stale && (
+        <div
+          role="status"
+          className="mt-2 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
+        >
+          <span>The code changed since this diff was loaded.</span>
+          <Button size="sm" variant="outline" onClick={onRefresh}>
+            <RefreshCw size={13} /> Reload diff
+          </Button>
+        </div>
+      )}
       <p className="mt-2 text-xs text-muted-foreground">
         Card changes since its shared commit with main. Press + beside a code
         line to annotate it. Comments stay on this exact diff; older comments
