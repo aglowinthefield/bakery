@@ -311,7 +311,7 @@ const server = createServer(async (req, res) => {
           const diff = integration.review(item), run = board.listRuns(id)[0];
           if (typeof fingerprint !== "string" || diff.fingerprint !== fingerprint) throw new Error("Work changed since review; refresh the diff before approving");
           const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
-          send(res, 200, await draftPullRequest({ card: item, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(item.repo, "review")) })); return;
+          send(res, 200, await draftPullRequest({ card: item, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(item.repo, "draft")) })); return;
         }
         if (req.method === "POST" && action === "approve") {
           const { fingerprint, title, body: prBody } = await body(req);
