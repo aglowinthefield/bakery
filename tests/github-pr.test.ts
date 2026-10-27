@@ -12,7 +12,8 @@ import { GitHub, GitHubSync, checksState, fastForwardMain, hasWorktrunk, linkedP
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 
 // A local bare repository plays origin and a fake `gh` on PATH plays GitHub. The fake keeps its pull requests
-// in prs.json, logs each call to calls.log, and fails `auth status` while auth-fail exists.
+// in prs.json, logs each call to calls.log, fails `auth status` while auth-fail exists, and fails the batched
+// `pr list` (no --head) with GitHub's 504 while list-fail exists.
 const fakeGh = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const dir = process.env.FAKE_GH_DIR, args = process.argv.slice(2), file = path.join(dir, "prs.json");
@@ -28,6 +29,7 @@ if (args[0] === "auth" && args[1] === "status") {
 }
 if (args[0] === "pr" && args[1] === "list") {
   const head = flag("--head");
+  if (!head && fs.existsSync(path.join(dir, "list-fail"))) { console.error("HTTP 504: 504 Gateway Timeout (https://api.github.com/graphql)"); process.exit(1); }
   console.log(JSON.stringify(prs.filter(pr => !head || pr.headRefName === head).reverse().map(pick)));
   process.exit(0);
 }
@@ -240,6 +242,40 @@ test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, 
     assert.equal(readFileSync(join(f.repo, "feature.txt"), "utf8"), `feature from ${card.id}\n`);
     assert.equal(existsSync(worktree), false, "the Done card's worktree was removed");
     assert.equal(git(f.repo, "branch", "--list", `bakery/${card.id}`), "", "the squash-merged branch was force-deleted after GitHub confirmed the merge");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: when the batched PR list times out, each Review card is still linked and settled on its own", async () => {
+  const f = fixture();
+  try {
+    // One card opened its PR through Approve; the other's PR was opened outside Bakery, so the card has no PR number yet.
+    const open = await reviewedCard(f, "Open one");
+    await approve(f, open.id);
+    const merged = await reviewedCard(f, "Merged one");
+    assert.equal(merged.prNumber, null);
+    const merge = f.landUpstream("merged.txt");
+    const [pr] = f.prs();
+    f.setPrs([
+      { ...pr, statusCheckRollup: [{ conclusion: "FAILURE" }] },
+      { number: 200, url: "https://github.com/acme/widgets/pull/200", state: "MERGED", mergedAt: new Date().toISOString(), mergeCommit: { oid: merge }, headRefName: `bakery/${merged.id}`, headRefOid: merge, statusCheckRollup: [] },
+    ]);
+    writeFileSync(join(f.ghDir, "list-fail"), "");
+    const before = f.calls().length;
+    await f.sync.syncBoard(f.repoBoard.id);
+
+    assert.equal(f.board.getBoard(f.repoBoard.id)?.integrationError, "", "a failed batched list is not a board error");
+    const calls = f.calls().slice(before);
+    assert.ok(calls.some(call => call[1] === "list" && !call.includes("--head")), "the batched list was tried");
+    assert.ok(calls.some(call => call.includes(`bakery/${merged.id}`)), "the card was looked up by its branch");
+    const current = f.board.getCard(open.id)!;
+    assert.equal(current.status, "review");
+    assert.equal(current.prNumber, 100);
+    assert.equal(current.prChecks, "failing");
+    assert.equal(current.prError ?? "", "");
+    const done = f.board.getCard(merged.id)!;
+    assert.equal(done.prNumber, 200, "the PR opened outside Bakery is linked");
+    assert.equal(done.status, "done");
+    assert.equal(git(f.repo, "rev-parse", "main"), merge, "main still fast-forwards");
   } finally { f.cleanup(); }
 });
 

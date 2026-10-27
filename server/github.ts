@@ -185,7 +185,11 @@ export class GitHubSync {
   private async settleCards(repoBoard: RepoBoard, repo: string): Promise<void> {
     const cards = this.board.listPullRequestCards(repoBoard.repo);
     if (!cards.length) return;
-    const recent = await this.github.listPullRequests(repo);
+    // The batched list is only a shortcut. When GitHub fails it (an HTTP 504 on a busy repo), each card is
+    // looked up on its own, so one slow query does not stop every card from linking or settling.
+    let recent: PullRequest[] | undefined;
+    try { recent = await this.github.listPullRequests(repo); }
+    catch (error) { console.error(`GitHub sync for ${repoBoard.repo}: gh pr list failed, checking each card on its own: ${error instanceof Error ? error.message : String(error)}`); }
     for (const card of cards) {
       try {
         let pr = await linkedPullRequest(this.github, repo, card, recent);
