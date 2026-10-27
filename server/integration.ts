@@ -57,6 +57,22 @@ function isAncestor(repo: string, ancestor: string, descendant: string) {
   }
 }
 
+/**
+ * Where `candidate` stands against `branch` on origin, after a fetch. "push" when the branch is new there or a plain
+ * push fast-forwards it; "on-origin" when origin's branch already contains the candidate (someone pushed to the pull
+ * request, for example merging main into it, and Bakery has nothing new). When both sides hold commits the other
+ * lacks, throws instead of letting Git reject the push, naming what origin has so nobody's work is overwritten.
+ */
+function remoteBranchState(repo: string, branch: string, candidate: string, resolve: string): "push" | "on-origin" {
+  const remote = `refs/remotes/origin/${branch}`;
+  if (!hasCommit(repo, remote) || isAncestor(repo, remote, candidate)) return "push";
+  if (isAncestor(repo, candidate, remote)) return "on-origin";
+  const theirs = Number(git(repo, "rev-list", "--count", `${candidate}..${remote}`));
+  const ours = Number(git(repo, "rev-list", "--count", `${remote}..${candidate}`));
+  const latest = git(repo, "log", "-1", "--format=%h %s (%an)", remote);
+  throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks (latest: ${latest}), and the card has ${ours} that origin lacks. Someone pushed to the pull request; Bakery will not overwrite it. ${resolve}`);
+}
+
 // The title is user text. It reaches Git only as an argv entry, never through a shell.
 export function mergeMessage(card: Pick<Card, "id" | "title">): string[] {
   const prefix = "Merge card: ", limit = 72 - prefix.length;
@@ -273,26 +289,37 @@ export class Integration {
       step("Fetching origin");
       await fetchOrigin(repo);
       if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
-      step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
-      // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
-      await push(worktree, `${candidate}:refs/heads/${branch}`);
+      const state = remoteBranchState(repo, branch, candidate, `Merge origin/${branch} into the card worktree (${worktree}), then approve again`);
+      if (state === "on-origin") {
+        // Origin is ahead with nothing of ours missing: catch the worktree up so the next attempt builds on it.
+        step(`Fast-forwarding the card worktree to origin/${branch}`);
+        git(worktree, "merge", "--ff-only", "--quiet", `refs/remotes/origin/${branch}`);
+      } else {
+        step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
+        // A plain push: if the branch on GitHub moved after the fetch, Git still refuses instead of overwriting it.
+        await push(worktree, `${candidate}:refs/heads/${branch}`);
+      }
       step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
       const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
-      const pr = await this.ensurePullRequest(card, run.output, slug, github, { sha: candidate, why }, { title, body: draft ? draft.body : card.body });
+      const pushed = state === "push" ? { sha: candidate, why } : null;
+      const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body });
       this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
       this.board.recordPullRequestPush(card.id, run.id);
       return this.board.getCard(card.id)!;
     });
   }
 
-  /** The open PR from `bakery/<id>`, or a new one with `content` (default: the card title and body) plus the footer and run summary. */
-  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string }, content?: { title: string; body: string }): Promise<{ number: number; url: string }> {
+  /**
+   * The open PR from `bakery/<id>`, or a new one with `content` (default: the card title and body) plus the footer and
+   * run summary. `pushed` is what Bakery just pushed, commented on an open PR; null when nothing was pushed.
+   */
+  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string } | null, content?: { title: string; body: string }): Promise<{ number: number; url: string }> {
     const branch = `bakery/${card.id}`;
     const existing = await github.findByBranch(slug, branch);
     let url = existing?.state === "OPEN" ? existing.url : "";
     const summary = (output || "").trim().slice(-3000);
     const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
-    if (existing && url) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
+    if (existing && url && pushed) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
     if (!url) url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
     return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url };
   }
@@ -335,11 +362,14 @@ export class Integration {
       const blocker = publishBlocker(repo, card, candidate);
       if (blocker) throw new Error(blocker);
       if (isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
-      step(`Pushing bakery/${card.id} (the repository's pre-push hooks run first)`);
-      // A plain push: if bakery/<id> on GitHub holds other commits, Git refuses instead of overwriting them.
-      await push(repo, `${candidate}:refs/heads/bakery/${card.id}`);
+      const state = remoteBranchState(repo, `bakery/${card.id}`, candidate, `Reconcile origin/bakery/${card.id} with the approved commit ${candidate.slice(0, 12)} yourself, then publish`);
+      if (state === "push") {
+        step(`Pushing bakery/${card.id} (the repository's pre-push hooks run first)`);
+        // A plain push: if bakery/<id> on GitHub moved after the fetch, Git still refuses instead of overwriting it.
+        await push(repo, `${candidate}:refs/heads/bakery/${card.id}`);
+      }
       step("Opening the pull request");
-      const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, { sha: candidate, why: "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" });
+      const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, state === "push" ? { sha: candidate, why: "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" } : null);
       return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: this.mainRecovery(repo) };
     });
   }

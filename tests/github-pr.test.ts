@@ -202,6 +202,39 @@ test("a card's PR is found by its bakery/<id> branch, and an attached PR link ov
   } finally { f.cleanup(); }
 });
 
+test("github-pr: Approve catches up with commits someone pushed to the PR branch, and refuses to overwrite them", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const worktree = join(f.data, "worktrees", card.id);
+    const branch = `bakery/${card.id}`;
+    await approve(f, card.id);
+    const commentsAfterFirstPush = f.comments().length;
+    /** Pushes a commit onto the PR branch from another clone, as merging main into the PR on GitHub would. */
+    const pushToPr = (name: string) => {
+      git(f.upstream, "fetch", "-q", "origin", branch);
+      git(f.upstream, "checkout", "-q", "-B", branch, "FETCH_HEAD");
+      writeFileSync(join(f.upstream, name), `${name}\n`); git(f.upstream, "add", name); git(f.upstream, ...commitArgs, `someone else's ${name}`);
+      git(f.upstream, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+      git(f.upstream, "checkout", "-q", "main");
+      return git(f.upstream, "rev-parse", branch);
+    };
+
+    // Origin is ahead and the card has nothing new: no push, the worktree fast-forwards, no "Bakery pushed" comment.
+    const theirs = pushToPr("theirs.txt");
+    await approve(f, card.id);
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), theirs, "origin's branch is untouched");
+    assert.equal(git(worktree, "rev-parse", "HEAD"), theirs, "the card worktree caught up with origin");
+    assert.equal(f.comments().length, commentsAfterFirstPush, "nothing pushed, nothing announced");
+
+    // Both sides moved: a clear refusal that names origin's commit, and origin keeps it.
+    const again = pushToPr("again.txt");
+    writeFileSync(join(worktree, "ours.txt"), "ours\n");
+    await assert.rejects(approve(f, card.id), new RegExp(`${branch} on origin has 1 commit this card lacks \\(latest: [0-9a-f]+ someone else's again\\.txt .*Someone pushed to the pull request`));
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), again);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, and the card is Done only once the merge is on origin/main", async () => {
   const f = fixture();
   try {
