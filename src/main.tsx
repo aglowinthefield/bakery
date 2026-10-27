@@ -2223,7 +2223,9 @@ function App() {
                 requests: Approve pushes bakery/&lt;card&gt; and opens a PR with
                 gh; the card is Done once the PR merges and the merge is on
                 origin/main. Local main is then only fast-forwarded to
-                origin/main. Needs gh signed in and a GitHub remote link.
+                origin/main. Needs gh signed in and a GitHub remote link. When a
+                GitHub remote is set, Bakery picks GitHub pull requests if main
+                only accepts pull requests.
               </p>
               <label className="mt-4 block text-xs">
                 Integration mode
@@ -2255,6 +2257,40 @@ function App() {
                   <option value="github-pr">GitHub pull requests</option>
                 </select>
               </label>
+              {editingBoard.integrationNote && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {editingBoard.integrationNote}
+                </p>
+              )}
+              {editingBoard.githubMainProtected &&
+                !editingBoard.integrationChosen &&
+                (editingBoard.integration ?? "local") === "local" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-2"
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        const updated = await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({ integration: "local" }),
+                          },
+                        );
+                        setBoards((previous) =>
+                          previous.map((item) =>
+                            item.id === updated.id ? updated : item,
+                          ),
+                        );
+                        setEditingBoard(updated);
+                      })
+                    }
+                  >
+                    Keep Local merge
+                  </Button>
+                )}
               {editingBoard.integrationError && (
                 <p role="alert" className="mt-2 text-xs text-destructive">
                   {editingBoard.integrationError}

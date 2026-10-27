@@ -9,7 +9,7 @@ import { Integration, IntegrationConflictError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
-import { GitHub, GitHubSync } from "./github.js";
+import { GitHub, GitHubSync, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, validateAgentModels } from "./agent-models.js";
@@ -151,7 +151,8 @@ const server = createServer(async (req, res) => {
     if (path === "/api/boards" && req.method === "POST") {
       const root = repoRoot((await body(req)).repo);
       if (board.listBoards().some(item => item.repo === root)) throw new Error("Repository already has a board");
-      send(res, 201, board.addRepo(root)); return;
+      const added = board.addRepo(root);
+      send(res, 201, (await detectGithubIntegration(board, added.id, github, true)) ?? added); return;
     }
     const boardRoute = path.match(/^\/api\/boards\/([\w-]+)$/);
     if (boardRoute) {
@@ -188,7 +189,11 @@ const server = createServer(async (req, res) => {
       }
       if ("remoteUrl" in input) {
         if (Object.keys(input).length !== 1 || typeof input.remoteUrl !== "string") throw new Error("Update remoteUrl as a string, separately from other board settings");
-        send(res, 200, board.setRemoteUrl(repoBoard.id, input.remoteUrl)); return;
+        const updated = board.setRemoteUrl(repoBoard.id, input.remoteUrl);
+        // A new GitHub remote picks the integration mode from whether its main only accepts pull requests.
+        const detected = updated.githubMainProtected === null ? await detectGithubIntegration(board, updated.id, github, true) : updated;
+        if (detected?.integration === "github-pr" && repoBoard.integration !== "github-pr") void githubSync.syncBoard(updated.id);
+        send(res, 200, detected ?? updated); return;
       }
       if ("autoPickupEnabled" in input || "pickupConcurrency" in input || "pickupDailyLimit" in input || "pickupCostBudget" in input) {
         if (typeof input.autoPickupEnabled !== "boolean" || !Number.isSafeInteger(input.pickupConcurrency) ||
@@ -356,7 +361,12 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); githubSync.start(); });
+server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); githubSync.start();
+  // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
+  // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
+  for (const item of board.listBoards().filter(item => item.githubMainProtected === null && item.remoteUrl))
+    void detectGithubIntegration(board, item.id, github, false).catch(error => console.error(`GitHub main check for ${item.repo}: ${error}`));
+});
 const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); githubSync.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
