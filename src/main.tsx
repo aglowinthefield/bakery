@@ -89,6 +89,7 @@ import {
   type Status,
   waitingOn,
 } from "./model.js";
+import { themeNames, themes } from "./themes.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1924,30 +1925,22 @@ export function App() {
             disabled={!settings || busy}
           >
             <legend className="pt-5 font-medium">Theme</legend>
-            <div className="mt-3 flex gap-5">
-              {(["default", "compline", "light", "hearth"] as const).map(
-                (theme) => (
-                  <label
-                    key={theme}
-                    className="flex cursor-pointer items-center gap-2"
-                  >
-                    <input
-                      type="radio"
-                      name="theme"
-                      checked={(settings?.theme ?? "default") === theme}
-                      onChange={() => saveSettings({ theme })}
-                      className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                    />
-                    {theme === "default"
-                      ? "Default"
-                      : theme === "compline"
-                        ? "Compline"
-                        : theme === "light"
-                          ? "Light"
-                          : "Hearth"}
-                  </label>
-                ),
-              )}
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+              {themeNames.map((theme) => (
+                <label
+                  key={theme}
+                  className="flex cursor-pointer items-center gap-2"
+                >
+                  <input
+                    type="radio"
+                    name="theme"
+                    checked={(settings?.theme ?? "default") === theme}
+                    onChange={() => saveSettings({ theme })}
+                    className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  />
+                  {themes[theme].label}
+                </label>
+              ))}
             </div>
           </fieldset>
           <fieldset

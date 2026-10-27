@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./theme-palettes.css";
 /* Density scales Tailwind's spacing unit and type scale together. Every p-*, gap-*, size-* and text-* utility reads these. */
 :root { --density-space: 1; --density-text: 1; }
 :root[data-density="compact"] { --density-space: 0.8; --density-text: 0.93; }
