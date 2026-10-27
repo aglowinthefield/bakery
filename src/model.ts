@@ -21,6 +21,12 @@ export type Board = {
   integration?: "local" | "github-pr";
   /** Why GitHub sync last failed; auto pickup waits while it is set. */
   integrationError?: string;
+  /** The operator picked the integration mode; detection leaves it alone. */
+  integrationChosen?: boolean;
+  /** Whether GitHub main only accepts pull requests; null until Bakery could check. */
+  githubMainProtected?: boolean | null;
+  /** What the GitHub main check found, or why it could not run. */
+  integrationNote?: string;
   autoCollapseEmptySwimlanes: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;

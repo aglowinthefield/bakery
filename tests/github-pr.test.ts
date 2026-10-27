@@ -8,11 +8,12 @@ import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 import { Integration } from "../server/integration.js";
-import { GitHub, GitHubSync, checksState, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
+import { GitHub, GitHubSync, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 
 // A local bare repository plays origin and a fake `gh` on PATH plays GitHub. The fake keeps its pull requests
-// in prs.json, logs each call to calls.log, and fails `auth status` while auth-fail exists.
+// in prs.json, logs each call to calls.log, and fails `auth status` while auth-fail exists. `gh api` answers main's
+// rulesets from rules.json (none by default) and its branch protection from protection.json (unprotected by default).
 const fakeGh = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const dir = process.env.FAKE_GH_DIR, args = process.argv.slice(2), file = path.join(dir, "prs.json");
@@ -49,13 +50,22 @@ if (args[0] === "run" && args[1] === "view") {
   if (!fs.existsSync(log)) { console.error("job not found"); process.exit(1); }
   process.stdout.write(fs.readFileSync(log, "utf8")); process.exit(0);
 }
+if (args[0] === "api") {
+  const read = name => fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), "utf8") : undefined;
+  if (args[1].endsWith("/rules/branches/main")) { console.log(read("rules.json") ?? "[]"); process.exit(0); }
+  if (args[1].endsWith("/branches/main/protection")) {
+    const protection = read("protection.json");
+    if (protection) { console.log(protection); process.exit(0); }
+    console.log(JSON.stringify({ message: "Branch not protected", status: "404" })); console.error("gh: Branch not protected (HTTP 404)"); process.exit(1);
+  }
+}
 console.error("fake gh: unsupported " + args.join(" ")); process.exit(2);
 `;
 
 const commitArgs = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm"];
 const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-function fixture(wtBin?: string) {
+function fixture(wtBin?: string, integration: "github-pr" | "default" = "github-pr") {
   const dir = mkdtempSync(join(tmpdir(), "bakery-github-"));
   const bin = join(dir, "bin"), ghDir = join(dir, "gh"), origin = join(dir, "origin.git"), repo = join(dir, "repo"), upstream = join(dir, "upstream"), data = join(dir, "data");
   mkdirSync(bin); mkdirSync(ghDir);
@@ -75,7 +85,7 @@ function fixture(wtBin?: string) {
   const board = new Board(join(dir, "board.sqlite"));
   const repoBoard = board.addRepo(repo);
   board.setRemoteUrl(repoBoard.id, "https://github.com/acme/widgets");
-  board.setIntegration(repoBoard.id, "github-pr");
+  if (integration === "github-pr") board.setIntegration(repoBoard.id, "github-pr");
   const github = new GitHub("gh");
   const sync = new GitHubSync(board, data, github, wtBin);
   const prs = () => (existsSync(join(ghDir, "prs.json")) ? JSON.parse(readFileSync(join(ghDir, "prs.json"), "utf8")) : []) as (PullRequest & { title: string; body: string; base: string })[];
@@ -527,5 +537,115 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/);
     await sync.syncBoard(f.repoBoard.id);
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/, "the reason stays on the card");
+  } finally { f.cleanup(); }
+});
+
+test("GitHub remote: a main that only accepts pull requests makes the board github-pr", async () => {
+  const f = fixture(undefined, "default");
+  try {
+    assert.equal(f.board.getBoard(f.repoBoard.id)!.integration, "local");
+    writeFileSync(join(f.ghDir, "rules.json"), JSON.stringify([{ type: "deletion" }, { type: "pull_request", parameters: { required_approving_review_count: 1 } }]));
+    let detected = await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true);
+    assert.equal(detected?.integration, "github-pr");
+    assert.equal(detected?.githubMainProtected, true);
+    assert.equal(detected?.integrationChosen, false);
+    assert.match(detected!.integrationNote, /acme\/widgets only accepts pull requests \(a ruleset requires a pull request\)\. Bakery switched/);
+    assert.deepEqual(f.calls().find(args => args[0] === "api"), ["api", "repos/acme/widgets/rules/branches/main"]);
+
+    // Classic branch protection counts too, on a board whose remote changes to another repository.
+    rmSync(join(f.ghDir, "rules.json"));
+    writeFileSync(join(f.ghDir, "protection.json"), JSON.stringify({ required_pull_request_reviews: { required_approving_review_count: 1 } }));
+    const other = f.board.addRepo(join(f.dir, "other"));
+    f.board.setRemoteUrl(other.id, "https://github.com/acme/other");
+    detected = await detectGithubIntegration(f.board, other.id, f.github, true);
+    assert.equal(detected?.integration, "github-pr");
+    assert.match(detected!.integrationNote, /branch protection requires a pull request/);
+  } finally { f.cleanup(); }
+});
+
+test("GitHub remote: a main that accepts direct pushes stays local", async () => {
+  const f = fixture(undefined, "default");
+  try {
+    // Protection without a pull request requirement still allows pushes.
+    writeFileSync(join(f.ghDir, "rules.json"), JSON.stringify([{ type: "non_fast_forward" }]));
+    let detected = await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true);
+    assert.equal(detected?.integration, "local");
+    assert.equal(detected?.githubMainProtected, false);
+    assert.match(detected!.integrationNote, /accepts direct pushes/);
+    writeFileSync(join(f.ghDir, "protection.json"), JSON.stringify({ required_status_checks: { contexts: ["ci"] } }));
+    detected = await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true);
+    assert.equal(detected?.integration, "local");
+    assert.equal(detected?.githubMainProtected, false);
+    // Local Approve works as before.
+    const card = await reviewedCard(f);
+    const integration = new Integration(f.board, f.data);
+    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+  } finally { f.cleanup(); }
+});
+
+test("GitHub remote: local Approve on a protected main refuses until the operator chooses local, and that choice is kept", async () => {
+  const f = fixture(undefined, "default");
+  try {
+    writeFileSync(join(f.ghDir, "rules.json"), JSON.stringify([{ type: "merge_queue" }]));
+    // The startup check records protection without changing an existing board's mode.
+    let detected = await detectGithubIntegration(f.board, f.repoBoard.id, f.github, false);
+    assert.equal(detected?.integration, "local");
+    assert.equal(detected?.githubMainProtected, true);
+    assert.match(detected!.integrationNote, /a ruleset requires a merge queue\)\. Choose an Integration mode/);
+    const card = await reviewedCard(f);
+    const integration = new Integration(f.board, f.data);
+    const before = git(f.repo, "rev-parse", "main");
+    assert.throws(() => integration.approve(card, integration.review(card).fingerprint), /acme\/widgets only accepts pull requests.*Integration.*board's settings/s);
+    assert.equal(git(f.repo, "rev-parse", "main"), before, "local main was not touched");
+
+    f.board.setIntegration(f.repoBoard.id, "local");
+    assert.equal(f.board.getBoard(f.repoBoard.id)!.integrationChosen, true);
+    detected = await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true);
+    assert.equal(detected?.integration, "local", "an explicit local choice is never overridden");
+    assert.match(detected!.integrationNote, /stays Local merge because you chose it/);
+    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+  } finally { f.cleanup(); }
+});
+
+test("GitHub remote: when gh is missing, signed out, or GitHub cannot say, the mode stays and settings say why", async () => {
+  const f = fixture(undefined, "default");
+  try {
+    writeFileSync(join(f.ghDir, "rules.json"), JSON.stringify([{ type: "pull_request" }]));
+    let detected = await detectGithubIntegration(f.board, f.repoBoard.id, new GitHub(join(f.dir, "no-such-dir", "gh")), true);
+    assert.equal(detected?.integration, "local");
+    assert.equal(detected?.githubMainProtected, null);
+    assert.match(detected!.integrationNote, /Could not check whether main on acme\/widgets requires pull requests.*GitHub CLI unavailable/s);
+
+    writeFileSync(join(f.ghDir, "auth-fail"), "");
+    detected = await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true);
+    assert.equal(detected?.integration, "local");
+    assert.equal(detected?.githubMainProtected, null);
+    assert.match(detected!.integrationNote, /gh auth status failed/);
+    rmSync(join(f.ghDir, "auth-fail"));
+
+    // Without a ruleset answer and without permission to read branch protection, Bakery cannot tell.
+    writeFileSync(join(f.ghDir, "rules.json"), "[]");
+    writeFileSync(join(f.ghDir, "protection.json"), "not json");
+    detected = await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true);
+    assert.equal(detected?.githubMainProtected, null);
+    assert.match(detected!.integrationNote, /left as is/);
+
+    // Unknown protection does not block local Approve: behavior is as before the check existed.
+    const card = await reviewedCard(f);
+    const integration = new Integration(f.board, f.data);
+    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+  } finally { f.cleanup(); }
+});
+
+test("GitHub remote: changing the remote clears what was detected about the old one", async () => {
+  const f = fixture(undefined, "default");
+  try {
+    writeFileSync(join(f.ghDir, "rules.json"), JSON.stringify([{ type: "pull_request" }]));
+    await detectGithubIntegration(f.board, f.repoBoard.id, f.github, false);
+    assert.equal(f.board.getBoard(f.repoBoard.id)!.githubMainProtected, true);
+    const moved = f.board.setRemoteUrl(f.repoBoard.id, "https://gitlab.com/acme/widgets");
+    assert.equal(moved.githubMainProtected, null);
+    assert.equal(moved.integrationNote, "");
+    assert.equal((await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true))?.githubMainProtected, null, "non-GitHub remotes are not checked");
   } finally { f.cleanup(); }
 });
