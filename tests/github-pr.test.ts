@@ -741,7 +741,7 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
   const worker = new Worker(f.board, f.data, fixPi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, true));
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, true));
   try {
     const card = await reviewedCard(f);
     await approve(f, card.id);
