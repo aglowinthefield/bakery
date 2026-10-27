@@ -110,6 +110,48 @@ const columns: { id: Status; label: string; icon: LucideIcon }[] = [
   { id: "done", label: "Done", icon: CircleCheck },
   { id: "archived", label: "Archive", icon: Archive },
 ];
+
+// The sidebar condenses the lanes into the stages you scan for. Done and Archive are left out;
+// Failed only appears when something failed or was interrupted.
+const sidebarCounts: {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  /** Supplies the lane color. */
+  color: Status;
+  statuses: Status[];
+  hideEmpty?: boolean;
+}[] = [
+  {
+    id: "backlog",
+    label: "Backlog",
+    icon: ListTodo,
+    color: "ready",
+    statuses: ["triage", "ready"],
+  },
+  {
+    id: "in-progress",
+    label: "In progress",
+    icon: LoaderCircle,
+    color: "running",
+    statuses: ["running"],
+  },
+  {
+    id: "review",
+    label: "Review",
+    icon: Eye,
+    color: "review",
+    statuses: ["review"],
+  },
+  {
+    id: "failed",
+    label: "Failed",
+    icon: CircleX,
+    color: "failed",
+    statuses: ["failed", "interrupted"],
+    hideEmpty: true,
+  },
+];
 const remoteIcons: Record<RemoteHost, LucideIcon> = {
   github: Github,
   gitlab: Gitlab,
@@ -850,22 +892,30 @@ function App() {
               </div>
               <ul
                 aria-label="Card counts"
-                className="grid grid-cols-4 gap-x-1 gap-y-0.5 px-3 pb-2"
+                className="flex items-center gap-3 px-3 pb-2"
               >
-                {columns.map((column) => {
-                  const Icon = column.icon;
-                  const count =
+                {sidebarCounts.map((group) => {
+                  const Icon = group.icon;
+                  const live =
                     view === "board" &&
                     boardId === item.id &&
-                    (cards.length || !item.cardCounts)
-                      ? cards.filter((c) => c.status === column.id).length
-                      : (item.cardCounts?.[column.id] ?? 0);
+                    (cards.length || !item.cardCounts);
+                  const count = group.statuses.reduce(
+                    (sum, status) =>
+                      sum +
+                      (live
+                        ? cards.filter((c) => c.status === status).length
+                        : (item.cardCounts?.[status] ?? 0)),
+                    0,
+                  );
+                  if (group.hideEmpty && !count) return null;
                   return (
                     <li
-                      key={column.id}
-                      data-status={column.id}
-                      title={`${count} ${column.label.toLowerCase()}`}
-                      aria-label={`${column.label}: ${count}`}
+                      key={group.id}
+                      data-group={group.id}
+                      data-status={group.color}
+                      title={`${count} ${group.label.toLowerCase()}`}
+                      aria-label={`${group.label}: ${count}`}
                       className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
                     >
                       <Icon
