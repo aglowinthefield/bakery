@@ -615,7 +615,7 @@ export function CardDetails({
                 ? `Approve and update PR #${card.prNumber}`
                 : integration === "github-pr"
                   ? "Approve and open PR"
-                  : "Approve and merge"}
+                  : "Approve and merge into local main"}
             </Button>
           )}
           {card?.status === "review" && currentReview && (

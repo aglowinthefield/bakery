@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "./board.js";
-import { boardGithubRepo, fetchOrigin, type GitHub } from "./github.js";
+import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
@@ -157,9 +157,10 @@ export class Integration {
    * `draft` is the title and body the operator approved; without it the card title and body are used. A new PR's
    * title must pass the repository's semantic-PR check, when it has one, before anything is pushed.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }): Promise<Card> {
+  /** `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it. */
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, automatic = false): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
-    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge");
+    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
     await github.check();
@@ -182,6 +183,12 @@ export class Integration {
     if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
     // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
     git(worktree, "push", "origin", `${candidate}:refs/heads/${branch}`);
+    const summary = (run.output || "").trim().slice(-3000);
+    const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
+    if (existing && url) {
+      const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
+      await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${candidate.slice(0, 12)}: ${why}.${details}`);
+    }
     if (!url) url = await github.create(slug, branch, title, pullRequestBody(draft ? draft.body : card.body, card, run));
     const number = Number(url.match(/\/pull\/(\d+)/)?.[1]);
     this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
