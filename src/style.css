@@ -139,6 +139,10 @@
 [data-status="archived"] { --lane-status-color: var(--status-archived); }
 .lane-status-dot { background-color: var(--lane-status-color); }
 .lane-status-icon { color: var(--lane-status-color); }
+/* While a card is dragged, lanes it can move to are outlined in their status color; the rest fade. */
+.lane-drop[data-drop="valid"] { outline: 1px dashed var(--lane-status-color); outline-offset: 4px; }
+.lane-drop[data-drop="over"] { outline: 2px solid var(--lane-status-color); outline-offset: 4px; background-color: color-mix(in oklab, var(--lane-status-color) 8%, transparent); }
+.lane-drop[data-drop="invalid"] { opacity: 0.45; }
 @theme inline {
   --color-background: var(--background); --color-foreground: var(--foreground);
   --color-card: var(--card); --color-card-foreground: var(--card-foreground);

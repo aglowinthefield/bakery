@@ -168,6 +168,28 @@ export function cardActivity(
     return card.reviewWait === "agent_review" ? "working" : "waiting";
   return null;
 }
+/**
+ * Lanes a board card can be dragged to. Mirrors the card's own buttons: Move to Ready or Triage,
+ * Mark done (never-run cards only), Start or Run again, Archive, and Restore to Done. Moves that need
+ * a diff review, an approval, or a worktree check (Review, Interrupted, Reopen) stay as buttons.
+ */
+export function dropTargets(card: Card): Status[] {
+  const unrun = !card.attempts;
+  switch (card.status) {
+    case "triage":
+      return unrun ? ["ready", "done"] : ["ready"];
+    case "ready":
+      return unrun ? ["triage", "running", "done"] : ["running"];
+    case "failed":
+      return ["running"];
+    case "done":
+      return ["archived"];
+    case "archived":
+      return ["done"];
+    default:
+      return [];
+  }
+}
 const finished = (status: Status) => status === "done" || status === "archived";
 /**
  * The cards this card still waits on, from the cards the page already has. Only Today's list
