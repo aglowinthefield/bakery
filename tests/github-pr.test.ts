@@ -19,6 +19,8 @@ const dir = process.env.FAKE_GH_DIR, args = process.argv.slice(2), file = path.j
 fs.appendFileSync(path.join(dir, "calls.log"), JSON.stringify(args) + "\\n");
 const prs = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
 const flag = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
+// Like gh, return only the fields asked for with --json.
+const pick = pr => flag("--json") ? Object.fromEntries(flag("--json").split(",").filter(key => key in pr).map(key => [key, pr[key]])) : pr;
 if (args[0] === "--version") { console.log("gh version 2.99.0 (fake)"); process.exit(0); }
 if (args[0] === "auth" && args[1] === "status") {
   if (fs.existsSync(path.join(dir, "auth-fail"))) { console.error("You are not logged into any GitHub hosts. To log in, run: gh auth login"); process.exit(1); }
@@ -26,13 +28,13 @@ if (args[0] === "auth" && args[1] === "status") {
 }
 if (args[0] === "pr" && args[1] === "list") {
   const head = flag("--head");
-  console.log(JSON.stringify(prs.filter(pr => !head || pr.headRefName === head).reverse()));
+  console.log(JSON.stringify(prs.filter(pr => !head || pr.headRefName === head).reverse().map(pick)));
   process.exit(0);
 }
 if (args[0] === "pr" && args[1] === "view") {
   const pr = prs.find(item => item.number === Number(args[2]));
   if (!pr) { console.error("GraphQL: Could not resolve to a PullRequest with the number of " + args[2] + "."); process.exit(1); }
-  console.log(JSON.stringify(pr)); process.exit(0);
+  console.log(JSON.stringify(pick(pr))); process.exit(0);
 }
 if (args[0] === "pr" && args[1] === "create") {
   if (fs.existsSync(path.join(dir, "create-error"))) { process.stderr.write(fs.readFileSync(path.join(dir, "create-error"), "utf8")); process.exit(1); }

@@ -14,6 +14,9 @@ export type PullRequest = {
   statusCheckRollup?: { conclusion?: string | null; state?: string | null; status?: string | null }[];
 };
 const prFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,statusCheckRollup";
+// statusCheckRollup is expensive: across 200 PRs on a busy repo GitHub's GraphQL API times out (HTTP 504).
+// The batched list leaves it out; checks are fetched per open PR instead.
+const listFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid";
 
 type Exec = { stdout: string; stderr: string };
 function run(bin: string, args: string[], cwd?: string, timeout = 60_000): Promise<Exec> {
@@ -86,7 +89,11 @@ export class GitHub {
   check(): Promise<void> { return checkGh(this.ghBin); }
   /** Recent PRs in the repository, newest first. One call per board per tick. */
   async listPullRequests(repo: string): Promise<PullRequest[]> {
-    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "all", "--limit", "200", "--json", prFields])) as PullRequest[];
+    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "all", "--limit", "200", "--json", listFields])) as PullRequest[];
+  }
+  /** CI checks of one PR. */
+  async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {
+    return (JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "statusCheckRollup"])) as PullRequest).statusCheckRollup ?? [];
   }
   /** The newest PR whose head is `branch`, if any. */
   async findByBranch(repo: string, branch: string): Promise<PullRequest | undefined> {
@@ -110,6 +117,11 @@ export function boardGithubRepo(repoBoard: Pick<RepoBoard, "remoteUrl">): string
   const repo = githubRepo(repoBoard.remoteUrl);
   if (!repo) throw new Error("github-pr integration requires the board's remote to be a GitHub repository link (https://github.com/OWNER/REPO)");
   return repo;
+}
+
+/** The repository a card's PR lives in: its override link's repository, else the board's. */
+function prRepo(card: Card, repo: string): string {
+  return (card.prOverrideUrl && parsePullRequestUrl(card.prOverrideUrl)?.repo) || repo;
 }
 
 /** The PR linked to a card: its override URL if set, else the newest PR from `bakery/<id>`. */
@@ -176,7 +188,8 @@ export class GitHubSync {
     const recent = await this.github.listPullRequests(repo);
     for (const card of cards) {
       try {
-        const pr = await linkedPullRequest(this.github, repo, card, recent);
+        let pr = await linkedPullRequest(this.github, repo, card, recent);
+        if (pr?.state === "OPEN" && !pr.statusCheckRollup) pr = { ...pr, statusCheckRollup: await this.github.checks(prRepo(card, repo), pr.number) };
         if (pr) await this.settle(repoBoard, card, pr);
       } catch (error) {
         this.board.recordPullRequestError(card.id, `Could not check the pull request: ${error instanceof Error ? error.message : String(error)}`);
