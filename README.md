@@ -119,6 +119,8 @@ A card can depend on other cards on the same board. It doesn't start until every
 
 The Review diff shows what the card changed since its branch split from `main`, including unignored files the agent didn't commit. Newer work on `main` doesn't show up as deletions.
 
+The diff toolbar switches between unified and split layouts and picks a syntax theme (Bakery, GitHub, One, Catppuccin, Solarized, Gruvbox, Rosé Pine, or Vitesse). Each theme has a light and a dark variant that follows Bakery's theme. This browser remembers both choices.
+
 To request revisions:
 
 1. Select a line, write a comment, and add it as a draft.

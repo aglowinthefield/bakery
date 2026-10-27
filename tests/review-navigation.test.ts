@@ -125,6 +125,54 @@ test("the gutter + button comments on the hovered diff row and the layout choice
   } finally { await page.close(); }
 });
 
+test("the diff theme picker repaints the patch and the choice persists", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  // These tests cover the board, not the Today landing page.
+  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
+  const fingerprint = "c".repeat(64);
+  const patch = "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n const c = 4;\n";
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "default" },
+      "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
+      "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/comments": [],
+      "/api/boards/board/cards/card/auto-review": [],
+      "/api/boards/board/cards/card/review": { fingerprint, files: [{ path: "src/app.ts", patch }] },
+    };
+    assert.ok(path in data, `Unexpected API request: ${path}`);
+    await route.fulfill({ json: data[path] });
+  });
+  const background = () => page.locator("pre").first().evaluate(element => getComputedStyle(element).backgroundColor);
+  const solarized = () => page.waitForFunction(() => {
+    const host = [...document.querySelectorAll("*")].find(element => element.shadowRoot?.querySelector("pre"));
+    const pre = host?.shadowRoot?.querySelector("pre");
+    return pre && getComputedStyle(pre).backgroundColor === "rgb(0, 43, 54)";
+  });
+  try {
+    await page.goto(url);
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.locator('[data-line-type="change-addition"]').first().waitFor();
+    const picker = page.getByRole("combobox", { name: "Diff theme" });
+    assert.equal(await picker.inputValue(), "bakery");
+    const bakery = await background();
+    await picker.selectOption({ label: "Solarized" });
+    // solarized-dark's editor background, since Default is a dark Bakery palette.
+    await solarized();
+    assert.notEqual(bakery, "rgb(0, 43, 54)");
+    await page.reload();
+    // The reload reopens the card this tab had open.
+    await page.locator('[data-line-type="change-addition"]').first().waitFor();
+    assert.equal(await page.getByRole("combobox", { name: "Diff theme" }).inputValue(), "solarized");
+    await solarized();
+  } finally { await page.close(); }
+});
+
 test("Run again is unavailable while agent review is running and returns when it ends", async () => {
   const page = await browser.newPage();
   // These tests cover the board, not the Today landing page.
