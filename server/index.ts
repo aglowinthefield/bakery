@@ -107,13 +107,13 @@ const server = createServer(async (req, res) => {
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("notifyOnReview" in input && typeof input.notifyOnReview !== "boolean") throw new Error("notifyOnReview must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
-      if ("theme" in input && input.theme !== "default" && input.theme !== "compline" && input.theme !== "light") throw new Error("theme must be default, compline, or light");
+      if ("theme" in input && input.theme !== "default" && input.theme !== "compline" && input.theme !== "light" && input.theme !== "hearth") throw new Error("theme must be default, compline, light, or hearth");
       if ("density" in input && input.density !== "compact" && input.density !== "default" && input.density !== "cozy") throw new Error("density must be compact, default, or cozy");
       send(res, 200, board.updateSettings({
         confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
         notifyOnReview: "notifyOnReview" in input ? input.notifyOnReview as boolean : undefined,
         cardDetailsLayout: "cardDetailsLayout" in input ? input.cardDetailsLayout as "dialog" | "side" : undefined,
-        theme: "theme" in input ? input.theme as "default" | "compline" | "light" : undefined,
+        theme: "theme" in input ? input.theme as "default" | "compline" | "light" | "hearth" : undefined,
         density: "density" in input ? input.density as "compact" | "default" | "cozy" : undefined,
         agentModels: "agentModels" in input ? validateAgentModels(input.agentModels) : undefined,
       })); return;

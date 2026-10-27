@@ -155,6 +155,23 @@ test("a Compline database can save Light without losing its preferences", () => 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a database from before Hearth can save it without losing density or models", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-hearth-upgrade-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const old = new DatabaseSync(path);
+    old.exec(`CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL, cardDetailsLayout TEXT NOT NULL, theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0, agentModels TEXT NOT NULL DEFAULT '{}', density TEXT NOT NULL DEFAULT 'default');
+      INSERT INTO settings VALUES (1, 1, 'side', 'light', 1, '{}', 'cozy');`);
+    old.close();
+    const board = new Board(path);
+    assert.deepEqual(board.updateSettings({ theme: "hearth" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "hearth", density: "cozy", agentModels: emptyAgentModels() });
+    board.close();
+    const reopened = new Board(path);
+    assert.equal(reopened.getSettings().theme, "hearth");
+    reopened.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("an older Dark preference maps to the unchanged Default palette", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-dark-upgrade-"));
   try {

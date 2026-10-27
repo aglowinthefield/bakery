@@ -38,7 +38,7 @@ test("each lane keeps its label and a readable status dot in both palettes and w
     assert.equal(await page.getByRole("button", { name: /archived card/ }).count(), 0, "Archive starts collapsed");
     await page.getByRole("button", { name: "Expand Archive lane" }).click();
     let defaultColors: string[] = [];
-    for (const theme of ["default", "compline"]) {
+    for (const theme of ["default", "compline", "hearth"]) {
       await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
       const colors = new Set<string>();
       for (const status of statuses) {

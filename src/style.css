@@ -141,6 +141,50 @@
   --syntax-comment: #b5b9bb;
   --syntax-tag: #b4c4bc;
 }
+/* Hearth: warm timber, plaster cream and oven fire, drawn from a pixel-art bakery. */
+:root[data-theme="hearth"] {
+  --background: #221812;
+  --foreground: #f1e4c8;
+  --card: #2f2118;
+  --card-foreground: #f1e4c8;
+  --popover: #38281c;
+  --popover-foreground: #f1e4c8;
+  --primary: #d9a04a;
+  --primary-foreground: #221812;
+  --secondary: #38281c;
+  --secondary-foreground: #e6d3ad;
+  --muted: #38281c;
+  --muted-foreground: #b09c7e;
+  --accent: #4a3424;
+  --accent-foreground: #f1e4c8;
+  --destructive: #e0644a;
+  --border: #5c3f28;
+  --ring: #e8b45e;
+  --sidebar: #1b130e;
+  --code-background: #1b130e;
+  --selection: #6b4a2e;
+  --diff-add: #26331a;
+  --diff-add-foreground: #c8dca0;
+  --diff-remove: #3e1f17;
+  --diff-remove-foreground: #f0b8a0;
+  --status-triage: #b09c7e;
+  --status-ready: #e8c27a;
+  --status-running: #ff7a3a;
+  --status-review: #9cb860;
+  --status-failed: #e8604a;
+  --status-interrupted: #d0905a;
+  --status-done: #a8a48e;
+  --status-archived: #b8a0ae;
+  --syntax-keyword: #e8704a;
+  --syntax-entity: #d9a04a;
+  --syntax-constant: #e8c27a;
+  --syntax-string: #a8c070;
+  --syntax-variable: #f0a060;
+  --syntax-comment: #8f7d64;
+  --syntax-tag: #a8c070;
+  --syntax-heading: #e8c27a;
+  --syntax-list: #d9a04a;
+}
 [data-status="triage"] { --lane-status-color: var(--status-triage); }
 [data-status="ready"] { --lane-status-color: var(--status-ready); }
 [data-status="running"] { --lane-status-color: var(--status-running); }
