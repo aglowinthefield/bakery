@@ -121,6 +121,8 @@ export type Card = {
   prState?: "OPEN" | "CLOSED" | "MERGED" | null;
   prChecks?: string | null;
   prError?: string | null;
+  /** Times Bakery sent this card back because its PR failed CI. */
+  ciReworks?: number;
 } & UsageFields;
 const finished = (status: Status) => status === "done" || status === "archived";
 /**

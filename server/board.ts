@@ -40,7 +40,7 @@ export function parsePriority(value: unknown): CardPriority {
   throw new Error("Priority must be low, normal, high, or urgent");
 }
 /** The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup. */
-export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null };
+export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null };
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
 export type CardRef = { id: string; title: string; status: CardStatus };
@@ -92,8 +92,10 @@ export class Board {
     const cardColumns = new Set((this.db.prepare("PRAGMA table_info(cards)").all() as { name: string }[]).map(column => column.name));
     if (!cardColumns.has("priority")) this.db.exec("ALTER TABLE cards ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
-    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT"])
+    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
+    // CI failures from a card's PR, waiting to be handed to the card's next run.
+    this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
@@ -276,6 +278,28 @@ export class Board {
   recordPullRequestError(cardId: string, error: string): void {
     this.db.prepare("UPDATE cards SET prError=? WHERE id=?").run(error.slice(0, 4000), cardId);
   }
+  /**
+   * The PR's checks failed at `headSha`: count a CI rework round and keep the failures for the next run.
+   * Each head commit is sent back at most once.
+   */
+  recordCiFailure(cardId: string, headSha: string, failures: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE cards SET ciReworks=ciReworks+1, ciReworkSha=? WHERE id=?").run(headSha, cardId);
+      this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt) VALUES (?, ?, ?, ?) ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt")
+        .run(cardId, headSha, failures.slice(0, 20_000), now());
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** Marks `headSha` as handled without sending the card back, e.g. once the rework limit is reached. */
+  markCiHandled(cardId: string, headSha: string): void {
+    this.db.prepare("UPDATE cards SET ciReworkSha=? WHERE id=?").run(headSha, cardId);
+  }
+  /** CI failures waiting for the card's next run. */
+  getCiFeedback(cardId: string): { headSha: string; failures: string } | undefined {
+    return this.db.prepare("SELECT headSha, failures FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string } | undefined;
+  }
+  clearCiFeedback(cardId: string): void { this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId); }
   /** Review cards on a github-pr board, which the PR poller links and checks. */
   listPullRequestCards(repo: string): Card[] { return this.listCards(repo).filter(card => card.status === "review" && card.attempts > 0); }
   /** The PR merged and its merge commit is on origin/main: the card is Done. */

@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 import { Integration } from "../server/integration.js";
-import { GitHub, GitHubSync, checksState, fastForwardMain, hasWorktrunk, linkedPullRequest, type PullRequest } from "../server/github.js";
+import { GitHub, GitHubSync, checksState, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 
 // A local bare repository plays origin and a fake `gh` on PATH plays GitHub. The fake keeps its pull requests
@@ -43,6 +43,11 @@ if (args[0] === "pr" && args[1] === "create") {
     title: flag("--title"), body: flag("--body"), base: flag("--base") });
   fs.writeFileSync(file, JSON.stringify(prs));
   console.log(url); process.exit(0);
+}
+if (args[0] === "run" && args[1] === "view") {
+  const log = path.join(dir, "job-" + flag("--job") + ".log");
+  if (!fs.existsSync(log)) { console.error("job not found"); process.exit(1); }
+  process.stdout.write(fs.readFileSync(log, "utf8")); process.exit(0);
 }
 console.error("fake gh: unsupported " + args.join(" ")); process.exit(2);
 `;
@@ -402,5 +407,121 @@ test("github-pr with Worktrunk: wt removes a squash-merged Done card and rebases
     assert.equal(existsSync(worktree), false, "wt removed the worktree");
     assert.equal(git(f.repo, "branch", "--list", `bakery/${card.id}`), "", "wt force-deleted the squash-merged branch");
     assert.equal(git(f.repo, "rev-parse", "main"), merge);
+  } finally { f.cleanup(); }
+});
+
+test("checks: only the newest run of each check counts, and cancelled checks are not sent to the agent", () => {
+  const rollup = (statusCheckRollup: PullRequest["statusCheckRollup"]) => ({ statusCheckRollup });
+  const run = (name: string, conclusion: string, startedAt: string) => ({ __typename: "CheckRun", name, workflowName: "CI", status: "COMPLETED", conclusion, startedAt });
+  assert.equal(checksState(rollup([run("pr-body", "CANCELLED", "2026-01-01T00:00:00Z"), run("pr-body", "SUCCESS", "2026-01-01T00:01:00Z")])), "passing");
+  assert.equal(checksState(rollup([run("lint", "SUCCESS", "2026-01-01T00:00:00Z"), run("lint", "FAILURE", "2026-01-01T00:01:00Z")])), "failing");
+  assert.equal(checksState(rollup([{ status: "IN_PROGRESS", conclusion: "" }, { status: "COMPLETED", conclusion: "SUCCESS" }])), "pending", "unnamed checks are kept apart");
+  const mixed = rollup([run("lint", "FAILURE", "2026-01-01T00:00:00Z"), run("deploy", "CANCELLED", "2026-01-01T00:00:00Z"), run("ok", "SUCCESS", "2026-01-01T00:00:00Z")]);
+  assert.deepEqual(fixableFailures(mixed).map(check => check.name), ["lint"]);
+  const log = "CI\tCheck\t\uFEFF2026-10-27T14:18:49.5588276Z ##[group]Run node check.ts\nCI\tCheck\t2026-10-27T14:18:51.5173558Z \u001b[36;1mDB test coverage: add a test\u001b[0m\nCI\tCheck\t2026-10-27T14:18:51.5231714Z ##[error]Process completed with exit code 1.\n";
+  assert.equal(trimFailedLog(log), "DB test coverage: add a test\n##[error]Process completed with exit code 1.");
+});
+
+test("github-pr: a PR failing CI goes back to the agent with the failures, once per pushed commit", async () => {
+  const f = fixture();
+  const promptFile = join(f.dir, "prompt.txt");
+  // This Pi records its prompt, then changes the work so the retry has something new to review.
+  const fixPi = join(f.dir, "pi-fix");
+  writeFileSync(fixPi, `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > "${promptFile}"\necho fixed >> feature.txt\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fixPi, 0o755);
+  const started: string[] = [];
+  const worker = new Worker(f.board, f.data, fixPi);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => { started.push(card.id); return worker.start(card); });
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    const done = new Date(Date.now() - 1000).toISOString();
+    const lint = { __typename: "CheckRun", name: "lint", workflowName: "CI", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done, detailsUrl: "https://github.com/acme/widgets/actions/runs/1/job/55" };
+    writeFileSync(join(f.ghDir, "job-55.log"), "CI\tlint\t2026-10-27T14:18:51.5173558Z feature.txt: missing newline\n");
+
+    // Another check still running: wait so the agent gets every failure at once.
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [lint, { name: "test", workflowName: "CI", status: "IN_PROGRESS", conclusion: "" }] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, []);
+    assert.equal(f.board.getCard(card.id)!.prChecks, "failing");
+
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [lint, { ...lint, name: "test", conclusion: "SUCCESS", detailsUrl: "" }] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id]);
+    await waitFor(() => f.board.getCard(card.id)!.status === "review");
+    const latest = f.board.listRuns(card.id)[0]; assert.equal(latest.status, "review", `${latest.error} ${latest.output}`);
+    const prompt = readFileSync(promptFile, "utf8");
+    assert.match(prompt, new RegExp(`failed CI at ${pushed}`));
+    assert.match(prompt, /### CI \/ lint: failure\nhttps:\/\/github.com\/acme\/widgets\/actions\/runs\/1\/job\/55\n\n```\nfeature.txt: missing newline\n```/);
+    assert.doesNotMatch(prompt, /CI \/ test/, "passing checks are left out");
+    let current = f.board.getCard(card.id)!;
+    assert.equal(current.ciReworks, 1);
+    assert.equal(f.board.getCiFeedback(card.id), undefined, "the failures went to that run");
+
+    // The same commit is not sent back twice, even though the PR still shows it failing.
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id]);
+    assert.equal(f.board.getCard(card.id)!.prError, null);
+
+    // Approving the fix pushes to the same PR, and a new failure sends it back again.
+    const updated = await approve(f, card.id);
+    assert.equal(updated.prNumber, 100);
+    assert.equal(f.prs().length, 1, "the open PR was reused");
+    const fixed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    assert.notEqual(fixed, pushed);
+    f.setPrs([{ ...pr, headRefOid: fixed, statusCheckRollup: [lint] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id, card.id]);
+    await waitFor(() => f.board.getCard(card.id)!.status === "review");
+    current = f.board.getCard(card.id)!;
+    assert.equal(current.ciReworks, 2);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: CI fix runs retry a start that failed, stop at the limit, and leave work the operator is changing alone", async () => {
+  const f = fixture();
+  const started: string[] = [];
+  let refuse = false;
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => {
+    if (refuse) throw new Error("Repository is at its 1-run concurrency limit");
+    started.push(card.id);
+  });
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    const done = new Date(Date.now() - 1000).toISOString();
+    const lint = { name: "lint", workflowName: "CI", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done, detailsUrl: "https://ci.example/lint" };
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [lint] }]);
+
+    // Uncommitted work in the card worktree: someone is already on it.
+    const worktree = join(f.data, "worktrees", card.id);
+    writeFileSync(join(worktree, "scratch.txt"), "wip\n");
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, []);
+    rmSync(join(worktree, "scratch.txt"));
+
+    refuse = true;
+    await sync.syncBoard(f.repoBoard.id);
+    assert.match(f.board.getCard(card.id)!.prError ?? "", /could not start a fix run yet: Repository is at its 1-run concurrency limit/);
+    refuse = false;
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id], "the next sync started it");
+    assert.equal(f.board.getCard(card.id)!.ciReworks, 1, "a retried start is the same round");
+    f.board.clearCiFeedback(card.id); // The fake rework does not run Pi, which would hand the failures over.
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id]);
+
+    // A new pushed commit that fails again, with the limit used up: the card stays in Review with the reason.
+    const db = new DatabaseSync(join(f.dir, "board.sqlite"));
+    try { db.prepare("UPDATE cards SET ciReworks=?, ciReworkSha='0000' WHERE id=?").run(maxCiReworks, card.id); } finally { db.close(); }
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id]);
+    assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/, "the reason stays on the card");
   } finally { f.cleanup(); }
 });
