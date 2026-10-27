@@ -152,6 +152,10 @@ export class GitHub {
   async view(repo: string, number: number): Promise<PullRequest> {
     return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", prFields])) as PullRequest;
   }
+  /** Posts a comment on a PR. */
+  async comment(repo: string, number: number, body: string): Promise<void> {
+    await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
+  }
   /** Opens a PR and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
   async create(repo: string, branch: string, title: string, body: string): Promise<string> {
     const output = await this.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title", title, "--body", body]);
@@ -159,6 +163,16 @@ export class GitHub {
     if (!url) throw new Error(`gh pr create did not print a pull request URL: ${output.trim().slice(0, 500)}`);
     return url.trim();
   }
+}
+
+/**
+ * Bakery comments on its PRs at each turning point (sent back for CI, fix pushed, gave up, update pushed) so
+ * reviewers can see what the automation did. A comment that fails to post never blocks the work; it is logged.
+ */
+export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
+  if (!number) return;
+  try { await github.comment(repo, number, `${body}\n\n<sub>Posted by Bakery.</sub>`); }
+  catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
 /** The repository `gh` should query for a github-pr board. */
@@ -282,8 +296,8 @@ export class GitHubSync {
   /**
    * A PR whose checks failed goes back to the agent with the failures, so it returns to Review only once it has a
    * fix for CI. Each head commit is sent back once, and only when it is what the card worktree holds: newer local
-   * work, uncommitted changes, or someone else's push mean a person is already handling it. The fix still needs
-   * Approve to reach the PR. After `maxCiReworks` rounds the card stays in Review with the reason.
+   * work, uncommitted changes, or someone else's push mean a person is already handling it. The fix is pushed by
+   * `pushCiFix`. Each step is announced on the PR. After `maxCiReworks` rounds the card stays in Review with the reason.
    */
   private async sendBackFailingCi(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown; pending?: boolean }> {
     const head = pr.headRefOid, failures = fixableFailures(pr);
@@ -307,7 +321,11 @@ export class GitHubSync {
       if (await git(worktree, "rev-parse", "HEAD") !== head) return {};
       if (await git(worktree, "status", "--porcelain")) return {};
     } catch { return {}; }
-    if (card.ciReworks >= maxCiReworks) { this.board.markCiHandled(card.id, head); return { error: limit }; }
+    if (card.ciReworks >= maxCiReworks) {
+      this.board.markCiHandled(card.id, head);
+      await commentOnPullRequest(this.github, repo, pr.number, `CI is still failing at ${head.slice(0, 12)} (${failures.map(checkName).join(", ")}) after ${maxCiReworks} automatic fix runs. Bakery has stopped sending it back; a person needs to take it from here.`);
+      return { error: limit };
+    }
     const sections: string[] = [];
     for (const check of failures.slice(0, 8)) {
       const jobId = actionsJobId(check);
@@ -319,6 +337,7 @@ export class GitHubSync {
       sections.push(`### ${checkName(check) || "check"}: ${outcome(check).toLowerCase()}\n${check.detailsUrl || check.targetUrl || ""}${log ? `\n\n\`\`\`\n${log}\n\`\`\`` : ""}`);
     }
     this.board.recordCiFailure(card.id, head, sections.join("\n\n"));
+    await commentOnPullRequest(this.github, repo, pr.number, `CI failed at ${head.slice(0, 12)}: ${failures.map(check => `\`${checkName(check) || "check"}\``).join(", ")}. Bakery sent this back to its coding agent with the failure logs (automatic fix run ${card.ciReworks + 1} of ${maxCiReworks}). The fix will be pushed here when it's ready.`);
     return this.startRework(card);
   }
   /**
