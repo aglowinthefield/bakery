@@ -22,6 +22,7 @@ flowchart LR
 - [Quick start](#quick-start)
 - [Today](#today)
 - [Card lifecycle](#card-lifecycle)
+- [Dependencies](#dependencies)
 - [Reviewing and merging](#reviewing-and-merging)
 - [Watching a run](#watching-a-run)
 - [Automation (opt-in)](#automation-opt-in)
@@ -99,6 +100,18 @@ stateDiagram-v2
 - **Reopen** returns a Done card to Review when its work was left unmerged in the worktree. If the card was already merged, it returns to Ready.
 - **Restore to Done** brings an archived card back. **Archive** only changes the lane. Runs, worktrees, branches, and history stay.
 - Only Done cards can be archived. To archive several at once, use **Select** in the Done lane.
+
+## Dependencies
+
+A card can depend on other cards on the same board. It doesn't start until every card it depends on is Done or archived, so its worktree is cut from a `main` that already has their work.
+
+- A blocked card stays in Ready and shows **Waiting on N**. Its details list the cards it depends on, each linking to that card, and let you add or remove one. The cards it blocks show under **Needed by**.
+- Automatic pickup skips blocked cards. They don't use a concurrency slot or the daily limit.
+- Starting a blocked card from the UI, API, or CLI fails with an error naming the unfinished cards. Retrying a card that already has attempts isn't blocked, because it already has a worktree.
+- Bakery rejects a card depending on itself, on a card from another board, or on a card that would create a cycle.
+- If a card you depend on is gone from the database, Bakery drops that dependency on startup.
+- The API takes `dependsOn: [ids]` when creating a card, `POST /api/boards/:board/cards/:id/dependencies` with `{ "dependsOn": id }`, and `DELETE .../dependencies/:dependsOn`. Card JSON includes `dependsOn` and `blocked`.
+- Done means Bakery's own Done. If a card's work reaches `main` some other way, such as a squash-merged PR you `git pull`, Bakery doesn't notice, and a started card can't be marked Done by hand. Remove the dependency with `undepend` instead.
 
 ## Reviewing and merging
 
@@ -196,8 +209,10 @@ The CLI talks to the running server's HTTP API, so it goes through the same chec
 npm run bakery -- add fix the flaky login test [--priority high]
 npm run bakery -- boards
 npm run bakery -- cards
-npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority low|normal|high|urgent]
+npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority low|normal|high|urgent] [--after CARD_ID]...
 npm run bakery -- show CARD_ID
+npm run bakery -- depend CARD_ID --on CARD_ID
+npm run bakery -- undepend CARD_ID --on CARD_ID
 npm run bakery -- edit CARD_ID [--title "..."] [--body "..."]
 npm run bakery -- archive CARD_ID...
 npm run bakery -- restore CARD_ID
@@ -215,7 +230,8 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
 - `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
 - `cards` prints each card's ID, status, attempt count, review rounds, and title.
-- `show` prints a card's title, status, repository, description, each attempt's status, agent and error, and the latest auto-review verdict.
+- `show` prints a card's title, status, repository, description, each attempt's status, agent and error, the latest auto-review verdict, and the cards it depends on and that depend on it, each with its status.
+- `create --after CARD_ID` makes the new card depend on that card. Repeat it for several. `depend` and `undepend` add or remove one dependency on an existing card. See [Dependencies](#dependencies).
 - `edit` changes a card's title, description, or both. `--body ""` clears the description. You can't edit a running card.
 - `archive` follows the same rules as the UI: it accepts only Done cards, and if any card isn't Done, nothing is archived. `restore` moves one archived card back to Done.
 - `stats` prints the board's card count in each lane and its pickup state.

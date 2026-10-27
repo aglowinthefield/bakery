@@ -36,7 +36,15 @@ export function parsePriority(value: unknown): CardPriority {
   if (typeof value === "number" && Object.values(cardPriorities).includes(value as CardPriority)) return value as CardPriority;
   throw new Error("Priority must be low, normal, high, or urgent");
 }
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number } & UsageFields;
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean } & UsageFields;
+/** A card on the other end of a dependency edge, with enough to show and link it. */
+export type CardRef = { id: string; title: string; status: CardStatus };
+// A dependency is finished once it is Done or archived. Until then the dependent card is blocked.
+const finishedStatuses = "('done', 'archived')";
+/** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
+export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
+type CardRow = Omit<Card, "dependsOn" | "blocked"> & { dependsOn: string; blocked: number };
+const toCard = (row: CardRow): Card => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0 });
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string } & UsageFields;
@@ -49,7 +57,9 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds,
   COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
   COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent,
-  ${usageColumns.map(column => `MAX(spend.${column}) AS ${column}`).join(", ")}, COALESCE(MAX(spend.unrecorded), 0) AS usageIncomplete
+  ${usageColumns.map(column => `MAX(spend.${column}) AS ${column}`).join(", ")}, COALESCE(MAX(spend.unrecorded), 0) AS usageIncomplete,
+  (SELECT json_group_array(edge.dependsOn) FROM (SELECT d.dependsOn FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id ORDER BY parent.createdAt, parent.rowid) edge) AS dependsOn,
+  EXISTS (SELECT 1 FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id AND parent.status NOT IN ${finishedStatuses}) AS blocked
   FROM cards LEFT JOIN runs ON runs.cardId=cards.id
   LEFT JOIN (SELECT cardId, ${usageColumns.map(column => `SUM(${column}) AS ${column}`).join(", ")}, MAX(cost IS NULL) AS unrecorded
     FROM (SELECT cardId, ${usageColumns.join(", ")} FROM runs UNION ALL SELECT cardId, ${usageColumns.join(", ")} FROM auto_review_jobs) GROUP BY cardId) spend ON spend.cardId=cards.id`;
@@ -68,6 +78,9 @@ export class Board {
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
+      CREATE TABLE IF NOT EXISTS card_dependencies (cardId TEXT NOT NULL REFERENCES cards(id), dependsOn TEXT NOT NULL REFERENCES cards(id), PRIMARY KEY (cardId, dependsOn));
+      CREATE INDEX IF NOT EXISTS card_dependencies_parent ON card_dependencies(dependsOn);
+      DELETE FROM card_dependencies WHERE cardId NOT IN (SELECT id FROM cards) OR dependsOn NOT IN (SELECT id FROM cards);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
     // Scripts may pass an idempotency key so a re-run returns the card it already created on that board.
@@ -308,7 +321,8 @@ export class Board {
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
       if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached) continue;
       const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY priority DESC, createdAt, rowid").all(repoBoard.repo) as { id: string }[];
-      result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })));
+      // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
+      result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card)));
     }
     return result;
   }
@@ -387,24 +401,76 @@ export class Board {
       (counts[row.repo] ??= {})[row.status] = Number(row.count);
     return counts;
   }
-  listCards(repo?: string): Card[] { return (repo === undefined
+  listCards(repo?: string): Card[] { return ((repo === undefined
     ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all()
-    : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all(repo)) as Card[]; }
-  getCard(id: string): Card | undefined { return this.db.prepare(`${cardQuery} WHERE cards.id=? GROUP BY cards.id`).get(id) as Card | undefined; }
+    : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all(repo)) as CardRow[]).map(toCard); }
+  getCard(id: string): Card | undefined {
+    const row = this.db.prepare(`${cardQuery} WHERE cards.id=? GROUP BY cards.id`).get(id) as CardRow | undefined;
+    return row && toCard(row);
+  }
+  /** The cards this card depends on, and the cards that depend on it. Edges to a missing card are ignored. */
+  listDependencies(cardId: string): { dependsOn: CardRef[]; dependents: CardRef[] } {
+    const refs = (sql: string) => (this.db.prepare(sql).all(cardId) as CardRef[]).map(({ id, title, status }) => ({ id, title, status }));
+    return {
+      dependsOn: refs("SELECT cards.id, cards.title, cards.status FROM card_dependencies d JOIN cards ON cards.id=d.dependsOn WHERE d.cardId=? ORDER BY cards.createdAt, cards.rowid"),
+      dependents: refs("SELECT cards.id, cards.title, cards.status FROM card_dependencies d JOIN cards ON cards.id=d.cardId WHERE d.dependsOn=? ORDER BY cards.createdAt, cards.rowid"),
+    };
+  }
+  /** Refuses an edge to a missing card, to a card on another board, to itself, or one that would close a cycle. */
+  private checkDependency(card: Card, dependsOn: string): void {
+    if (dependsOn === card.id) throw new Error("A card cannot depend on itself");
+    const parent = this.getCard(dependsOn);
+    if (!parent) throw new Error(`Dependency not found: ${dependsOn}`);
+    if (parent.repo !== card.repo) throw new Error("A card can only depend on cards on the same board");
+    // The edge closes a cycle when the new parent already depends, directly or not, on this card.
+    const cycle = this.db.prepare(`WITH RECURSIVE reach(id) AS (SELECT ? UNION SELECT d.dependsOn FROM card_dependencies d JOIN reach ON d.cardId=reach.id)
+      SELECT 1 FROM reach WHERE id=? LIMIT 1`).get(dependsOn, card.id);
+    if (cycle) throw new Error(`Adding this dependency would create a cycle: ${parent.title} already depends on ${card.title}`);
+  }
+  addDependency(cardId: string, dependsOn: string): Card {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId);
+      if (!card) throw new Error("Card not found");
+      this.checkDependency(card, dependsOn);
+      this.db.prepare("INSERT OR IGNORE INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(cardId, dependsOn);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    return this.getCard(cardId)!;
+  }
+  removeDependency(cardId: string, dependsOn: string): Card {
+    if (!this.getCard(cardId)) throw new Error("Card not found");
+    if (!this.db.prepare("DELETE FROM card_dependencies WHERE cardId=? AND dependsOn=?").run(cardId, dependsOn).changes) throw new Error("This card does not depend on that card");
+    return this.getCard(cardId)!;
+  }
+  /** Error text for a start refused because some dependencies are not finished, naming each one. */
+  private blockedError(cardId: string): Error {
+    const waiting = this.listDependencies(cardId).dependsOn.filter(item => item.status !== "done" && item.status !== "archived");
+    return new Error(`Waiting on ${waiting.length} unfinished card${waiting.length === 1 ? "" : "s"}: ${waiting.map(item => `${item.title} (${item.id}, ${item.status})`).join("; ")}. Start this card after they are Done.`);
+  }
   /** The card created on this board with the key, in any status including archived. */
   getCardByIdempotencyKey(repo: string, key: string): Card | undefined {
     const row = this.db.prepare("SELECT id FROM cards WHERE repo=? AND idempotencyKey=?").get(repo, key) as { id: string } | undefined;
     return row && this.getCard(row.id);
   }
-  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority }): Card {
+  /** `dependsOn` lists cards on the same board that must be Done before this one starts. */
+  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[] }): Card {
     const key = input.idempotencyKey ?? null;
     if (key !== null && (!key.trim() || key.length > 200)) throw new Error("Idempotency key must be 1 to 200 characters");
     const existing = key === null ? undefined : this.getCardByIdempotencyKey(input.repo, key);
     if (existing) return existing;
     const id = randomUUID(), time = now();
     this.addRepo(input.repo);
-    this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?)")
-      .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0));
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0));
+      for (const parent of new Set(input.dependsOn ?? [])) {
+        this.checkDependency(this.getCard(id)!, parent);
+        this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return this.getCard(id)!;
   }
   updateCard(id: string, input: { title: string; body: string; repo: string; priority?: CardPriority }): Card {
@@ -586,6 +652,8 @@ export class Board {
       if (card.status === "done") throw new Error("Reopen this card before starting a run");
       if (card.status === "archived") throw new Error("Restore this archived card before starting a run");
       if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
+      // Manual and automatic starts both claim here, so neither can skip the dependency gate.
+      if (waitsOnDependencies(card)) throw this.blockedError(cardId);
       if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry Approve and merge");
       if (this.db.prepare("SELECT 1 FROM auto_review_jobs WHERE cardId=? AND state='running' LIMIT 1").get(cardId))
         throw new Error("Agent review is in progress; wait for its result before running Pi again");

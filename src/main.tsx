@@ -77,6 +77,7 @@ import {
   type MergeConflict,
   type Priority,
   type Status,
+  waitingOn,
 } from "./model.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
@@ -1381,6 +1382,11 @@ function App() {
                                   {(item.priority ?? 0) !== 0 && (
                                     <PriorityBadge priority={item.priority} />
                                   )}
+                                  {item.blocked && (
+                                    <WaitingBadge
+                                      waiting={waitingOn(item, cards)}
+                                    />
+                                  )}
                                   {item.attempts > 1 && (
                                     <span
                                       data-testid="attempt-count"
@@ -2226,6 +2232,8 @@ function App() {
           key={selected}
           boardId={detailBoardId}
           card={card}
+          boardCards={scopeCards.filter((item) => item.repo === card?.repo)}
+          onOpenCard={setSelected}
           settings={settings}
           conflict={mergeConflicts.find((item) => item.cardId === selected)}
           queue={
@@ -2262,6 +2270,17 @@ function App() {
         />
       )}
     </div>
+  );
+}
+function WaitingBadge({ waiting }: { waiting: Card[] }) {
+  return (
+    <span
+      data-testid="waiting-badge"
+      title={`Starts after ${waiting.map((item) => item.title).join(", ")} ${waiting.length === 1 ? "is" : "are"} Done`}
+      className="rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[.1em] text-sky-500"
+    >
+      Waiting on {waiting.length}
+    </span>
   );
 }
 function PriorityBadge({ priority }: { priority: Priority }) {

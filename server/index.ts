@@ -63,6 +63,11 @@ function idempotencyKey(value: unknown) {
   if (typeof value !== "string" || !value.trim() || value.length > 200) throw new Error("Idempotency key must be 1 to 200 characters");
   return value;
 }
+function dependencyIds(value: unknown) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 50 || !value.every(id => typeof id === "string" && /^[\w-]+$/.test(id))) throw new Error("dependsOn must be an array of card IDs");
+  return value as string[];
+}
 function repoRoot(value: unknown) {
   if (typeof value !== "string" || !value.trim()) throw new Error("Repository path is required");
   const input = value.trim();
@@ -198,6 +203,12 @@ const server = createServer(async (req, res) => {
       if (!repoBoard || card?.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
       board.deleteReviewComment(card.id, commentRoute[3]); send(res, 200, { ok: true }); return;
     }
+    const dependencyRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/([\w-]+)\/dependencies\/([\w-]+)$/);
+    if (dependencyRoute && req.method === "DELETE") {
+      const repoBoard = board.getBoard(dependencyRoute[1]), card = board.getCard(dependencyRoute[2]);
+      if (!repoBoard || card?.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
+      send(res, 200, board.removeDependency(card.id, dependencyRoute[3])); return;
+    }
     const archiveRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/(archive|unarchive)$/);
     if (archiveRoute && req.method === "POST") {
       const repoBoard = board.getBoard(archiveRoute[1]);
@@ -206,7 +217,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|dependencies))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -217,7 +228,7 @@ const server = createServer(async (req, res) => {
           // A repeated key returns the board's existing card unchanged, whatever its status.
           const existing = key === null ? undefined : board.getCardByIdempotencyKey(repoBoard.repo, key);
           if (existing) { send(res, 200, existing); return; }
-          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key })); return;
+          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn) })); return;
         }
       } else {
         const item = board.getCard(id);
@@ -226,6 +237,12 @@ const server = createServer(async (req, res) => {
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
         if (req.method === "GET" && action === "review") { send(res, 200, integration.review(item)); return; }
+        if (req.method === "GET" && action === "dependencies") { send(res, 200, board.listDependencies(id)); return; }
+        if (req.method === "POST" && action === "dependencies") {
+          const { dependsOn } = await body(req);
+          if (typeof dependsOn !== "string" || !/^[\w-]+$/.test(dependsOn)) throw new Error("dependsOn must be a card ID");
+          send(res, 200, board.addDependency(id, dependsOn)); return;
+        }
         if (req.method === "GET" && action === "comments") { send(res, 200, board.listReviewComments(id)); return; }
         if (req.method === "POST" && action === "comments") {
           const input = await body(req);
