@@ -8,7 +8,6 @@ import {
 } from "react";
 import {
   Archive,
-  ArrowUpRight,
   CircleCheck,
   CirclePause,
   CircleX,
@@ -1697,7 +1696,7 @@ export function App() {
                           const activity = cardActivity(item);
                           const content = (
                             <>
-                              <div className="mb-4 flex items-start justify-between gap-2">
+                              <div className="flex items-start justify-between gap-2 empty:hidden [&:has(>span:empty)]:hidden mb-4">
                                 <span className="flex flex-wrap items-center gap-1.5">
                                   {(item.priority ?? 0) !== 0 && (
                                     <PriorityBadge priority={item.priority} />
@@ -1731,12 +1730,6 @@ export function App() {
                                     </span>
                                   )}
                                 </span>
-                                {!selecting && (
-                                  <ArrowUpRight
-                                    size={15}
-                                    className="text-muted-foreground group-hover:text-primary"
-                                  />
-                                )}
                               </div>
                               <div className="text-[14px] font-medium leading-snug text-foreground">
                                 {item.title}
