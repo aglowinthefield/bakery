@@ -237,6 +237,24 @@ test("failing verification leaves the card in Review without calling a model or 
   } finally { item.close(); }
 });
 
+test("uncommitted overlapping edits on main stop auto-review before verification or a model call", async () => {
+  const item = fixture();
+  try {
+    const marker = join(item.dir, "verified");
+    item.board.setAutoReview(item.repoBoard.id, true, `touch ${marker}`);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard(), before = git(item.repo, "rev-parse", "main");
+    writeFileSync(join(item.repo, "README.md"), "uncommitted main change\n");
+    await item.auto.tick();
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    assert.equal(git(item.repo, "rev-parse", "main"), before);
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "uncommitted main change\n");
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /Uncommitted changes on main overlap this card \(README\.md\)/);
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.inputTokens ?? 0, 0, "no reviewer tokens spent");
+    assert.throws(() => readFileSync(marker), "verification never ran");
+  } finally { item.close(); }
+});
+
 test("verification must pass on the merged result, not just the card branch", async () => {
   const item = fixture();
   try {

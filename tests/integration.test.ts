@@ -261,11 +261,13 @@ test("overlapping dirty files on main block approval without losing local edits"
     writeFileSync(join(item.worktree, "README.md"), "card change\n");
     writeFileSync(join(item.repo, "README.md"), "uncommitted main change\n");
     const mainBefore = git(item.repo, "rev-parse", "HEAD");
-    assert.throws(() => item.approve(item.card), /local changes|overwritten|merge failed/i);
+    assert.throws(() => item.approve(item.card), /Uncommitted changes on main would be overwritten: README\.md\./);
     assert.equal(git(item.repo, "rev-parse", "HEAD"), mainBefore);
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "uncommitted main change\n");
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
-    assert.ok(item.board.getApproval(item.card.id));
+    // Blocked before approval starts: no card commit, no pending approval to withdraw.
+    assert.equal(item.board.getApproval(item.card.id), undefined);
+    assert.match(git(item.worktree, "status", "--porcelain"), /README\.md/);
     writeFileSync(join(item.repo, "README.md"), "original\n");
     assert.equal(item.approve(item.card).status, "done");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "card change\n");
