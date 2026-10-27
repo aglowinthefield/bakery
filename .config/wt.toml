@@ -1,0 +1,4 @@
+# Worktrunk hooks. Bakery runs pre-start in each new card worktree before Pi starts.
+[pre-start]
+# Reflink node_modules from the main checkout (see .worktreeinclude) so tests and builds work right away.
+copy = "wt step copy-ignored"
