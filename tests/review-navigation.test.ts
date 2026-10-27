@@ -118,8 +118,8 @@ test("the gutter + button comments on the hovered diff row and the layout choice
     assert.equal(await page.locator("[data-unified]").count(), 1);
     await page.getByRole("radio", { name: "split" }).click();
     await page.locator("[data-additions]").waitFor();
+    // The reload reopens the card this tab had open.
     await page.reload();
-    await page.getByRole("button", { name: /Review card/ }).click();
     await page.locator("[data-additions]").waitFor();
     assert.equal(await page.getByRole("radio", { name: "split" }).getAttribute("aria-checked"), "true");
   } finally { await page.close(); }
