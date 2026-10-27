@@ -198,3 +198,21 @@ button, input, textarea { font: inherit; }
 .markdown code { border-radius: 4px; background: var(--code-background); padding: .1em .35em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; }
 .markdown pre { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--code-background); padding: .75em 1em; line-height: 1.5; }
 .markdown pre code { background: none; padding: 0; white-space: pre; }
+/* Card activity: a light travels round the border while an agent works on the card, the border breathes slowly
+   while it waits on something outside Bakery (CI, GitHub), and turns amber when a running agent has gone quiet. */
+@property --activity-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes activity-orbit { to { --activity-angle: 360deg; } }
+@keyframes activity-breathe { 50% { border-color: color-mix(in srgb, var(--status-review) 70%, transparent); } }
+.card-activity { position: relative; }
+.card-activity[data-activity="working"]::before {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; pointer-events: none;
+  background: conic-gradient(from var(--activity-angle), transparent 0deg 200deg, var(--primary) 320deg, transparent 360deg);
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: activity-orbit 2.4s linear infinite;
+}
+.card-activity[data-activity="waiting"] { animation: activity-breathe 3.2s ease-in-out infinite; }
+.card-activity[data-activity="quiet"] { border-color: color-mix(in srgb, #d99a3a 70%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .card-activity[data-activity="working"]::before { animation: none; background: var(--primary); }
+  .card-activity[data-activity="waiting"] { animation: none; border-style: dashed; }
+}

@@ -254,7 +254,7 @@ function ReviewFile({
   diffStyle: DiffStyle;
   onAdd: (path: string, line: number, body: string) => Promise<boolean>;
 }) {
-  const [open, setOpen] = useState(index === 0);
+  const [open, setOpen] = useState(true);
   const heading = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
     if (jump !== undefined) setOpen(true);

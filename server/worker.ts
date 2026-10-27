@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
 import { piModelArgs, type AgentPhase } from "./agent-models.js";
 import { Board, type Card, type Run } from "./board.js";
+import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -48,6 +49,7 @@ export class Worker {
     const latestRun = this.board.listRuns(card.id)[0];
     if (latestRun && this.board.hasDraftReviewComments(card.id, latestRun.id)) throw new Error("Submit or remove draft review comments before running Pi again");
     const feedback = this.board.getFeedbackForRun(card.id);
+    const ciFeedback = this.board.getCiFeedback(card.id);
     const mainTip = conflict ? git(root, "rev-parse", "main") : null;
     if (conflict && !existsSync(worktree)) throw new Error("Card worktree is missing; inspect and restore it before repairing the conflict");
     if (conflict && (
@@ -64,7 +66,7 @@ export class Worker {
       // On a github-pr board a card starts from origin/main, fetched now, so it never builds on a stale checkout.
       const prMode = this.board.integrationFor(card.repo) === "github-pr";
       if (prMode) fetchOrigin(root);
-      if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : "HEAD"); created = true; }
+      if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : this.localBase(run, root)); created = true; }
       else if (prMode && !conflict) this.rebaseRetry(run, worktree, branch);
     } catch (error) {
       this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
@@ -74,11 +76,25 @@ export class Worker {
       ? `This is a merge-conflict repair attempt. Bakery could not merge this card into main. Conflicting files: ${JSON.stringify(conflict.files)}. Current main tip: ${mainTip}. Reconcile the reviewed card work with current main. You may merge current main into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. Bakery will ask for human review and approval again; do not attempt to integrate it yourself.`
       : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action.";
     const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
-    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${feedbackPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
+    const ciPrompt = ciFeedback && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix (for example a check that needs a label or a human decision). The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
+    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${feedbackPrompt}${ciPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
+    // Handed to this run; a later run should not see the same failures again.
+    if (ciPrompt) this.board.startCiFix(card.id, run.id);
     const phase = conflict ? "conflict" : "work";
     const launch = () => this.launchPi(card, run, worktree, prompt, phase);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
+  }
+  /**
+   * A local-mode card starts from origin/main when the repository has an origin and local HEAD is not ahead of it,
+   * so it never builds on a stale checkout. Unpushed local commits win: then HEAD is the base. Offline only warns.
+   */
+  private localBase(run: Run, root: string): string {
+    if (!hasOrigin(root)) return "HEAD";
+    const warning = fetchOriginBestEffort(root);
+    if (warning) this.board.append(run.id, `${warning}\n`);
+    const state = compareWithOriginMain(root, "HEAD");
+    return state && !state.ahead ? "refs/remotes/origin/main" : "HEAD";
   }
   /**
    * A retry on a github-pr board whose base is behind origin/main is rebased onto it before Pi starts, but only
@@ -161,7 +177,10 @@ export class Worker {
     let buffer = "", settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
     let turn = 0, lastWorktreeSnapshot = "", lastAgent = "";
     const tools = new Map<string, { name: string; finished: boolean; failed: boolean }>();
+    let touchedAt = Date.now();
     child.stdout?.on("data", (chunk: Buffer) => {
+      // Any output counts as activity; a write every 10s is enough for the board to tell working from quiet.
+      if (Date.now() - touchedAt >= 10_000) { touchedAt = Date.now(); this.board.touch(run.id); }
       buffer += chunk.toString("utf8");
       let i: number;
       while ((i = buffer.indexOf("\n")) >= 0) {

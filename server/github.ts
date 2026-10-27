@@ -11,7 +11,12 @@ import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 export type PullRequest = {
   number: number; url: string; state: "OPEN" | "CLOSED" | "MERGED"; mergedAt: string | null;
   mergeCommit: { oid: string } | null; headRefName: string; headRefOid?: string;
-  statusCheckRollup?: { conclusion?: string | null; state?: string | null; status?: string | null }[];
+  statusCheckRollup?: Check[];
+};
+/** One entry of `statusCheckRollup`: a CheckRun (name, workflowName) or a commit StatusContext (context). */
+export type Check = {
+  conclusion?: string | null; state?: string | null; status?: string | null;
+  name?: string; context?: string; workflowName?: string; startedAt?: string; completedAt?: string; detailsUrl?: string; targetUrl?: string;
 };
 const prFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,statusCheckRollup";
 // statusCheckRollup is expensive: across 200 PRs on a busy repo GitHub's GraphQL API times out (HTTP 504).
@@ -73,15 +78,55 @@ export async function fastForwardMain(repo: string): Promise<boolean> {
   return true;
 }
 
+const failed = ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"];
+const unfinished = ["", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED"];
+// Failures an agent can act on. A cancelled or action-required check needs a person, not a code change.
+const fixable = ["FAILURE", "ERROR", "TIMED_OUT", "STARTUP_FAILURE"];
+const outcome = (check: Check) => (check.conclusion || check.state || check.status || "").toUpperCase();
+const checkName = (check: Check) => check.context ?? [check.workflowName, check.name].filter(Boolean).join(" / ");
+
+/**
+ * The newest run of each check. The rollup keeps every run on the head commit, so a check that was
+ * cancelled and rerun, or that failed and then passed, appears more than once; only the newest counts.
+ */
+export function latestChecks(pr: Pick<PullRequest, "statusCheckRollup">): Check[] {
+  const latest = new Map<string, Check>();
+  (pr.statusCheckRollup ?? []).forEach((check, index) => {
+    const key = checkName(check) || `#${index}`, seen = latest.get(key);
+    if (!seen || (check.startedAt ?? "") >= (seen.startedAt ?? "")) latest.set(key, check);
+  });
+  return [...latest.values()];
+}
+
 /** One-word state of a PR's checks, or null when it has none. */
-export function checksState(pr: PullRequest): string | null {
-  const checks = pr.statusCheckRollup ?? [];
+export function checksState(pr: Pick<PullRequest, "statusCheckRollup">): string | null {
+  const checks = latestChecks(pr);
   if (!checks.length) return null;
-  const outcome = (check: (typeof checks)[number]) => (check.conclusion || check.state || check.status || "").toUpperCase();
-  if (checks.some(check => ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(outcome(check)))) return "failing";
-  if (checks.some(check => ["", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED"].includes(outcome(check)))) return "pending";
+  if (checks.some(check => failed.includes(outcome(check)))) return "failing";
+  if (checks.some(check => unfinished.includes(outcome(check)))) return "pending";
   return "passing";
 }
+
+/** Checks whose newest run failed in a way a code change can fix. */
+export function fixableFailures(pr: Pick<PullRequest, "statusCheckRollup">): Check[] {
+  return latestChecks(pr).filter(check => fixable.includes(outcome(check)));
+}
+
+/** GitHub Actions job id from a check's details link, when the check is an Actions job. */
+export function actionsJobId(check: Check): string | undefined {
+  return (check.detailsUrl || check.targetUrl || "").match(/\/actions\/runs\/\d+\/job\/(\d+)/)?.[1];
+}
+
+/** `gh run view --log-failed` output reduced to its last lines, without the job/step/timestamp prefix or colour codes. */
+export function trimFailedLog(log: string, maxLines = 60, maxChars = 4000): string {
+  const lines = log.split("\n")
+    .map(line => line.replace(/^[^\t]*\t[^\t]*\t\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z ?/, "").replace(/\x1b\[[\d;]*m/g, "").replace(/\^\[\[[\d;]*m/g, "").trimEnd())
+    .filter(line => line && !/^##\[(group|endgroup)\]/.test(line));
+  return lines.slice(-maxLines).join("\n").slice(-maxChars);
+}
+
+/** Most automatic CI fix runs per card. After that a failing PR waits for the operator. */
+export const maxCiReworks = 3;
 
 export class GitHub {
   constructor(private readonly ghBin = "gh", private readonly cwd?: string) {}
@@ -94,6 +139,10 @@ export class GitHub {
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {
     return (JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "statusCheckRollup"])) as PullRequest).statusCheckRollup ?? [];
+  }
+  /** The failed steps' log of one GitHub Actions job. */
+  async failedLog(repo: string, jobId: string): Promise<string> {
+    return this.gh(["run", "view", "--job", jobId, "--repo", repo, "--log-failed"]);
   }
   /** The newest PR whose head is `branch`, if any. */
   async findByBranch(repo: string, branch: string): Promise<PullRequest | undefined> {
@@ -144,7 +193,9 @@ export class GitHubSync {
   private timer?: ReturnType<typeof setInterval>;
   private lastRun = new Map<string, number>();
   private inFlight = new Map<string, Promise<void>>();
-  constructor(private readonly board: Board, private readonly dataDir: string, private readonly github: GitHub, private readonly wtBin?: string, private readonly intervalMs = 60_000) {}
+  /** `rework` starts a fix run on a card whose PR failed CI; without it failures are only shown. */
+  constructor(private readonly board: Board, private readonly dataDir: string, private readonly github: GitHub, private readonly wtBin?: string, private readonly intervalMs = 60_000,
+    private readonly rework?: (card: Card) => unknown, private readonly autoApprove?: (card: Card) => Promise<unknown>) {}
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => void this.tick(), 5000);
@@ -185,20 +236,33 @@ export class GitHubSync {
   private async settleCards(repoBoard: RepoBoard, repo: string): Promise<void> {
     const cards = this.board.listPullRequestCards(repoBoard.repo);
     if (!cards.length) return;
-    const recent = await this.github.listPullRequests(repo);
+    // The batched list is only a shortcut. When GitHub fails it (an HTTP 504 on a busy repo), each card is
+    // looked up on its own, so one slow query does not stop every card from linking or settling.
+    let recent: PullRequest[] | undefined;
+    try { recent = await this.github.listPullRequests(repo); }
+    catch (error) { console.error(`GitHub sync for ${repoBoard.repo}: gh pr list failed, checking each card on its own: ${error instanceof Error ? error.message : String(error)}`); }
     for (const card of cards) {
       try {
         let pr = await linkedPullRequest(this.github, repo, card, recent);
         if (pr?.state === "OPEN" && !pr.statusCheckRollup) pr = { ...pr, statusCheckRollup: await this.github.checks(prRepo(card, repo), pr.number) };
-        if (pr) await this.settle(repoBoard, card, pr);
+        if (pr) await this.settle(repoBoard, card, pr, prRepo(card, repo));
       } catch (error) {
         this.board.recordPullRequestError(card.id, `Could not check the pull request: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
-  private async settle(repoBoard: RepoBoard, card: Card, pr: PullRequest): Promise<void> {
+  private async settle(repoBoard: RepoBoard, card: Card, pr: PullRequest, repo: string): Promise<void> {
     const checks = checksState(pr);
-    if (pr.state === "OPEN") { this.board.recordPullRequest(card.id, { ...pr, checks }); return; }
+    if (pr.state === "OPEN") {
+      if (await this.pushCiFix(card, pr)) return;
+      const ci = await this.sendBackFailingCi(card, pr, repo);
+      this.board.recordPullRequest(card.id, { ...pr, checks, error: ci.error, ciPending: ci.pending || !!ci.rework });
+      if (ci.rework) {
+        try { await ci.rework(); }
+        catch (error) { this.board.recordPullRequestError(card.id, `CI failed, and Bakery could not start a fix run yet: ${error instanceof Error ? error.message : String(error)}. It retries on the next sync, and the failures go to whichever run starts next.`); }
+      }
+      return;
+    }
     if (pr.state === "CLOSED") {
       this.board.recordPullRequest(card.id, { ...pr, checks });
       this.board.closePullRequestUnmerged(card.id, `Pull request #${pr.number} was closed without merging. Reopen it on GitHub, or run the card again and approve to open a new one.`);
@@ -214,6 +278,74 @@ export class GitHubSync {
     this.board.recordPullRequest(card.id, { ...pr, checks });
     this.board.recordPullRequestMerge(card.id, pr.headRefOid || merge, merge);
     await this.removeWorktree(repoBoard.repo, card);
+  }
+  /**
+   * A PR whose checks failed goes back to the agent with the failures, so it returns to Review only once it has a
+   * fix for CI. Each head commit is sent back once, and only when it is what the card worktree holds: newer local
+   * work, uncommitted changes, or someone else's push mean a person is already handling it. The fix still needs
+   * Approve to reach the PR. After `maxCiReworks` rounds the card stays in Review with the reason.
+   */
+  private async sendBackFailingCi(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown; pending?: boolean }> {
+    const head = pr.headRefOid, failures = fixableFailures(pr);
+    if (!this.rework || card.prOverrideUrl || !head) return {};
+    // CI is re-running or went green (a label added, say) before the fix run started: those failures are stale.
+    if (!failures.length) { this.board.dropCiFeedback(card.id); return {}; }
+    const limit = `CI is failing after ${maxCiReworks} automatic fix runs. Fix it in the card worktree and run again, or push to the PR yourself.`;
+    if (card.ciReworkSha === head) {
+      // Sent back, but the fix run could not start (the board was at its run limit, say): try again.
+      if (this.board.getCiFeedback(card.id)) return this.startRework(card);
+      return card.ciReworks >= maxCiReworks ? { error: limit } : {};
+    }
+    // Wait for checks still running, so the agent sees every failure at once, but not forever: a check that never
+    // starts (a merge-queue-only check, say) must not hold back a failure that finished 10 minutes ago.
+    const running = latestChecks(pr).some(check => unfinished.includes(outcome(check)));
+    const settledFor = Date.now() - Math.max(...failures.map(check => Date.parse(check.completedAt ?? "") || 0));
+    if (running && settledFor < 10 * 60_000) return { pending: true };
+    const worktree = join(this.dataDir, "worktrees", card.id);
+    if (!existsSync(worktree)) return {};
+    try {
+      if (await git(worktree, "rev-parse", "HEAD") !== head) return {};
+      if (await git(worktree, "status", "--porcelain")) return {};
+    } catch { return {}; }
+    if (card.ciReworks >= maxCiReworks) { this.board.markCiHandled(card.id, head); return { error: limit }; }
+    const sections: string[] = [];
+    for (const check of failures.slice(0, 8)) {
+      const jobId = actionsJobId(check);
+      let log = "";
+      if (jobId) {
+        try { log = trimFailedLog(await this.github.failedLog(repo, jobId)); }
+        catch (error) { log = `(log unavailable: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)})`; }
+      }
+      sections.push(`### ${checkName(check) || "check"}: ${outcome(check).toLowerCase()}\n${check.detailsUrl || check.targetUrl || ""}${log ? `\n\n\`\`\`\n${log}\n\`\`\`` : ""}`);
+    }
+    this.board.recordCiFailure(card.id, head, sections.join("\n\n"));
+    return this.startRework(card);
+  }
+  /**
+   * A CI fix run that reached Review is pushed to the PR without waiting for Approve: the operator chose to let
+   * CI-only rounds run unattended. It still stops for review comments, and the PR still needs its merge review.
+   * Returns true when it pushed.
+   */
+  private async pushCiFix(card: Card, pr: PullRequest): Promise<boolean> {
+    const run = this.board.listRuns(card.id)[0];
+    if (!this.autoApprove || card.prOverrideUrl || card.status !== "review" || run?.status !== "review" || !run.ciFix) return false;
+    if (this.board.hasRequestedChanges(card.id, run.id) || this.board.hasDraftReviewComments(card.id, run.id) || this.board.getApproval(card.id)) return false;
+    const worktree = join(this.dataDir, "worktrees", card.id);
+    try {
+      // Already pushed, or the fix run changed nothing: nothing to send.
+      if (await git(worktree, "rev-parse", "HEAD") === pr.headRefOid && !(await git(worktree, "status", "--porcelain"))) return false;
+    } catch { return false; }
+    try {
+      await this.autoApprove(card);
+      return true;
+    } catch (error) {
+      this.board.recordPullRequestError(card.id, `Bakery could not push the CI fix: ${error instanceof Error ? error.message : String(error)}. Review it and Approve to push it yourself.`);
+      return true;
+    }
+  }
+  private startRework(card: Card): { rework: () => unknown } {
+    const rework = this.rework!;
+    return { rework: () => rework(this.board.getCard(card.id)!) };
   }
   /**
    * Removes a Done card's worktree and branch. A squash merge leaves the branch unmerged by Git ancestry, so

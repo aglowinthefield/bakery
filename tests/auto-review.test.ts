@@ -39,6 +39,23 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
   return { dir, repo, data, board, repoBoard, auto, reviewedCard, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
+test("a Review card is the agent's turn until its auto-review finishes, then yours if it was not merged", async () => {
+  const item = fixture('{"verdict":"needs_human","reason":"No regression test"}');
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const { card } = item.reviewedCard();
+    assert.equal(card.reviewWait, "agent_review", "queued for the agent before the tick claims it");
+    assert.deepEqual(item.board.cardCounts()[item.repo], { reviewWaiting: 1 });
+    await item.auto.tick();
+    assert.equal(item.board.getCard(card.id)!.reviewWait, null);
+    assert.deepEqual(item.board.cardCounts()[item.repo], { review: 1 });
+    item.board.setAutoReview(item.repoBoard.id, false, "");
+    const manual = item.reviewedCard().card;
+    assert.equal(manual.reviewWait, null, "without auto-review every Review card is yours");
+  } finally { item.close(); }
+});
+
 test("strict agent verdict rejects missing settlement, invalid JSON, and ambiguous formats", () => {
   assert.deepEqual(reviewerVerdict(settle('{"verdict":"approve","reason":"Looks correct"}')), { verdict: "approve", reason: "Looks correct" });
   assert.throws(() => reviewerVerdict(settle('```json\n{"verdict":"approve","reason":"fine"}\n```')), /not a JSON object: "```json/);
