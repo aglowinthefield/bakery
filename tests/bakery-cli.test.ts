@@ -50,6 +50,17 @@ async function fixture(boards: object[] = [board]) {
     ];
     else if (path === `/api/boards/${board.id}/cards/card-one/auto-review`) data = [{ runId: "run-two", state: "needs_human", details: "Verification failed", agent: "", inputTokens: 800, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0.08 }];
     else if (/^\/api\/boards\/board-one\/cards\/card-done\/(runs|auto-review)$/.test(path)) data = [];
+    else if (path === `/api/boards/${board.id}/cards/card-one/dependencies` && req.method === "GET") data = {
+      dependsOn: [{ id: "card-done", title: "Finished", status: "done" }, { id: "card-ready", title: "Not yet", status: "ready" }],
+      dependents: [{ id: "card-later", title: "Follow-up", status: "triage" }],
+    };
+    else if (path === `/api/boards/${board.id}/cards/card-done/dependencies`) data = { dependsOn: [], dependents: [] };
+    else if (path === `/api/boards/${board.id}/cards/card-one/dependencies` && req.method === "POST") {
+      const other = (input as { dependsOn: string }).dependsOn;
+      if (other === "card-one") { res.writeHead(400); res.end(JSON.stringify({ error: "A card cannot depend on itself" })); return; }
+      data = { ...cards[0], dependsOn: [other], blocked: true };
+    }
+    else if (/^\/api\/boards\/board-one\/cards\/card-one\/dependencies\/[\w-]+$/.test(path) && req.method === "DELETE") data = { ...cards[0], dependsOn: [], blocked: false };
     else if (path === `/api/boards/${board.id}/conflicts`) data = [{ cardId: "card-one", details: "merge conflict" }];
     else if (path === `/api/boards/${board.id}/settings` && req.method === "PATCH") data = { ...board, ...(input as object) };
     else if (path === `/api/boards/${board.id}/auto-pickup/reset-limit` && req.method === "POST") data = { ...board, autoPickupStarts: 0, autoPickupNextAt: null };
@@ -222,6 +233,7 @@ test("show prints the card, its attempts and the latest auto-review verdict", as
     assert.match(shown.stdout, /^repo\t\/tmp\/bakery-project$/m);
     assert.match(shown.stdout, /^Line one\nLine two$/m);
     assert.match(shown.stdout, /^#2\treview\tpi\/claude$/m);
+    assert.match(shown.stdout, /^depends on\tcard-done\tdone\tFinished\ndepends on\tcard-ready\tready\tNot yet\ndependent\tcard-later\ttriage\tFollow-up$/m);
     assert.match(shown.stdout, /^#1\tfailed\t-\tPi exited with code 1$/m);
     assert.match(shown.stdout, /^auto-review\tneeds_human\tVerification failed$/m);
     const json = JSON.parse((await f.run("show", "card-one", "--json")).stdout);
@@ -231,6 +243,7 @@ test("show prints the card, its attempts and the latest auto-review verdict", as
     const unstarted = (await f.run("show", "card-done")).stdout;
     assert.match(unstarted, /^\(no description\)$/m);
     assert.match(unstarted, /^attempts\t0\nauto-review\tnone$/m);
+    assert.match(unstarted, /^depends on\tnone\ndependent\tnone$/m);
     const missing = await f.run("show", "card-gone");
     assert.notEqual(missing.code, 0);
     assert.match(missing.stderr, /Card not found on this board: card-gone/);
@@ -294,5 +307,31 @@ test("stats prints per-lane counts and pickup state for the selected board", asy
     assert.equal(json.counts.ready, 0);
     assert.equal(json.pickup.autoPickupEnabled, true);
     assert.equal(f.requests.filter(r => r.path !== "/api/boards").length, 0, "stats uses only the boards list");
+  } finally { await f.close(); }
+});
+
+test("create --after and depend/undepend manage card dependencies through the HTTP API", async () => {
+  const f = await fixture();
+  try {
+    const created = await f.run("create", "--title", "Follow-up", "--after", "card-one", "--after", "card-done");
+    assert.equal(created.code, 0, created.stderr);
+    assert.deepEqual(f.requests.at(-1), { method: "POST", path: `/api/boards/${board.id}/cards`, input: { title: "Follow-up", body: "", dependsOn: ["card-one", "card-done"] } });
+    assert.match(created.stdout, /after:card-one,card-done/);
+    const depended = await f.run("depend", "card-one", "--on", "card-done");
+    assert.equal(depended.code, 0, depended.stderr);
+    assert.deepEqual(f.requests.at(-1), { method: "POST", path: `/api/boards/${board.id}/cards/card-one/dependencies`, input: { dependsOn: "card-done" } });
+    assert.match(depended.stdout, /^card-one\ttriage\tMake an improvement\tdepends on:card-done\tblocked$/m);
+    const undepended = await f.run("undepend", "card-one", "--on", "card-done");
+    assert.equal(undepended.code, 0, undepended.stderr);
+    assert.deepEqual(f.requests.at(-1), { method: "DELETE", path: `/api/boards/${board.id}/cards/card-one/dependencies/card-done`, input: undefined });
+    assert.match(undepended.stdout, /depends on:none$/m);
+    const self = await f.run("depend", "card-one", "--on", "card-one");
+    assert.notEqual(self.code, 0);
+    assert.match(self.stderr, /cannot depend on itself/);
+    assert.match((await f.run("depend", "card-one")).stderr, /depend requires --on CARD_ID/);
+    assert.match((await f.run("cards", "--after", "card-one")).stderr, /--after is only valid with create/);
+    assert.match((await f.run("create", "--title", "x", "--on", "card-one")).stderr, /--on is only valid with depend or undepend/);
+    assert.match((await f.run("create", "--title", "x", "--after", "../evil")).stderr, /card ID/);
+    assert.match((await f.run("--help")).stdout, /--after CARD_ID/);
   } finally { await f.close(); }
 });

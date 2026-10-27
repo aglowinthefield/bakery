@@ -21,11 +21,15 @@ import {
   type ReviewComment,
   type ReviewDiff,
   type Run,
+  type Status,
 } from "./model.js";
 
 type Props = {
   boardId: string;
   card: Card | undefined;
+  /** The cards on this card's board that the page has loaded, for naming and choosing dependencies. */
+  boardCards: Card[];
+  onOpenCard: (id: string) => void;
   settings: BakerySettings | null;
   conflict: MergeConflict | undefined;
   onClose: () => void;
@@ -40,6 +44,8 @@ type Props = {
 export function CardDetails({
   boardId,
   card,
+  boardCards,
+  onOpenCard,
   settings,
   conflict: mergeConflict,
   onClose,
@@ -306,6 +312,22 @@ export function CardDetails({
               ))}
             </select>
           </label>
+        )}
+        {card && (
+          <Dependencies
+            card={card}
+            boardCards={boardCards}
+            busy={busy}
+            onOpenCard={onOpenCard}
+            onChange={(path, method, input) =>
+              void action(() =>
+                api<Card>(`/boards/${boardId}/cards/${card.id}/${path}`, {
+                  method,
+                  body: input && JSON.stringify(input),
+                }),
+              )
+            }
+          />
         )}
         {card && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -782,5 +804,122 @@ export function CardDetails({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+const statusLabel = (status: Status) =>
+  status === "done" || status === "archived" ? "finished" : status;
+/** Lists the cards this one waits on (each opens that card), lets you add or remove one, and names the cards waiting on it. */
+function Dependencies({
+  card,
+  boardCards,
+  busy,
+  onOpenCard,
+  onChange,
+}: {
+  card: Card;
+  boardCards: Card[];
+  busy: boolean;
+  onOpenCard: (id: string) => void;
+  onChange: (
+    path: string,
+    method: "POST" | "DELETE",
+    input?: { dependsOn: string },
+  ) => void;
+}) {
+  const dependsOn = card.dependsOn ?? [];
+  // Today leaves archived cards out of its list; a dependency it cannot name is one of those.
+  const parents = dependsOn.map(
+    (id) =>
+      boardCards.find((item) => item.id === id) ?? {
+        id,
+        title: id,
+        status: "archived" as const,
+      },
+  );
+  const dependents = boardCards.filter((item) =>
+    item.dependsOn?.includes(card.id),
+  );
+  const choices = boardCards.filter(
+    (item) =>
+      item.id !== card.id &&
+      item.status !== "archived" &&
+      !dependsOn.includes(item.id),
+  );
+  const link = (item: { id: string; title: string; status: Status }) => (
+    <button
+      type="button"
+      className="truncate text-left text-foreground underline-offset-2 hover:text-primary hover:underline"
+      onClick={() => onOpenCard(item.id)}
+    >
+      {item.title}
+    </button>
+  );
+  return (
+    <section
+      aria-label="Dependencies"
+      className="mt-2 space-y-1 text-xs text-muted-foreground"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          {card.blocked
+            ? "Waits until these are Done:"
+            : dependsOn.length
+              ? "Depends on:"
+              : "No dependencies"}
+        </span>
+        <select
+          aria-label="Add dependency"
+          value=""
+          disabled={busy || !choices.length}
+          onChange={(event) =>
+            event.target.value &&
+            onChange("dependencies", "POST", { dependsOn: event.target.value })
+          }
+          className="ml-auto max-w-56 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+        >
+          <option value="">Add dependency…</option>
+          {choices.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.title}
+            </option>
+          ))}
+        </select>
+      </div>
+      {parents.length > 0 && (
+        <ul className="space-y-1">
+          {parents.map((item) => (
+            <li
+              key={item.id}
+              data-testid="dependency"
+              className="flex items-center gap-2"
+            >
+              {link(item)}
+              <span className="font-mono text-[10px] uppercase">
+                {statusLabel(item.status)}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="ml-auto"
+                aria-label={`Remove dependency on ${item.title}`}
+                disabled={busy}
+                onClick={() => onChange(`dependencies/${item.id}`, "DELETE")}
+              >
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {dependents.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span>Needed by:</span>
+          {dependents.map((item) => (
+            <span key={item.id}>{link(item)}</span>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

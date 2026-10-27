@@ -106,7 +106,22 @@ export type Card = {
   runAgent: string;
   reviewAgent: string;
   usageIncomplete?: number;
+  /** Cards on the same board that must be Done or archived before this one starts. */
+  dependsOn?: string[];
+  /** True while any card in dependsOn is not Done or archived. */
+  blocked?: boolean;
 } & UsageFields;
+const finished = (status: Status) => status === "done" || status === "archived";
+/**
+ * The cards this card still waits on, from the cards the page already has. Only Today's list
+ * leaves cards out, and only archived (finished) ones, so a missing dependency is skipped.
+ */
+export const waitingOn = (card: Card, cards: Card[]) =>
+  card.blocked
+    ? (card.dependsOn ?? [])
+        .map((id) => cards.find((item) => item.id === id))
+        .filter((item): item is Card => !!item && !finished(item.status))
+    : [];
 export type Run = {
   id: string;
   attempt: number;

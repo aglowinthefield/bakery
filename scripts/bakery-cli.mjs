@@ -7,8 +7,10 @@ const usage = `bakery-cli — local Bakery API client
 Usage: bakery-cli add TITLE... [--body BODY] [--priority low|normal|high|urgent] [--board ID|PATH] [--json]
        bakery-cli boards [--json]
        bakery-cli cards [--board ID|PATH] [--json]
-       bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority low|normal|high|urgent] [--board ID|PATH] [--json]
+       bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority low|normal|high|urgent] [--after CARD_ID]... [--board ID|PATH] [--json]
        bakery-cli show CARD_ID [--board ID|PATH] [--json]
+       bakery-cli depend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
+       bakery-cli undepend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
        bakery-cli edit CARD_ID [--title TITLE] [--body BODY] [--board ID|PATH] [--json]
        bakery-cli archive CARD_ID... [--board ID|PATH] [--json]
        bakery-cli restore CARD_ID [--board ID|PATH] [--json]
@@ -28,20 +30,30 @@ including agent reviews; runs --json prints { cardId, total, runs, reviews }.
 create --key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status,
 it is printed instead of creating another.
 start runs Pi on Ready, Review or Failed cards (a retry reuses the card's worktree and Pi session).
-show prints a card with its attempts and latest auto-review; edit changes its title and/or description.
+create --after CARD_ID (repeatable) makes the new card wait until each named card is Done or archived.
+depend CARD_ID --on OTHER adds that dependency (repeat --on for several); undepend removes it. A card
+waiting on an unfinished dependency is not picked up, and start refuses it until its dependencies are Done.
+show prints a card with its dependencies, dependents, attempts and latest auto-review; edit changes its
+title and/or description.
 archive accepts only Done cards and archives all or none; restore moves one archived card back to Done.
 stats prints card counts per lane and the pickup state.
 --yes is required before start, enabling or resetting pickup, or moving a card to Ready on a pickup-enabled
 board; each can start paid Pi runs. No command approves a merge.`;
 
 function options(argv) {
-  const result = { positionals: [], json: false, yes: false };
+  const result = { positionals: [], json: false, yes: false, after: [], on: [] };
+  // These may repeat; each occurrence adds one card ID.
+  const lists = new Set(["after", "on"]);
   const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
     else if (arg === "--help" || arg === "-h") result.help = true;
-    else if (arg.startsWith("--") && values.has(arg.slice(2))) {
+    else if (arg.startsWith("--") && lists.has(arg.slice(2))) {
+      const value = argv[i + 1];
+      if (!value || value.startsWith("--")) throw new Error(`Supply a card ID after ${arg}`);
+      result[arg.slice(2)].push(argv[++i]);
+    } else if (arg.startsWith("--") && values.has(arg.slice(2))) {
       const key = arg.slice(2);
       // Only --body may be empty, so edit can clear a description.
       const value = argv[i + 1];
@@ -130,7 +142,7 @@ async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
-  const expected = { boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, stats: 0 };
+  const expected = { boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, stats: 0, depend: 1, undepend: 1 };
   const variadic = ["start", "archive", "add"];
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
   if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
@@ -140,7 +152,11 @@ async function main() {
   if (opts.priority !== undefined && !Object.hasOwn(priorities, opts.priority)) throw new Error("Priority must be low, normal, high, or urgent");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
-  if (["show", "edit", "archive", "restore"].includes(command)) args.forEach(cardId);
+  if (["show", "edit", "archive", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
+  if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
+  if (opts.on.length && command !== "depend" && command !== "undepend") throw new Error("--on is only valid with depend or undepend");
+  if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
+  [...opts.after, ...opts.on].forEach(cardId);
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
   if (opts.yes && !(command === "ready" || command === "pickup" || command === "start")) throw new Error("--yes is only valid with ready, start or pickup");
   if (command === "start") {
@@ -166,8 +182,18 @@ async function main() {
     const input = { title: opts.title, body: opts.body ?? "" };
     if (opts.priority !== undefined) input.priority = opts.priority;
     if (opts.key !== undefined) input.idempotencyKey = opts.key;
+    if (opts.after.length) input.dependsOn = opts.after;
     const card = await request(origin, `${path}/cards`, "POST", input);
-    print(card, opts.json, [`${card.id}\t${card.status}\tpriority:${priorityName(card.priority)}\t${card.title}`]);
+    print(card, opts.json, [`${card.id}\t${card.status}\tpriority:${priorityName(card.priority)}\t${card.title}${card.dependsOn?.length ? `\tafter:${card.dependsOn.join(",")}` : ""}`]);
+  } else if (command === "depend" || command === "undepend") {
+    const id = args[0];
+    let card;
+    for (const other of opts.on) {
+      card = command === "depend"
+        ? await request(origin, `${path}/cards/${id}/dependencies`, "POST", { dependsOn: other })
+        : await request(origin, `${path}/cards/${id}/dependencies/${other}`, "DELETE");
+    }
+    print(card, opts.json, [`${cardLine(card)}\tdepends on:${card.dependsOn?.length ? card.dependsOn.join(",") : "none"}${card.blocked ? "\tblocked" : ""}`]);
   } else if (command === "ready" || command === "triage") {
     if (command === "ready" && board.autoPickupEnabled && !opts.yes) throw new Error("Auto pickup is enabled: Ready may start paid Pi immediately. Repeat with --yes to confirm.");
     const card = await request(origin, `${path}/cards/${cardId(args[0])}/status`, "POST", { status: command });
@@ -196,10 +222,13 @@ async function main() {
     const card = await findCard(origin, path, id);
     const runs = await request(origin, `${path}/cards/${id}/runs`);
     const reviews = await request(origin, `${path}/cards/${id}/auto-review`);
+    const dependencies = await request(origin, `${path}/cards/${id}/dependencies`);
     const review = reviews[0] ?? null;
-    print({ card, runs, review }, opts.json, [
+    const refs = (label, items) => items.length ? items.map(item => `${label}\t${item.id}\t${item.status}\t${item.title}`) : [`${label}\tnone`];
+    print({ card, runs, review, dependencies }, opts.json, [
       `${card.title}`,
-      `id\t${card.id}`, `status\t${card.status}`, `repo\t${card.repo ?? board.repo}`,
+      `id\t${card.id}`, `status\t${card.status}${card.blocked ? " (blocked: waiting on dependencies)" : ""}`, `repo\t${card.repo ?? board.repo}`,
+      ...refs("depends on", dependencies.dependsOn), ...refs("dependent", dependencies.dependents),
       "", ...(card.body?.trim() ? card.body.split("\n") : ["(no description)"]), "",
       `attempts\t${runs.length}`,
       ...runs.map(run => `#${run.attempt}\t${run.status}\t${run.agent || "-"}${run.error ? `\t${run.error}` : ""}`),
