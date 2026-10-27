@@ -1681,9 +1681,6 @@ export function App() {
                             <>
                               <div className="mb-4 flex items-start justify-between gap-2">
                                 <span className="flex flex-wrap items-center gap-1.5">
-                                  <span className="rounded bg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[.1em] text-primary">
-                                    Manual
-                                  </span>
                                   {(item.priority ?? 0) !== 0 && (
                                     <PriorityBadge priority={item.priority} />
                                   )}
