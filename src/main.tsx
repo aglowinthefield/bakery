@@ -1098,7 +1098,7 @@ function App() {
           </span>
           <span>
             <strong className="mr-1 font-mono text-foreground">
-              {cards.filter((c) => c.status === "review").length}
+              {cards.filter(needsYourReview).length}
             </strong>{" "}
             awaiting review
           </span>
