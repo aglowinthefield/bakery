@@ -101,6 +101,7 @@ stateDiagram-v2
 - **Reopen** returns a Done card to Review when its work was left unmerged in the worktree. If the card was already merged, it returns to Ready.
 - **Restore to Done** brings an archived card back. **Archive** only changes the lane. Runs, worktrees, branches, and history stay.
 - Only Done cards can be archived. To archive several at once, use **Select** in the Done lane.
+- **Drag a card** to move it to a lane its buttons could also reach: Triage ↔ Ready, an unrun card to Done, Ready or Failed to Running (this starts Pi and asks first if run confirmations are on), Done ↔ Archive. While you drag, valid lanes are outlined and the others fade. Review, Interrupted, and Reopen still go through the card's buttons, since they need a diff review or a worktree check.
 
 ## Dependencies
 
@@ -152,9 +153,15 @@ flowchart TD
 
 ## GitHub pull request mode
 
-By default a board integrates locally: Approve merges into local `main`. A board can instead integrate through GitHub pull requests, where a card is Done only when its PR has merged on GitHub and the merge commit is on `origin/main`.
+A board integrates either locally, where Approve merges into local `main`, or through GitHub pull requests, where a card is Done only when its PR has merged on GitHub and the merge commit is on `origin/main`.
 
-To turn it on, give the board a GitHub remote link (`https://github.com/OWNER/REPO`), then pick **GitHub pull requests** under Integration in the board's settings, or run `bakery-cli board --integration github-pr`. The repository's `origin` must be that GitHub repository, and its default branch must be `main`.
+The default depends on the repository. When you give a board a GitHub remote link (`https://github.com/OWNER/REPO`), Bakery asks GitHub whether `main` accepts direct pushes: `gh api repos/OWNER/REPO/rules/branches/main` for rulesets, then `gh api repos/OWNER/REPO/branches/main/protection` for branch protection. If a ruleset requires a pull request or a merge queue, or branch protection requires pull request reviews, the board switches to **GitHub pull requests**. Otherwise it stays **Local merge**. The board's settings show what Bakery found.
+
+- **Your choice wins.** Once you pick a mode under Integration in the board's settings, or with `bakery-cli board --integration local|github-pr`, Bakery never changes it.
+- **Protected main on a local board.** If a board is on Local merge, `main` only accepts pull requests, and you haven't chosen Local yourself, Approve refuses and points you to the Integration setting. Merging locally would leave local `main` ahead of GitHub with no way to push. Pick **GitHub pull requests**, or click **Keep Local merge** (or run `bakery-cli board --integration local`) to merge locally anyway. Boards that already had a GitHub remote are checked once when the server starts. That check only records protection; it doesn't change their mode.
+- **When Bakery can't tell.** If `gh` is missing, isn't signed in, or can't read the rules (branch protection needs admin access unless a ruleset already answered), the mode is left as it was, local Approve works as before, and the board's settings say why. The check runs again the next time the server starts or the remote changes.
+
+To switch by hand, pick **GitHub pull requests** under Integration in the board's settings, or run `bakery-cli board --integration github-pr`. Either way, the repository's `origin` must be that GitHub repository, and its default branch must be `main`.
 
 [`gh`](https://cli.github.com) is required. If `gh` is missing or `gh auth status` fails, the board shows the error and Bakery does nothing on that board: no PR polling, no fetch, no automatic pickup. It never falls back to local detection. Set `BAKERY_GH_BIN` to use a different `gh` binary.
 

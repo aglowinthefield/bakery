@@ -22,6 +22,12 @@ export type Board = {
   integration?: "local" | "github-pr";
   /** Why GitHub sync last failed; auto pickup waits while it is set. */
   integrationError?: string;
+  /** The operator picked the integration mode; detection leaves it alone. */
+  integrationChosen?: boolean;
+  /** Whether GitHub main only accepts pull requests; null until Bakery could check. */
+  githubMainProtected?: boolean | null;
+  /** What the GitHub main check found, or why it could not run. */
+  integrationNote?: string;
   autoCollapseEmptySwimlanes: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;
@@ -177,6 +183,28 @@ export function cardActivity(
   if (card.status === "review" && card.reviewWait)
     return card.reviewWait === "agent_review" ? "working" : "waiting";
   return null;
+}
+/**
+ * Lanes a board card can be dragged to. Mirrors the card's own buttons: Move to Ready or Triage,
+ * Mark done (never-run cards only), Start or Run again, Archive, and Restore to Done. Moves that need
+ * a diff review, an approval, or a worktree check (Review, Interrupted, Reopen) stay as buttons.
+ */
+export function dropTargets(card: Card): Status[] {
+  const unrun = !card.attempts;
+  switch (card.status) {
+    case "triage":
+      return unrun ? ["ready", "done"] : ["ready"];
+    case "ready":
+      return unrun ? ["triage", "running", "done"] : ["running"];
+    case "failed":
+      return ["running"];
+    case "done":
+      return ["archived"];
+    case "archived":
+      return ["done"];
+    default:
+      return [];
+  }
 }
 const finished = (status: Status) => status === "done" || status === "archived";
 /**

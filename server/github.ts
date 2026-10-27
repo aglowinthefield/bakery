@@ -152,6 +152,22 @@ export class GitHub {
   async view(repo: string, number: number): Promise<PullRequest> {
     return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", prFields])) as PullRequest;
   }
+  /**
+   * Why `main` on GitHub accepts changes only through pull requests, or null when direct pushes are allowed.
+   * Checks the branch rules (rulesets) and then classic branch protection. Throws when GitHub cannot say.
+   */
+  async mainPullRequestRule(repo: string): Promise<string | null> {
+    const rules = JSON.parse(await this.gh(["api", `repos/${repo}/rules/branches/main`])) as { type?: string }[];
+    const rule = rules.find(item => item.type === "pull_request" || item.type === "merge_queue");
+    if (rule) return `a ruleset requires ${rule.type === "merge_queue" ? "a merge queue" : "a pull request"}`;
+    let protection: { required_pull_request_reviews?: unknown };
+    try { protection = JSON.parse(await this.gh(["api", `repos/${repo}/branches/main/protection`])); }
+    catch (error) {
+      if (/Branch not protected/i.test((error as Error).message)) return null;
+      throw new Error(`could not read branch protection: ${(error as Error).message}`);
+    }
+    return protection.required_pull_request_reviews ? "branch protection requires a pull request" : null;
+  }
   /** Posts a comment on a PR. */
   async comment(repo: string, number: number, body: string): Promise<void> {
     await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
@@ -180,6 +196,33 @@ export function boardGithubRepo(repoBoard: Pick<RepoBoard, "remoteUrl">): string
   const repo = githubRepo(repoBoard.remoteUrl);
   if (!repo) throw new Error("github-pr integration requires the board's remote to be a GitHub repository link (https://github.com/OWNER/REPO)");
   return repo;
+}
+
+/**
+ * Checks whether the board's GitHub `main` only accepts pull requests and records it, with a note for board settings.
+ * With `switchMode` (a remote was just set), a protected main moves the board to github-pr unless the operator chose
+ * its mode. When `gh` is missing, signed out, or GitHub cannot say, the mode is left alone and the note says why.
+ */
+export async function detectGithubIntegration(board: Board, boardId: string, github: GitHub, switchMode: boolean): Promise<RepoBoard | undefined> {
+  const before = board.getBoard(boardId);
+  const repo = before && githubRepo(before.remoteUrl);
+  if (!before || !repo) return before;
+  let rule: string | null;
+  try {
+    await github.check();
+    rule = await github.mainPullRequestRule(repo);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return board.recordGithubProtection(boardId, before.remoteUrl, null,
+      `Could not check whether main on ${repo} requires pull requests, so Integration was left as is: ${message}`, false);
+  }
+  if (!rule) return board.recordGithubProtection(boardId, before.remoteUrl, false, `main on ${repo} accepts direct pushes, so Local merge works.`, switchMode);
+  const after = board.recordGithubProtection(boardId, before.remoteUrl, true, `main on ${repo} only accepts pull requests (${rule}).`, switchMode);
+  if (!after || after.remoteUrl !== before.remoteUrl) return after;
+  const outcome = after.integration === "github-pr"
+    ? (before.integration === "local" ? " Bakery switched Integration to GitHub pull requests." : "")
+    : after.integrationChosen ? " Integration stays Local merge because you chose it; Approve merges into local main only." : " Choose an Integration mode: Approve refuses to merge locally until you do.";
+  return board.recordGithubProtection(boardId, after.remoteUrl, true, `main on ${repo} only accepts pull requests (${rule}).${outcome}`, false);
 }
 
 /** The repository a card's PR lives in: its override link's repository, else the board's. */

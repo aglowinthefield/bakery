@@ -7,6 +7,7 @@ import { Board, type Card } from "./board.js";
 import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
+import { githubRepo } from "./github-url.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false): string {
@@ -338,6 +339,9 @@ export class Integration {
 
   approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
+    const repoBoard = this.board.boardForRepo(card.repo);
+    if (repoBoard?.githubMainProtected && !repoBoard.integrationChosen)
+      throw new Error(`main on ${githubRepo(repoBoard.remoteUrl) ?? repoBoard.remoteUrl} only accepts pull requests, so merging into local main would leave it ahead of GitHub. Switch Integration to GitHub pull requests in the board's settings, or choose Local merge there to merge locally anyway`);
     const { repo, worktree, run } = this.location(card);
     const job = this.board.getAutoReviewJob(run.id);
     if (job?.state === "running" && origin !== "auto") throw new Error("Agent review is in progress; wait for its result");

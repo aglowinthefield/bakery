@@ -76,6 +76,7 @@ import {
   priorityLabel,
   cardActivity,
   countKey,
+  dropTargets,
   needsYourReview,
   reviewWaitLabels,
   type BakerySettings,
@@ -518,6 +519,12 @@ function App() {
   const [error, setError] = useState("");
   const [mergeConflicts, setMergeConflicts] = useState<MergeConflict[]>([]);
   const [busy, setBusy] = useState(false);
+  // The card being dragged and the lanes it may drop on; see dropTargets.
+  const [dragging, setDragging] = useState<{
+    card: Card;
+    targets: Status[];
+  } | null>(null);
+  const [dropLane, setDropLane] = useState<Status | null>(null);
   const [selectingDone, setSelectingDone] = useState(false);
   const [doneSelection, setDoneSelection] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -671,10 +678,23 @@ function App() {
   useEffect(() => {
     if (reviewQueue && card && card.status !== "review") advanceQueue();
   }, [reviewQueue, card?.id, card?.status]);
-  const savedBudget = currentBoard?.pickupCostBudget ?? null;
+  // Auto pickup is configured per repository in its edit dialog. Read the
+  // polled board so start counts and pauses stay current while it is open.
+  const pickupBoard = editingBoard
+    ? (boards.find((item) => item.id === editingBoard.id) ?? editingBoard)
+    : null;
+  const savedBudget = pickupBoard?.pickupCostBudget ?? null;
   useEffect(() => {
     setBudgetDraft(savedBudget === null ? "" : String(savedBudget));
-  }, [boardId, savedBudget]);
+  }, [pickupBoard?.id, savedBudget]);
+  const updateBoard = (updated: Board) => {
+    setBoards((previous) =>
+      previous.map((item) => (item.id === updated.id ? updated : item)),
+    );
+    setEditingBoard((editing) =>
+      editing?.id === updated.id ? updated : editing,
+    );
+  };
   const saveSettings = (patch: Partial<BakerySettings>) => {
     if (!settings) return;
     const previous = settings;
@@ -719,28 +739,25 @@ function App() {
       setBusy(false);
     }
   };
-  const resetPickupLimit = () => {
-    if (!currentBoard || !currentBoard.autoPickupEnabled) return;
+  const resetPickupLimit = (target: Board) => {
+    if (!target.autoPickupEnabled) return;
     if (
       !window.confirm(
-        `Reset the ${currentBoard.pickupDailyLimit}-start rolling limit for ${currentBoard.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs will remain in history.`,
+        `Reset the ${target.pickupDailyLimit}-start rolling limit for ${target.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs will remain in history.`,
       )
     )
       return;
     void action(async () => {
       const updated = await api<Board>(
-        `/boards/${currentBoard.id}/auto-pickup/reset-limit`,
+        `/boards/${target.id}/auto-pickup/reset-limit`,
         { method: "POST" },
       );
-      setBoards((previous) =>
-        previous.map((item) => (item.id === updated.id ? updated : item)),
-      );
+      updateBoard(updated);
     });
   };
   // The budget is optional (blank means off). Raising or clearing a reached budget can start runs at once.
-  const saveCostBudget = (event: FormEvent) => {
+  const saveCostBudget = (event: FormEvent, target: Board) => {
     event.preventDefault();
-    if (!currentBoard) return;
     const text = budgetDraft.trim().replace(/^\$/, "");
     const budget = text ? Number(text) : null;
     if (
@@ -753,26 +770,24 @@ function App() {
       return;
     }
     if (
-      currentBoard.autoPickupEnabled &&
-      currentBoard.autoPickupBudgetReached &&
-      (budget === null || budget > (currentBoard.cost24h ?? 0)) &&
+      target.autoPickupEnabled &&
+      target.autoPickupBudgetReached &&
+      (budget === null || budget > (target.cost24h ?? 0)) &&
       !window.confirm(
-        `${budget === null ? "Turn off" : "Raise"} the daily cost budget for ${currentBoard.repo}? Ready cards may start immediately and spend model tokens.`,
+        `${budget === null ? "Turn off" : "Raise"} the daily cost budget for ${target.repo}? Ready cards may start immediately and spend model tokens.`,
       )
     )
       return;
     void action(async () => {
-      const updated = await api<Board>(`/boards/${currentBoard.id}/settings`, {
+      const updated = await api<Board>(`/boards/${target.id}/settings`, {
         method: "PATCH",
         body: JSON.stringify({
-          autoPickupEnabled: currentBoard.autoPickupEnabled,
-          pickupConcurrency: currentBoard.pickupConcurrency,
+          autoPickupEnabled: target.autoPickupEnabled,
+          pickupConcurrency: target.pickupConcurrency,
           pickupCostBudget: budget,
         }),
       });
-      setBoards((previous) =>
-        previous.map((item) => (item.id === updated.id ? updated : item)),
-      );
+      updateBoard(updated);
     });
   };
   const removeBoard = (item: Board) => {
@@ -832,6 +847,38 @@ function App() {
       setSelectingDone(false);
       setDoneSelection(new Set());
     });
+  };
+  // Each drop calls the same endpoint as the matching button in the card's details.
+  const moveCard = (card: Card, to: Status) => {
+    if (!boardId || !dropTargets(card).includes(to)) return;
+    const path = `/boards/${boardId}/cards`;
+    if (to === "running") {
+      if (
+        settings?.confirmRunStart &&
+        !window.confirm(
+          `Start Pi on "${card.title}"? This run may use paid model tokens and can edit its Git worktree.`,
+        )
+      )
+        return;
+      void action(() => api(`${path}/${card.id}/start`, { method: "POST" }));
+    } else if (to === "archived" || card.status === "archived")
+      void action(() =>
+        api(`${path}/${to === "archived" ? "archive" : "unarchive"}`, {
+          method: "POST",
+          body: JSON.stringify({ cardIds: [card.id] }),
+        }),
+      );
+    else
+      void action(() =>
+        api(`${path}/${card.id}/status`, {
+          method: "POST",
+          body: JSON.stringify({ status: to }),
+        }),
+      );
+  };
+  const endDrag = () => {
+    setDragging(null);
+    setDropLane(null);
   };
   const toggleLane = (status: Status, collapsed: boolean) => {
     if (!boardId) return;
@@ -1184,7 +1231,7 @@ function App() {
               <button
                 className="ml-3 underline underline-offset-2"
                 disabled={busy}
-                onClick={resetPickupLimit}
+                onClick={() => currentBoard && resetPickupLimit(currentBoard)}
               >
                 Reset start limit
               </button>
@@ -1203,7 +1250,8 @@ function App() {
                 hours).
               </strong>{" "}
               Pickup resumes as older spend leaves the 24-hour window, or raise
-              the budget in Settings. Manual starts still work.
+              the budget in this repository's settings. Manual starts still
+              work.
             </div>
           )}
         {currentBoard?.autoPickupError && (
@@ -1292,12 +1340,44 @@ function App() {
                     (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
               const selecting =
                 column.id === "done" && selectingDone && laneCards.length > 0;
+              const droppable = !!dragging?.targets.includes(column.id);
               return (
                 <section
                   key={column.id}
                   aria-label={`${column.label} lane`}
                   data-status={column.id}
-                  className={`${collapsed ? "w-12" : "w-[280px]"} shrink-0`}
+                  data-drop={
+                    dragging
+                      ? droppable
+                        ? dropLane === column.id
+                          ? "over"
+                          : "valid"
+                        : "invalid"
+                      : undefined
+                  }
+                  onDragOver={(event) => {
+                    if (!droppable) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    if (dropLane !== column.id) setDropLane(column.id);
+                  }}
+                  onDragLeave={(event) => {
+                    if (
+                      dropLane === column.id &&
+                      !event.currentTarget.contains(
+                        event.relatedTarget as Node | null,
+                      )
+                    )
+                      setDropLane(null);
+                  }}
+                  onDrop={(event) => {
+                    if (!dragging || !droppable) return;
+                    event.preventDefault();
+                    const { card } = dragging;
+                    endDrag();
+                    moveCard(card, column.id);
+                  }}
+                  className={`${collapsed ? "w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
                   {collapsed ? (
                     <button
@@ -1524,14 +1604,28 @@ function App() {
                               </label>
                             );
                           }
+                          const targets = dropTargets(item);
                           const tile = (
                             <button
                               key={item.id}
                               onClick={() => {
                                 setSelected(item.id);
                               }}
+                              draggable={!busy && targets.length > 0}
+                              onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData(
+                                  "text/plain",
+                                  item.id,
+                                );
+                                setDragging({ card: item, targets });
+                              }}
+                              onDragEnd={endDrag}
                               data-activity={activity ?? undefined}
-                              className={`${cardClass} card-activity border-border/80`}
+                              data-dragging={
+                                dragging?.card.id === item.id || undefined
+                              }
+                              className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50`}
                             >
                               {content}
                             </button>
@@ -1700,202 +1794,10 @@ function App() {
               />
             )}
           </div>
-          <div className="mt-6 border-t border-border pt-5 text-sm">
-            <div className="font-medium">
-              Auto pickup ·{" "}
-              {currentBoard?.repo.split("/").at(-1) ?? "select a repository"}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Automatically start Ready cards in creation order, up to the
-              concurrency limit including manual runs. The configurable rolling
-              start limit and the optional daily cost budget protect against
-              unbounded paid runs. A failed automatic run or interrupted run
-              pauses pickup. Starting Pi may spend model tokens. Turn off pickup
-              to stop new starts; existing runs continue.
-            </p>
-            <label className="mt-4 flex items-center gap-2 text-xs">
-              Concurrent runs{" "}
-              <select
-                aria-label="Auto pickup concurrency"
-                value={currentBoard?.pickupConcurrency ?? 2}
-                disabled={!currentBoard || busy}
-                onChange={(event) => {
-                  if (!currentBoard) return;
-                  const limit = Number(event.target.value);
-                  void action(async () => {
-                    const updated = await api<Board>(
-                      `/boards/${currentBoard.id}/settings`,
-                      {
-                        method: "PATCH",
-                        body: JSON.stringify({
-                          autoPickupEnabled: currentBoard.autoPickupEnabled,
-                          pickupConcurrency: limit,
-                        }),
-                      },
-                    );
-                    setBoards((previous) =>
-                      previous.map((item) =>
-                        item.id === updated.id ? updated : item,
-                      ),
-                    );
-                  });
-                }}
-                className="rounded-md border border-border bg-background px-2 py-1"
-              >
-                {[1, 2, 3, 4].map((limit) => (
-                  <option key={limit} value={limit}>
-                    {limit}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="mt-3 flex items-center gap-2 text-xs">
-              Automatic starts per 24 hours{" "}
-              <select
-                aria-label="Auto pickup daily start limit"
-                value={currentBoard?.pickupDailyLimit ?? 6}
-                disabled={!currentBoard || busy}
-                onChange={(event) => {
-                  if (!currentBoard) return;
-                  const limit = Number(event.target.value);
-                  if (
-                    limit > currentBoard.pickupDailyLimit &&
-                    currentBoard.autoPickupEnabled &&
-                    !window.confirm(
-                      `Raise automatic starts to ${limit} per 24 hours for ${currentBoard.repo}? Ready cards may start immediately and spend model tokens.`,
-                    )
-                  )
-                    return;
-                  void action(async () => {
-                    const updated = await api<Board>(
-                      `/boards/${currentBoard.id}/settings`,
-                      {
-                        method: "PATCH",
-                        body: JSON.stringify({
-                          autoPickupEnabled: currentBoard.autoPickupEnabled,
-                          pickupConcurrency: currentBoard.pickupConcurrency,
-                          pickupDailyLimit: limit,
-                        }),
-                      },
-                    );
-                    setBoards((previous) =>
-                      previous.map((item) =>
-                        item.id === updated.id ? updated : item,
-                      ),
-                    );
-                  });
-                }}
-                className="rounded-md border border-border bg-background px-2 py-1"
-              >
-                {Array.from({ length: 99 }, (_, index) => index + 1).map(
-                  (limit) => (
-                    <option key={limit} value={limit}>
-                      {limit}
-                    </option>
-                  ),
-                )}
-              </select>
-            </label>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {currentBoard?.autoPickupStarts ?? 0} /{" "}
-              {currentBoard?.pickupDailyLimit ?? 6} starts in the rolling day.
-              {currentBoard?.autoPickupNextAt &&
-                ` Next slot around ${date(currentBoard.autoPickupNextAt)}.`}
-            </p>
-            <form
-              className="mt-3 flex flex-wrap items-center gap-2 text-xs"
-              onSubmit={saveCostBudget}
-            >
-              <label className="flex items-center gap-2">
-                Daily cost budget (USD){" "}
-                <input
-                  aria-label="Auto pickup daily cost budget"
-                  inputMode="decimal"
-                  placeholder="Off"
-                  value={budgetDraft}
-                  disabled={!currentBoard || busy}
-                  onChange={(event) => setBudgetDraft(event.target.value)}
-                  className="w-24 rounded-md border border-border bg-background px-2 py-1"
-                />
-              </label>
-              <Button
-                type="submit"
-                variant="outline"
-                size="sm"
-                disabled={
-                  !currentBoard ||
-                  busy ||
-                  budgetDraft.trim() ===
-                    (savedBudget === null ? "" : String(savedBudget))
-                }
-              >
-                Save budget
-              </Button>
-            </form>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {formatCost(currentBoard?.cost24h ?? 0)} spent in the last 24
-              hours
-              {typeof currentBoard?.pickupCostBudget === "number"
-                ? ` of ${formatCost(currentBoard.pickupCostBudget)}.`
-                : "."}{" "}
-              Leave blank for no budget. At the budget, automatic pickup waits;
-              running work and manual starts continue.
-            </p>
-            {currentBoard?.autoPickupEnabled &&
-              currentBoard.autoPickupStarts >=
-                currentBoard.pickupDailyLimit && (
-                <Button
-                  className="mt-2"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={resetPickupLimit}
-                >
-                  Reset start limit
-                </Button>
-              )}
-            <Button
-              className="mt-3"
-              variant={currentBoard?.autoPickupEnabled ? "outline" : "default"}
-              disabled={!currentBoard || busy}
-              onClick={() => {
-                if (!currentBoard) return;
-                const enable = !currentBoard.autoPickupEnabled;
-                if (
-                  enable &&
-                  !window.confirm(
-                    `Enable automatic Pi pickup for ${currentBoard.repo}? Up to ${currentBoard.pickupConcurrency} paid Pi runs can start without another click, up to ${currentBoard.pickupDailyLimit} automatic starts per rolling 24 hours. Ready cards may start immediately.`,
-                  )
-                )
-                  return;
-                void action(async () => {
-                  const updated = await api<Board>(
-                    `/boards/${currentBoard.id}/settings`,
-                    {
-                      method: "PATCH",
-                      body: JSON.stringify({
-                        autoPickupEnabled: enable,
-                        pickupConcurrency: currentBoard.pickupConcurrency,
-                      }),
-                    },
-                  );
-                  setBoards((previous) =>
-                    previous.map((item) =>
-                      item.id === updated.id ? updated : item,
-                    ),
-                  );
-                });
-              }}
-            >
-              {currentBoard?.autoPickupEnabled
-                ? "Disable auto pickup"
-                : "Enable auto pickup"}
-            </Button>
-            {currentBoard?.autoPickupError && (
-              <p role="alert" className="mt-2 text-xs text-destructive">
-                Paused: {currentBoard.autoPickupError}
-              </p>
-            )}
-          </div>
+          <p className="mt-6 border-t border-border pt-5 text-xs text-muted-foreground">
+            Auto pickup is set per repository. Use the edit button next to a
+            repository to change it.
+          </p>
           {error && (
             <p role="alert" className="mt-3 text-sm text-destructive">
               {error}
@@ -2138,7 +2040,9 @@ function App() {
                 requests: Approve pushes bakery/&lt;card&gt; and opens a PR with
                 gh; the card is Done once the PR merges and the merge is on
                 origin/main. Local main is then only fast-forwarded to
-                origin/main. Needs gh signed in and a GitHub remote link.
+                origin/main. Needs gh signed in and a GitHub remote link. When a
+                GitHub remote is set, Bakery picks GitHub pull requests if main
+                only accepts pull requests.
               </p>
               <label className="mt-4 block text-xs">
                 Integration mode
@@ -2170,6 +2074,40 @@ function App() {
                   <option value="github-pr">GitHub pull requests</option>
                 </select>
               </label>
+              {editingBoard.integrationNote && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {editingBoard.integrationNote}
+                </p>
+              )}
+              {editingBoard.githubMainProtected &&
+                !editingBoard.integrationChosen &&
+                (editingBoard.integration ?? "local") === "local" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-2"
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        const updated = await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({ integration: "local" }),
+                          },
+                        );
+                        setBoards((previous) =>
+                          previous.map((item) =>
+                            item.id === updated.id ? updated : item,
+                          ),
+                        );
+                        setEditingBoard(updated);
+                      })
+                    }
+                  >
+                    Keep Local merge
+                  </Button>
+                )}
               {editingBoard.integrationError && (
                 <p role="alert" className="mt-2 text-xs text-destructive">
                   {editingBoard.integrationError}
@@ -2182,6 +2120,186 @@ function App() {
               />
             </div>
           )}
+          {pickupBoard && (
+            <div className="mt-8 border-t border-border pt-5 text-sm">
+              <div className="font-medium">Auto pickup</div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Automatically start Ready cards in creation order, up to the
+                concurrency limit including manual runs. The configurable
+                rolling start limit and the optional daily cost budget protect
+                against unbounded paid runs. A failed automatic run or
+                interrupted run pauses pickup. Starting Pi may spend model
+                tokens. Turn off pickup to stop new starts; existing runs
+                continue.
+              </p>
+              <label className="mt-4 flex items-center gap-2 text-xs">
+                Concurrent runs{" "}
+                <select
+                  aria-label="Auto pickup concurrency"
+                  value={pickupBoard.pickupConcurrency}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const limit = Number(event.target.value);
+                    void action(async () => {
+                      const updated = await api<Board>(
+                        `/boards/${pickupBoard.id}/settings`,
+                        {
+                          method: "PATCH",
+                          body: JSON.stringify({
+                            autoPickupEnabled: pickupBoard.autoPickupEnabled,
+                            pickupConcurrency: limit,
+                          }),
+                        },
+                      );
+                      updateBoard(updated);
+                    });
+                  }}
+                  className="rounded-md border border-border bg-background px-2 py-1"
+                >
+                  {[1, 2, 3, 4].map((limit) => (
+                    <option key={limit} value={limit}>
+                      {limit}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="mt-3 flex items-center gap-2 text-xs">
+                Automatic starts per 24 hours{" "}
+                <select
+                  aria-label="Auto pickup daily start limit"
+                  value={pickupBoard.pickupDailyLimit}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const limit = Number(event.target.value);
+                    if (
+                      limit > pickupBoard.pickupDailyLimit &&
+                      pickupBoard.autoPickupEnabled &&
+                      !window.confirm(
+                        `Raise automatic starts to ${limit} per 24 hours for ${pickupBoard.repo}? Ready cards may start immediately and spend model tokens.`,
+                      )
+                    )
+                      return;
+                    void action(async () => {
+                      const updated = await api<Board>(
+                        `/boards/${pickupBoard.id}/settings`,
+                        {
+                          method: "PATCH",
+                          body: JSON.stringify({
+                            autoPickupEnabled: pickupBoard.autoPickupEnabled,
+                            pickupConcurrency: pickupBoard.pickupConcurrency,
+                            pickupDailyLimit: limit,
+                          }),
+                        },
+                      );
+                      updateBoard(updated);
+                    });
+                  }}
+                  className="rounded-md border border-border bg-background px-2 py-1"
+                >
+                  {Array.from({ length: 99 }, (_, index) => index + 1).map(
+                    (limit) => (
+                      <option key={limit} value={limit}>
+                        {limit}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </label>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {pickupBoard.autoPickupStarts} / {pickupBoard.pickupDailyLimit}{" "}
+                starts in the rolling day.
+                {pickupBoard.autoPickupNextAt &&
+                  ` Next slot around ${date(pickupBoard.autoPickupNextAt)}.`}
+              </p>
+              <form
+                className="mt-3 flex flex-wrap items-center gap-2 text-xs"
+                onSubmit={(event) => saveCostBudget(event, pickupBoard)}
+              >
+                <label className="flex items-center gap-2">
+                  Daily cost budget (USD){" "}
+                  <input
+                    aria-label="Auto pickup daily cost budget"
+                    inputMode="decimal"
+                    placeholder="Off"
+                    value={budgetDraft}
+                    disabled={busy}
+                    onChange={(event) => setBudgetDraft(event.target.value)}
+                    className="w-24 rounded-md border border-border bg-background px-2 py-1"
+                  />
+                </label>
+                <Button
+                  type="submit"
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    busy ||
+                    budgetDraft.trim() ===
+                      (savedBudget === null ? "" : String(savedBudget))
+                  }
+                >
+                  Save budget
+                </Button>
+              </form>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {formatCost(pickupBoard.cost24h ?? 0)} spent in the last 24
+                hours
+                {typeof pickupBoard.pickupCostBudget === "number"
+                  ? ` of ${formatCost(pickupBoard.pickupCostBudget)}.`
+                  : "."}{" "}
+                Leave blank for no budget. At the budget, automatic pickup
+                waits; running work and manual starts continue.
+              </p>
+              {pickupBoard.autoPickupEnabled &&
+                pickupBoard.autoPickupStarts >=
+                  pickupBoard.pickupDailyLimit && (
+                  <Button
+                    className="mt-2"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => resetPickupLimit(pickupBoard)}
+                  >
+                    Reset start limit
+                  </Button>
+                )}
+              <Button
+                className="mt-3"
+                variant={pickupBoard.autoPickupEnabled ? "outline" : "default"}
+                disabled={busy}
+                onClick={() => {
+                  const enable = !pickupBoard.autoPickupEnabled;
+                  if (
+                    enable &&
+                    !window.confirm(
+                      `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours. Ready cards may start immediately.`,
+                    )
+                  )
+                    return;
+                  void action(async () => {
+                    const updated = await api<Board>(
+                      `/boards/${pickupBoard.id}/settings`,
+                      {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          autoPickupEnabled: enable,
+                          pickupConcurrency: pickupBoard.pickupConcurrency,
+                        }),
+                      },
+                    );
+                    updateBoard(updated);
+                  });
+                }}
+              >
+                {pickupBoard.autoPickupEnabled
+                  ? "Disable auto pickup"
+                  : "Enable auto pickup"}
+              </Button>
+              {pickupBoard.autoPickupError && (
+                <p role="alert" className="mt-2 text-xs text-destructive">
+                  Paused: {pickupBoard.autoPickupError}
+                </p>
+              )}
+            </div>
+          )}
           {editingBoard && (
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Unattended review</div>
@@ -2190,7 +2308,7 @@ function App() {
                 verification command runs first. At most 3 merges per 24 hours.
                 Findings, errors, or changes require human review. Local merge
                 only, never push. Auto-review alone does not start Ready cards;
-                enable Auto pickup in Settings.
+                enable Auto pickup above.
               </p>
               <label className="mt-4 block text-xs">
                 Verification command
