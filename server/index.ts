@@ -169,7 +169,13 @@ const server = createServer(async (req, res) => {
     if (pullsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(pullsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
-      send(res, 200, await github.listOpenPullRequests(boardGithubRepo(repoBoard))); return;
+      const pulls = await github.listOpenPullRequests(boardGithubRepo(repoBoard));
+      // Each PR carries the card it belongs to, so the page can link back to the board.
+      const cards = board.listCards(repoBoard.repo).filter(card => card.prNumber && card.status !== "archived");
+      send(res, 200, pulls.map(pr => {
+        const card = cards.find(item => item.prNumber === pr.number);
+        return { ...pr, card: card ? { id: card.id, title: card.title, status: card.status, prChecks: card.prChecks ?? null } : null };
+      })); return;
     }
     const pickupResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/auto-pickup\/reset-limit$/);
     if (pickupResetRoute && req.method === "POST") {

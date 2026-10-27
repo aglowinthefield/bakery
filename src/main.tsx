@@ -73,7 +73,7 @@ import {
   type RepoColor,
   type RepoIcon,
 } from "./repo-appearance.js";
-import { describeRemote, type RemoteHost } from "./remote-link.js";
+import { describeRemote, supportsPullRequests, type RemoteHost } from "./remote-link.js";
 import {
   byPriority,
   priorities,
@@ -703,7 +703,9 @@ export function App() {
     setCards([]);
     setMergeConflicts([]);
   };
-  const openPulls = (id: string) => {
+  const [pullHighlight, setPullHighlight] = useState<number | null>(null);
+  const openPulls = (id: string, highlight: number | null = null) => {
+    setPullHighlight(highlight);
     openBoard(id);
     setView("pulls");
     localStorage.setItem("bakery-view", "pulls");
@@ -1183,7 +1185,7 @@ export function App() {
                       <Kanban size={13} aria-hidden="true" /> Kanban
                     </button>
                   )}
-                  {open && (
+                  {open && supportsPullRequests(item) && (
                     <button
                       onClick={() => openPulls(item.id)}
                       aria-current={pullsActive ? "page" : undefined}
@@ -1247,7 +1249,7 @@ export function App() {
           />
         </main>
       )}
-      {view === "pulls" && boardId && (
+      {view === "pulls" && boardId && currentBoard && supportsPullRequests(currentBoard) && (
         <main className="min-w-0 flex-1">
           <header className="border-b border-border px-6 py-6 lg:px-10">
             <h1 className="text-[27px] font-semibold tracking-[-.05em]">
@@ -1257,10 +1259,23 @@ export function App() {
               {currentBoard?.repo}
             </p>
           </header>
-          <PullRequests boardId={boardId} />
+          <PullRequests
+            boardId={boardId}
+            highlight={pullHighlight}
+            onOpenCard={(id) => {
+              openBoard(boardId);
+              setSelected(id);
+            }}
+          />
         </main>
       )}
-      <main className="min-w-0 flex-1" hidden={view !== "board"}>
+      <main
+        className="min-w-0 flex-1"
+        hidden={
+          view === "today" ||
+          (view === "pulls" && !!currentBoard && supportsPullRequests(currentBoard))
+        }
+      >
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-6 lg:px-10">
           <div>
             <div className="mb-2 text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">
@@ -1746,7 +1761,20 @@ export function App() {
                                     />
                                   )}
                                   {item.prNumber && (
-                                    <PullRequestBadge card={item} />
+                                    <PullRequestBadge
+                                      card={item}
+                                      onOpen={
+                                        currentBoard &&
+                                        supportsPullRequests(currentBoard) &&
+                                        item.prState === "OPEN"
+                                          ? () =>
+                                              openPulls(
+                                                currentBoard.id,
+                                                item.prNumber ?? null,
+                                              )
+                                          : undefined
+                                      }
+                                    />
                                   )}
                                   {item.status === "done" &&
                                     item.originMain && (
@@ -2761,6 +2789,15 @@ export function App() {
           card={card}
           boardCards={scopeCards.filter((item) => item.repo === card?.repo)}
           onOpenCard={setSelected}
+          onOpenPullRequest={(() => {
+            const owner = boards.find((item) => item.id === detailBoardId);
+            return owner && card?.prNumber && supportsPullRequests(owner)
+              ? () => {
+                  setSelected(null);
+                  openPulls(owner.id, card.prNumber ?? null);
+                }
+              : undefined;
+          })()}
           settings={settings}
           conflict={mergeConflicts.find((item) => item.cardId === selected)}
           queue={
@@ -2799,7 +2836,13 @@ export function App() {
     </div>
   );
 }
-function PullRequestBadge({ card }: { card: Card }) {
+function PullRequestBadge({
+  card,
+  onOpen,
+}: {
+  card: Card;
+  onOpen?: () => void;
+}) {
   const tone =
     card.prState === "MERGED"
       ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
@@ -2809,6 +2852,15 @@ function PullRequestBadge({ card }: { card: Card }) {
   return (
     <span
       data-testid="pr-badge"
+      role={onOpen ? "link" : undefined}
+      onClick={
+        onOpen
+          ? (event) => {
+              event.stopPropagation();
+              onOpen();
+            }
+          : undefined
+      }
       title={[
         card.prUrl,
         card.prState?.toLowerCase(),

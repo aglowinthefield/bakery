@@ -21,7 +21,7 @@ export type Check = {
 /** One open PR as the Pull requests page shows it. */
 export type RepoPullRequest = {
   number: number; title: string; url: string; headRefName: string; isDraft: boolean; updatedAt: string;
-  author?: { login?: string } | null; reviewDecision?: string | null;
+  author?: { login?: string } | null; additions?: number; deletions?: number; reviewDecision?: string | null;
 };
 const prFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,statusCheckRollup";
 // statusCheckRollup is expensive: across 200 PRs on a busy repo GitHub's GraphQL API times out (HTTP 504).
@@ -143,7 +143,7 @@ export class GitHub {
   }
   /** Open PRs of a repository for the Pull requests page, newest first. */
   async listOpenPullRequests(repo: string): Promise<RepoPullRequest[]> {
-    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,title,url,author,headRefName,isDraft,updatedAt,reviewDecision"])) as RepoPullRequest[];
+    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,title,url,author,headRefName,isDraft,updatedAt,reviewDecision,additions,deletions"])) as RepoPullRequest[];
   }
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {
