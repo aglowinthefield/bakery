@@ -49,11 +49,13 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Settings2,
   ExternalLink,
   Github,
   Gitlab,
   XCircle,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -94,6 +96,18 @@ import type {
 } from "./model.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
+// Case-insensitive match on title, description, or card ID prefix.
+function filterCards(cards: Card[], query: string) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return cards;
+  return cards.filter(
+    (card) =>
+      card.id.toLowerCase().startsWith(needle) ||
+      card.title.toLowerCase().includes(needle) ||
+      card.body.toLowerCase().includes(needle),
+  );
+}
+
 function cacheTheme(theme: BakerySettings["theme"]) {
   try {
     localStorage.setItem("bakery-theme", theme);
@@ -455,6 +469,33 @@ function App() {
     };
   }, [repoPath, addingRepo, editingBoard]);
   const [cards, setCards] = useState<Card[]>([]);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => setQuery(""), [boardId]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "/" ||
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey
+      )
+        return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "input, textarea, select, [contenteditable=''], [contenteditable='true'], [role='dialog']",
+        )
+      )
+        return;
+      if (!searchRef.current) return;
+      event.preventDefault();
+      searchRef.current.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const seenStatuses = useRef(new Map<string, Map<string, Status>>());
   const [selected, setSelected] = useState<string | null>(null);
   const [verificationDraft, setVerificationDraft] = useState("");
@@ -691,7 +732,9 @@ function App() {
     });
   };
   const active = cards.filter((item) => item.status === "running").length;
-  const doneIds = cards
+  const visibleCards = filterCards(cards, query);
+  // Bulk selection only covers cards the search leaves visible.
+  const doneIds = visibleCards
     .filter((item) => item.status === "done")
     .map((item) => item.id);
   // Polling can move cards out of Done; only act on cards still there.
@@ -855,7 +898,54 @@ function App() {
               <RemoteLink url={currentBoard.remoteUrl} />
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <div className="relative">
+                <Search
+                  size={14}
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                />
+                <input
+                  ref={searchRef}
+                  type="search"
+                  aria-label="Search cards"
+                  placeholder="Search cards  /"
+                  disabled={!boardId}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.preventDefault();
+                    if (query) setQuery("");
+                    else event.currentTarget.blur();
+                  }}
+                  className="h-9 w-56 rounded-md border border-input bg-background pl-8 pr-8 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-search-cancel-button]:hidden"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    aria-label="Clear search"
+                    onClick={() => {
+                      setQuery("");
+                      searchRef.current?.focus();
+                    }}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              {query.trim() && (
+                <span
+                  role="status"
+                  aria-label="Search results"
+                  className="absolute right-0 top-full mt-1 whitespace-nowrap text-xs text-muted-foreground"
+                >
+                  {visibleCards.length} of {cards.length} cards
+                </span>
+              )}
+            </div>
             <Button
               variant="outline"
               size="icon"
@@ -1041,10 +1131,14 @@ function App() {
         <div className="overflow-x-auto p-6 lg:p-10">
           <div className="flex min-h-[500px] min-w-max gap-4">
             {columns.map((column) => {
-              const laneCards = cards.filter((c) => c.status === column.id);
-              const collapsible = laneCards.every(
-                (c) => c.status === "done" || c.status === "archived",
+              const laneCards = visibleCards.filter(
+                (c) => c.status === column.id,
               );
+              // Collapse state follows the whole lane so typing a search
+              // doesn't fold or unfold lanes.
+              const collapsible = cards
+                .filter((c) => c.status === column.id)
+                .every((c) => c.status === "done" || c.status === "archived");
               const override = boardId
                 ? manualCollapse[boardId]?.[column.id]
                 : undefined;
@@ -1279,7 +1373,9 @@ function App() {
                         })}
                         {laneCards.length === 0 && (
                           <div className="rounded-xl border border-dashed border-border/60 px-4 py-10 text-center text-xs text-muted-foreground">
-                            Nothing here yet.
+                            {query.trim()
+                              ? "No matching cards."
+                              : "Nothing here yet."}
                           </div>
                         )}
                       </div>
