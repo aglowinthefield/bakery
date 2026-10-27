@@ -40,12 +40,14 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
     assert.equal(await page.locator("[data-pr]").count(), 2);
     assert.equal(await page.locator("[data-pr='8']").getByText("No card").count(), 1);
     await page.locator("[data-pr='8']").getByRole("button", { name: /Outside change/ }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = page.locator("[data-pr='8']");
     await dialog.getByText("src/a.ts").waitFor();
     assert.equal(await dialog.getByText("Do things").count(), 1);
     assert.equal(await dialog.getByText("build").count(), 1);
-    await page.keyboard.press("Escape");
-    await dialog.waitFor({ state: "detached" });
+    assert.equal(await dialog.locator("strong", { hasText: "things" }).count(), 1);
+    assert.equal(await page.getByRole("dialog").count(), 0);
+    await dialog.getByRole("button", { name: /Outside change/ }).click();
+    await dialog.getByText("src/a.ts").waitFor({ state: "detached" });
     await page.locator("[data-pr='7']").getByRole("button", { name: /Card · review · passing/ }).click();
     await page.locator("h1").filter({ hasText: "gh" }).waitFor();
     assert.equal(await page.getByRole("list", { name: "Pull requests" }).count(), 0);
