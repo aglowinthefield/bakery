@@ -82,6 +82,10 @@ test("Settings switches between the preserved default and Compline after reload"
     await page.reload();
     assert.equal(await page.locator("html").getAttribute("data-theme"), "compline");
     releaseSettings?.();
+    // The reload reopens the card this tab had open; close it to reach Settings.
+    await page.getByRole("dialog").getByText("Review card").first().waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Settings" }).click();
     assert.equal(await page.getByRole("dialog").getByRole("radio", { name: "Compline" }).isChecked(), true);
     assert.equal(await page.locator("html").getAttribute("data-theme"), "compline");

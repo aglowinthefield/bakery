@@ -6,7 +6,6 @@ import {
   type CSSProperties,
   type FormEvent,
 } from "react";
-import { createRoot } from "react-dom/client";
 import {
   Archive,
   ArrowUpRight,
@@ -100,6 +99,25 @@ function filterCards(cards: Card[], query: string) {
       card.title.toLowerCase().includes(needle) ||
       card.body.toLowerCase().includes(needle),
   );
+}
+
+// Per-tab state in sessionStorage survives a page reload, such as Vite reloading
+// after Bakery merges a card into its own checkout, without leaking into other tabs.
+function readTab(key: string) {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeTab(key: string, value: string | null) {
+  try {
+    if (value === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, value);
+  } catch {
+    // Without storage, a reload opens the last viewed repo with no card open.
+  }
 }
 
 function cacheTheme(theme: BakerySettings["theme"]) {
@@ -429,7 +447,8 @@ function AgentModelFields({
     </form>
   );
 }
-function App() {
+// The entry module renders App, so edits here hot-swap instead of reloading the page.
+export function App() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardId, setBoardId] = useState<string | null>(null);
   const [settings, setSettings] = useState<BakerySettings | null>(null);
@@ -465,8 +484,18 @@ function App() {
   const [cards, setCards] = useState<Card[]>([]);
   // Today is the landing page until you pick a board; the last choice persists.
   const [view, setView] = useState<"today" | "board">(() =>
-    localStorage.getItem("bakery-view") === "board" ? "board" : "today",
+    (readTab("bakery-view") ?? localStorage.getItem("bakery-view")) === "board"
+      ? "board"
+      : "today",
   );
+  const [reposCollapsed, setReposCollapsed] = useState(
+    () => localStorage.getItem("bakery-repos-collapsed") === "true",
+  );
+  const toggleRepos = () => {
+    const next = !reposCollapsed;
+    setReposCollapsed(next);
+    localStorage.setItem("bakery-repos-collapsed", String(next));
+  };
   const [allCards, setAllCards] = useState<Card[]>([]);
   const [since] = useState(
     () =>
@@ -511,6 +540,19 @@ function App() {
   }, []);
   const seenStatuses = useRef(new Map<string, Map<string, CountKey>>());
   const [selected, setSelected] = useState<string | null>(null);
+  // The card this tab had open before a reload; reopened once the first poll finds it.
+  const restoreCard = useRef(readTab("bakery-card"));
+  useEffect(() => {
+    if (selected === null && restoreCard.current) return;
+    writeTab("bakery-card", selected);
+  }, [selected]);
+  const reopenCard = (scope: Card[]) => {
+    const id = restoreCard.current;
+    if (!id) return;
+    restoreCard.current = null;
+    if (scope.some((item) => item.id === id)) setSelected(id);
+    else writeTab("bakery-card", null);
+  };
   const [verificationDraft, setVerificationDraft] = useState("");
   const [remoteUrlDraft, setRemoteUrlDraft] = useState("");
   const [budgetDraft, setBudgetDraft] = useState("");
@@ -539,8 +581,10 @@ function App() {
       .then((items) => {
         setBoards(items);
         setBoardId(
-          items.find((item) => item.id === localStorage.getItem("bakery-board"))
-            ?.id ??
+          items.find((item) => item.id === readTab("bakery-board"))?.id ??
+            items.find(
+              (item) => item.id === localStorage.getItem("bakery-board"),
+            )?.id ??
             items[0]?.id ??
             null,
         );
@@ -554,11 +598,35 @@ function App() {
       })
       .catch((err) => setError(String(err)));
   }, []);
+  // A new tab opens what you last looked at, so the tab you return to re-records its view and repo.
+  useEffect(() => {
+    const remember = () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        localStorage.setItem("bakery-view", view);
+        if (boardId) localStorage.setItem("bakery-board", boardId);
+      } catch {
+        // Without storage, a new tab opens Today and the first repo.
+      }
+    };
+    remember();
+    window.addEventListener("focus", remember);
+    document.addEventListener("visibilitychange", remember);
+    return () => {
+      window.removeEventListener("focus", remember);
+      document.removeEventListener("visibilitychange", remember);
+    };
+  }, [view, boardId]);
+  useEffect(() => {
+    writeTab("bakery-view", view);
+    if (boardId) writeTab("bakery-board", boardId);
+  }, [view, boardId]);
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = () => setRefreshKey((value) => value + 1);
   const openBoard = (id: string) => {
     setView("board");
     localStorage.setItem("bakery-view", "board");
+    restoreCard.current = null;
     if (boardId === id) return;
     setBoardId(id);
     localStorage.setItem("bakery-board", id);
@@ -569,6 +637,7 @@ function App() {
   const openToday = () => {
     setView("today");
     localStorage.setItem("bakery-view", "today");
+    restoreCard.current = null;
     setSelected(null);
   };
   // Notify once per card as it starts needing your review, comparing against the last poll of the same scope.
@@ -629,6 +698,7 @@ function App() {
           setAllCards(next as Card[]);
           setMergeConflicts((conflicts as MergeConflict[][]).flat());
           setBoards(nextBoards);
+          reopenCard(next as Card[]);
           return;
         }
         if (!boardId) return;
@@ -642,6 +712,7 @@ function App() {
         setCards(next);
         setMergeConflicts(conflicts);
         setBoards(nextBoards);
+        reopenCard(next);
       } catch (err) {
         if (current) setError(String(err));
       } finally {
@@ -912,92 +983,104 @@ function App() {
               </span>
             )}
           </button>
-          <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground">
-            Repositories
-          </div>
-          {boards.map((item) => (
-            <div
-              key={item.id}
-              className={`rounded-lg ${view === "board" && boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
-            >
-              <div className="flex items-center">
-                <button
-                  onClick={() => openBoard(item.id)}
-                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
-                  title={item.repo}
-                >
-                  <RepoBadge board={item} />
-                  <span className="truncate">
-                    {item.repo.split("/").at(-1)}
-                  </span>
-                </button>
-                <button
-                  aria-label={`Edit ${item.repo}`}
-                  title="Edit repository"
-                  className="mr-2 p-1 text-muted-foreground hover:text-foreground"
-                  onClick={() => {
-                    setError("");
-                    setRepoPath(item.repo);
-                    setIconDraft(item.icon);
-                    setColorDraft(item.color);
-                    setRemoteUrlDraft(item.remoteUrl ?? "");
-                    setVerificationDraft(item.verificationCommand ?? "");
-                    setEditingBoard(item);
-                  }}
-                >
-                  <Pencil size={13} />
-                </button>
-              </div>
-              <ul
-                aria-label="Card counts"
-                className="flex items-center gap-3 px-3 pb-2"
-              >
-                {sidebarCounts.map((group) => {
-                  const Icon = group.icon;
-                  const live =
-                    view === "board" &&
-                    boardId === item.id &&
-                    (cards.length || !item.cardCounts);
-                  const count = group.statuses.reduce(
-                    (sum, status) =>
-                      sum +
-                      (live
-                        ? cards.filter((c) => countKey(c) === status).length
-                        : (item.cardCounts?.[status] ?? 0)),
-                    0,
-                  );
-                  if (group.hideEmpty && !count) return null;
-                  return (
-                    <li
-                      key={group.id}
-                      data-group={group.id}
-                      data-status={group.color}
-                      title={`${count} ${group.label.toLowerCase()}`}
-                      aria-label={`${group.label}: ${count}`}
-                      className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
-                    >
-                      <Icon
-                        size={12}
-                        aria-hidden="true"
-                        className="lane-status-icon shrink-0"
-                      />
-                      <span className="font-mono">{count}</span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
-          <Button
-            variant="ghost"
-            className="mt-2 w-full justify-start"
-            onClick={() => {
-              setError("");
-              setAddingRepo(true);
-            }}
+          <button
+            onClick={toggleRepos}
+            aria-expanded={!reposCollapsed}
+            aria-controls="sidebar-repositories"
+            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground hover:text-foreground"
           >
-            <Plus size={15} /> Add repository
-          </Button>
+            Repositories
+            {reposCollapsed ? (
+              <ChevronRight size={12} aria-hidden="true" className="ml-auto" />
+            ) : (
+              <ChevronDown size={12} aria-hidden="true" className="ml-auto" />
+            )}
+          </button>
+          <div id="sidebar-repositories" hidden={reposCollapsed}>
+            {boards.map((item) => (
+              <div
+                key={item.id}
+                className={`rounded-lg ${view === "board" && boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
+              >
+                <div className="flex items-center">
+                  <button
+                    onClick={() => openBoard(item.id)}
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
+                    title={item.repo}
+                  >
+                    <RepoBadge board={item} />
+                    <span className="truncate">
+                      {item.repo.split("/").at(-1)}
+                    </span>
+                  </button>
+                  <button
+                    aria-label={`Edit ${item.repo}`}
+                    title="Edit repository"
+                    className="mr-2 p-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      setError("");
+                      setRepoPath(item.repo);
+                      setIconDraft(item.icon);
+                      setColorDraft(item.color);
+                      setRemoteUrlDraft(item.remoteUrl ?? "");
+                      setVerificationDraft(item.verificationCommand ?? "");
+                      setEditingBoard(item);
+                    }}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                </div>
+                <ul
+                  aria-label="Card counts"
+                  className="flex items-center gap-3 px-3 pb-2"
+                >
+                  {sidebarCounts.map((group) => {
+                    const Icon = group.icon;
+                    const live =
+                      view === "board" &&
+                      boardId === item.id &&
+                      (cards.length || !item.cardCounts);
+                    const count = group.statuses.reduce(
+                      (sum, status) =>
+                        sum +
+                        (live
+                          ? cards.filter((c) => countKey(c) === status).length
+                          : (item.cardCounts?.[status] ?? 0)),
+                      0,
+                    );
+                    if (group.hideEmpty && !count) return null;
+                    return (
+                      <li
+                        key={group.id}
+                        data-group={group.id}
+                        data-status={group.color}
+                        title={`${count} ${group.label.toLowerCase()}`}
+                        aria-label={`${group.label}: ${count}`}
+                        className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
+                      >
+                        <Icon
+                          size={12}
+                          aria-hidden="true"
+                          className="lane-status-icon shrink-0"
+                        />
+                        <span className="font-mono">{count}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+            <Button
+              variant="ghost"
+              className="mt-2 w-full justify-start"
+              onClick={() => {
+                setError("");
+                setAddingRepo(true);
+              }}
+            >
+              <Plus size={15} /> Add repository
+            </Button>
+          </div>
           <Button
             variant="ghost"
             className="mt-2 w-full justify-start"
@@ -1325,6 +1408,8 @@ function App() {
                   : sorted;
               const firstWaiting =
                 column.id === "review" ? waitingCards[0]?.id : undefined;
+              const yourTurnCount = laneCards.filter(needsYourReview).length;
+              const firstYourTurn = laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
               const collapsible = cards
@@ -1622,6 +1707,9 @@ function App() {
                               }}
                               onDragEnd={endDrag}
                               data-activity={activity ?? undefined}
+                              data-turn={
+                                needsYourReview(item) ? "yours" : undefined
+                              }
                               data-dragging={
                                 dragging?.card.id === item.id || undefined
                               }
@@ -1630,6 +1718,23 @@ function App() {
                               {content}
                             </button>
                           );
+                          if (item.id === firstYourTurn)
+                            return (
+                              <Fragment key={item.id}>
+                                <div
+                                  role="separator"
+                                  aria-label="Your turn"
+                                  className="flex items-center gap-2 px-1 text-[10px] font-semibold uppercase tracking-[.14em] text-foreground"
+                                >
+                                  Your turn
+                                  <span className="h-px flex-1 bg-status-review" />
+                                  <span className="font-mono">
+                                    {yourTurnCount}
+                                  </span>
+                                </div>
+                                {tile}
+                              </Fragment>
+                            );
                           if (item.id !== firstWaiting) return tile;
                           return (
                             <Fragment key={item.id}>
@@ -2304,11 +2409,11 @@ function App() {
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Unattended review</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                A tool-free Pi reviewer inspects new Review cards; the
-                verification command runs first. At most 3 merges per 24 hours.
-                Findings, errors, or changes require human review. Local merge
-                only, never push. Auto-review alone does not start Ready cards;
-                enable Auto pickup above.
+                A Pi reviewer with full tools inspects new Review cards in their
+                worktrees; the verification command runs first. At most 3 merges
+                per 24 hours. Findings, errors, or changes require human review.
+                Local merge only, never push. Auto-review alone does not start
+                Ready cards; enable Auto pickup above.
               </p>
               <label className="mt-4 block text-xs">
                 Verification command
@@ -2561,7 +2666,7 @@ function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
     </span>
   );
 }
-/** Says who has a Review card that is not your turn, or how long a running agent has been quiet. */
+/** Says a Review card is your turn, who has it if not, or how long a running agent has been quiet. */
 function ActivityBadge({
   card,
   activity,
@@ -2581,6 +2686,17 @@ function ActivityBadge({
           <Hourglass size={10} aria-hidden />
         )}
         {reviewWaitLabels[card.reviewWait]}
+      </span>
+    );
+  if (needsYourReview(card))
+    return (
+      <span
+        data-testid="activity-badge"
+        title="Ready for your review"
+        className="flex items-center gap-1 rounded border border-status-review bg-status-review px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] text-background"
+      >
+        <Eye size={10} aria-hidden />
+        Your turn
       </span>
     );
   if (activity !== "quiet" || !card.lastActivityAt) return null;
@@ -2700,4 +2816,3 @@ function CardForm({
     </form>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);

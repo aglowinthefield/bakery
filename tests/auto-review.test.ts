@@ -63,10 +63,13 @@ test("strict agent verdict rejects missing settlement, invalid JSON, and ambiguo
   assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"aborted":false', '"aborted":true')), /did not settle.*aborted/);
   assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"stopReason":"stop"', '"stopReason":"length"')), /did not settle.*stop reason was "length"/);
   assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"agent_settled"', '"message_end"')), /did not settle.*never reported agent_settled/);
-  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"agent_settled"', '"message_end"') + settle('{"verdict":"approve","reason":"fine"}')), /did not settle.*got 2/);
+  // A reviewer that used tools sends earlier assistant messages; only the final one is the verdict.
+  const toolCall = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] } });
+  assert.deepEqual(reviewerVerdict(`${toolCall}\n${settle('{"verdict":"approve","reason":"Imports checked"}')}`), { verdict: "approve", reason: "Imports checked" });
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"stopReason":"stop"', '"stopReason":"toolUse"')), /did not settle.*stop reason was "toolUse"/);
 });
 
-test("new opt-in reviews run a separate tool-free reviewer and verify before local merge", async () => {
+test("new opt-in reviews run a separate reviewer and verify before local merge", async () => {
   const item = fixture();
   try {
     const old = item.reviewedCard();
@@ -335,9 +338,9 @@ test("the agent reviewer uses the repository's review model before the prompt", 
     const args = readFileSync(argsFile, "utf8").split("\n");
     const separator = args.indexOf("--");
     assert.deepEqual(args.slice(separator - 4, separator), ["--model", "openai-codex/gpt-5.5", "--thinking", "low"]);
-    assert.ok(args.includes("--no-tools"));
-    // Provider auth and account routing live in extensions; the reviewer must load them like card runs do.
-    assert.ok(!args.includes("--no-extensions"));
+    // The reviewer is fully capable: it keeps tools, extensions, MCP, skills, and context files like card runs do.
+    for (const flag of ["--no-tools", "--no-extensions", "--no-mcp", "--no-skills", "--no-context-files"]) assert.ok(!args.includes(flag), flag);
     assert.match(args[separator + 1], /independent reviewer/);
+    assert.match(args[separator + 1], /verification command .*passed: "true"/);
   } finally { item.close(); }
 });
