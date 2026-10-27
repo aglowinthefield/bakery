@@ -30,6 +30,8 @@ test("Settings switches between the preserved default and Compline after reload"
         await route.fulfill({ json: [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }] });
       } else if (path === "/api/boards/board/conflicts" || path.endsWith("/comments") || path.endsWith("/auto-review") || path.endsWith("/runs")) {
         await route.fulfill({ json: [] });
+      } else if (path.endsWith("/push-progress")) {
+        await route.fulfill({ json: null });
       } else if (path.endsWith("/approval")) {
         await route.fulfill({ json: { pending: false } });
       } else if (path.endsWith("/review")) {

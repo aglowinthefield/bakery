@@ -39,6 +39,7 @@ test("search filters cards by title, body, and ID prefix and clears", async () =
       };
       if (/\/(runs|comments|auto-review)$/.test(path)) return route.fulfill({ json: [] });
       if (path.endsWith("/approval")) return route.fulfill({ json: { pending: false } });
+      if (path.endsWith("/push-progress")) return route.fulfill({ json: null });
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });

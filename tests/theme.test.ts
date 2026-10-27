@@ -95,6 +95,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
       "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/push-progress": null,
       "/api/boards/board/cards/card/comments": [],
       "/api/boards/board/cards/card/auto-review": [],
       "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [{ path: "src/example.ts", patch: "@@ -1 +1 @@\n-const old = 1;\n+const next = 2;\n" }] },

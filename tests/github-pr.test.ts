@@ -470,6 +470,31 @@ test("github-pr: gh errors from creating the PR reach the card verbatim, and the
   } finally { f.cleanup(); }
 });
 
+test("github-pr: a failing pre-push hook's stdout and stderr both reach the error, and push progress records each step and line", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    // Like silk-remix's knip hook: the noise goes to stderr, the actual findings to stdout.
+    writeFileSync(join(f.repo, ".git", "hooks", "pre-push"), "#!/bin/sh\necho 'Missing API environment target' >&2\necho 'Unused exports (1)'\necho 'SETTINGS_TAB_IDS  settingsTabs.ts:9:14'\necho 'Failing command: npm run knip:ci' >&2\nexit 1\n");
+    chmodSync(join(f.repo, ".git", "hooks", "pre-push"), 0o755);
+    const integration = new Integration(f.board, f.data);
+    const pending = integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
+    assert.equal(integration.pushProgress(card.id)?.finishedAt, null, "progress exists while the push runs");
+    await assert.rejects(pending, (error: Error) => /^push failed: /.test(error.message) && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
+    const progress = integration.pushProgress(card.id)!;
+    assert.match(progress.step, /^Pushing bakery\//, "the failed step is the push");
+    assert.ok(progress.log.includes("SETTINGS_TAB_IDS  settingsTabs.ts:9:14"));
+    assert.match(progress.error ?? "", /Unused exports/);
+    assert.ok(progress.finishedAt);
+    assert.equal(f.prs().length, 0, "no PR without a pushed branch");
+
+    rmSync(join(f.repo, ".git", "hooks", "pre-push"));
+    await integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
+    assert.equal(integration.pushProgress(card.id)?.step, "Done");
+    assert.equal(integration.pushProgress(card.id)?.error, null);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: without gh, or when gh is signed out, the board shows an error and does nothing", async () => {
   const f = fixture();
   try {

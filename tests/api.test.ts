@@ -163,6 +163,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Number", body: "", idempotencyKey: 7 })).status, 400);
     assert.match((await request(`/boards/${first.id}/cards/${card.id}/start`, "POST")).data.error, /Move.*Ready/);
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
+    assert.deepEqual(await request(`/boards/${first.id}/cards/${card.id}/push-progress`), { status: 200, data: null }, "card details poll push progress");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "running" })).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "triage" })).data.status, "triage");
