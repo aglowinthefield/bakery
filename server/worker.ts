@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
 import { piModelArgs, type AgentPhase } from "./agent-models.js";
 import { Board, type Card, type Run } from "./board.js";
+import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -65,7 +66,7 @@ export class Worker {
       // On a github-pr board a card starts from origin/main, fetched now, so it never builds on a stale checkout.
       const prMode = this.board.integrationFor(card.repo) === "github-pr";
       if (prMode) fetchOrigin(root);
-      if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : "HEAD"); created = true; }
+      if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : this.localBase(run, root)); created = true; }
       else if (prMode && !conflict) this.rebaseRetry(run, worktree, branch);
     } catch (error) {
       this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
@@ -83,6 +84,17 @@ export class Worker {
     const launch = () => this.launchPi(card, run, worktree, prompt, phase);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
+  }
+  /**
+   * A local-mode card starts from origin/main when the repository has an origin and local HEAD is not ahead of it,
+   * so it never builds on a stale checkout. Unpushed local commits win: then HEAD is the base. Offline only warns.
+   */
+  private localBase(run: Run, root: string): string {
+    if (!hasOrigin(root)) return "HEAD";
+    const warning = fetchOriginBestEffort(root);
+    if (warning) this.board.append(run.id, `${warning}\n`);
+    const state = compareWithOriginMain(root, "HEAD");
+    return state && !state.ahead ? "refs/remotes/origin/main" : "HEAD";
   }
   /**
    * A retry on a github-pr board whose base is behind origin/main is rebased onto it before Pi starts, but only

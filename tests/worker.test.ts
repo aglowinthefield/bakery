@@ -416,3 +416,49 @@ test("stopping a run during Worktrunk pre-start hooks fails it without starting 
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a local-mode card worktree starts from origin/main when local main is behind it, and from main when ahead", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), remote = join(dir, "origin.git"), other = join(dir, "other"), fakePi = join(dir, "pi-fake");
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+  const commit = (cwd: string, file: string) => {
+    writeFileSync(join(cwd, file), `${file}\n`);
+    git(cwd, "add", file);
+    git(cwd, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", file);
+  };
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", repo]);
+    commit(repo, "README.md");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+    git(repo, "remote", "add", "origin", remote);
+    git(repo, "push", "-q", "origin", "main");
+    execFileSync("git", ["clone", "-q", remote, other]);
+    commit(other, "upstream.txt");
+    git(other, "push", "-q", "origin", "main");
+    writeFileSync(fakePi, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), data = join(dir, "data"), worker = new Worker(board, data, fakePi);
+    const behind = board.createCard({ title: "Behind", body: "", repo });
+    board.setStatus(behind.id, "ready");
+    const first = worker.start(board.getCard(behind.id)!);
+    assert.equal(git(join(data, "worktrees", behind.id), "rev-parse", "HEAD"), git(other, "rev-parse", "HEAD"), "starts from fetched origin/main");
+    await waitFor(() => board.getRun(first.id)?.status !== "running");
+
+    git(repo, "merge", "-q", "--ff-only", "origin/main");
+    commit(repo, "local.txt");
+    const ahead = board.createCard({ title: "Ahead", body: "", repo });
+    board.setStatus(ahead.id, "ready");
+    const second = worker.start(board.getCard(ahead.id)!);
+    assert.equal(git(join(data, "worktrees", ahead.id), "rev-parse", "HEAD"), git(repo, "rev-parse", "main"), "keeps unpushed local commits");
+    await waitFor(() => board.getRun(second.id)?.status !== "running");
+
+    git(repo, "remote", "set-url", "origin", join(dir, "missing.git"));
+    const offline = board.createCard({ title: "Offline", body: "", repo });
+    board.setStatus(offline.id, "ready");
+    const third = worker.start(board.getCard(offline.id)!);
+    assert.equal(git(join(data, "worktrees", offline.id), "rev-parse", "HEAD"), git(repo, "rev-parse", "main"));
+    assert.match(board.getRun(third.id)!.output, /git fetch origin failed/);
+    await waitFor(() => board.getRun(third.id)?.status !== "running");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

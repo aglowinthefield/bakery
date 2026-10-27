@@ -357,3 +357,71 @@ test("moving main after review requires a fresh diff before approval", () => {
     assert.equal(item.integration.approve(item.card, current.fingerprint).status, "done");
   } finally { item.close(); }
 });
+
+// A local board whose repository has an origin: Approve fetches it and refuses to merge into a stale main.
+function withOrigin(item: ReturnType<typeof fixture>) {
+  const remote = join(item.dir, "origin.git"), other = join(item.dir, "other");
+  git(item.dir, "init", "-q", "--bare", "-b", "main", remote);
+  git(item.repo, "remote", "add", "origin", remote);
+  git(item.repo, "push", "-q", "origin", "main");
+  git(item.dir, "clone", "-q", remote, other);
+  const commit = (repo: string, file: string) => {
+    writeFileSync(join(repo, file), `${file}\n`);
+    git(repo, "add", file);
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", file);
+  };
+  return { remote, pushUpstream: (file: string) => { commit(other, file); git(other, "push", "-q", "origin", "main"); }, commitLocal: (file: string) => commit(item.repo, file) };
+}
+
+test("approval is blocked when local main is behind origin/main", () => {
+  const item = fixture();
+  try {
+    const origin = withOrigin(item);
+    origin.pushUpstream("upstream.txt");
+    writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
+    const main = git(item.repo, "rev-parse", "main");
+    assert.throws(() => item.approve(item.card), /Local main is 1 commit behind origin\/main\. Update main first/);
+    assert.equal(git(item.repo, "rev-parse", "main"), main);
+    assert.equal(item.board.getCard(item.card.id)!.status, "review");
+    assert.equal(item.board.getApproval(item.card.id), undefined);
+    assert.equal(git(item.worktree, "rev-list", "--count", "main..HEAD"), "0", "nothing was committed on the card branch");
+    // Once main is updated, the refreshed review approves.
+    git(item.repo, "merge", "-q", "--ff-only", "origin/main");
+    assert.equal(item.approve(item.card).status, "done");
+  } finally { item.close(); }
+});
+
+test("approval proceeds when local main is ahead of origin/main", () => {
+  const item = fixture();
+  try {
+    withOrigin(item).commitLocal("local.txt");
+    writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
+    assert.equal(item.approve(item.card).status, "done");
+    assert.deepEqual(item.integration.warnings, []);
+  } finally { item.close(); }
+});
+
+test("approval is blocked when local main has diverged from origin/main", () => {
+  const item = fixture();
+  try {
+    const origin = withOrigin(item);
+    origin.pushUpstream("upstream.txt");
+    origin.commitLocal("local.txt");
+    writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
+    assert.throws(() => item.approve(item.card), /Local main has diverged from origin\/main \(1 local, 1 commit behind\)/);
+    assert.equal(item.board.getCard(item.card.id)!.status, "review");
+  } finally { item.close(); }
+});
+
+test("a failed fetch of origin warns and approval proceeds", () => {
+  const item = fixture();
+  try {
+    const origin = withOrigin(item);
+    git(item.repo, "remote", "set-url", "origin", join(item.dir, "missing.git"));
+    rmSync(origin.remote, { recursive: true, force: true });
+    writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
+    assert.equal(item.approve(item.card).status, "done");
+    assert.equal(item.integration.warnings.length, 1);
+    assert.match(item.integration.warnings[0], /^git fetch origin failed/);
+  } finally { item.close(); }
+});
