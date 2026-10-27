@@ -195,7 +195,7 @@ export class GitHubSync {
   private inFlight = new Map<string, Promise<void>>();
   /** `rework` starts a fix run on a card whose PR failed CI; without it failures are only shown. */
   constructor(private readonly board: Board, private readonly dataDir: string, private readonly github: GitHub, private readonly wtBin?: string, private readonly intervalMs = 60_000,
-    private readonly rework?: (card: Card) => unknown) {}
+    private readonly rework?: (card: Card) => unknown, private readonly autoApprove?: (card: Card) => Promise<unknown>) {}
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => void this.tick(), 5000);
@@ -250,8 +250,9 @@ export class GitHubSync {
   private async settle(repoBoard: RepoBoard, card: Card, pr: PullRequest, repo: string): Promise<void> {
     const checks = checksState(pr);
     if (pr.state === "OPEN") {
+      if (await this.pushCiFix(card, pr)) return;
       const ci = await this.sendBackFailingCi(card, pr, repo);
-      this.board.recordPullRequest(card.id, { ...pr, checks, error: ci.error });
+      this.board.recordPullRequest(card.id, { ...pr, checks, error: ci.error, ciPending: ci.pending || !!ci.rework });
       if (ci.rework) {
         try { await ci.rework(); }
         catch (error) { this.board.recordPullRequestError(card.id, `CI failed, and Bakery could not start a fix run yet: ${error instanceof Error ? error.message : String(error)}. It retries on the next sync, and the failures go to whichever run starts next.`); }
@@ -280,7 +281,7 @@ export class GitHubSync {
    * work, uncommitted changes, or someone else's push mean a person is already handling it. The fix still needs
    * Approve to reach the PR. After `maxCiReworks` rounds the card stays in Review with the reason.
    */
-  private async sendBackFailingCi(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown }> {
+  private async sendBackFailingCi(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown; pending?: boolean }> {
     const head = pr.headRefOid, failures = fixableFailures(pr);
     if (!this.rework || card.prOverrideUrl || !head) return {};
     // CI went green (a rerun, or a label added) before the fix run started: those failures are stale.
@@ -295,7 +296,7 @@ export class GitHubSync {
     // starts (a merge-queue-only check, say) must not hold back a failure that finished 10 minutes ago.
     const running = latestChecks(pr).some(check => unfinished.includes(outcome(check)));
     const settledFor = Date.now() - Math.max(...failures.map(check => Date.parse(check.completedAt ?? "") || 0));
-    if (running && settledFor < 10 * 60_000) return {};
+    if (running && settledFor < 10 * 60_000) return { pending: true };
     const worktree = join(this.dataDir, "worktrees", card.id);
     if (!existsSync(worktree)) return {};
     try {
@@ -315,6 +316,28 @@ export class GitHubSync {
     }
     this.board.recordCiFailure(card.id, head, sections.join("\n\n"));
     return this.startRework(card);
+  }
+  /**
+   * A CI fix run that reached Review is pushed to the PR without waiting for Approve: the operator chose to let
+   * CI-only rounds run unattended. It still stops for review comments, and the PR still needs its merge review.
+   * Returns true when it pushed.
+   */
+  private async pushCiFix(card: Card, pr: PullRequest): Promise<boolean> {
+    const run = this.board.listRuns(card.id)[0];
+    if (!this.autoApprove || card.prOverrideUrl || card.status !== "review" || run?.status !== "review" || !run.ciFix) return false;
+    if (this.board.hasRequestedChanges(card.id, run.id) || this.board.hasDraftReviewComments(card.id, run.id) || this.board.getApproval(card.id)) return false;
+    const worktree = join(this.dataDir, "worktrees", card.id);
+    try {
+      // Already pushed, or the fix run changed nothing: nothing to send.
+      if (await git(worktree, "rev-parse", "HEAD") === pr.headRefOid && !(await git(worktree, "status", "--porcelain"))) return false;
+    } catch { return false; }
+    try {
+      await this.autoApprove(card);
+      return true;
+    } catch (error) {
+      this.board.recordPullRequestError(card.id, `Bakery could not push the CI fix: ${error instanceof Error ? error.message : String(error)}. Review it and Approve to push it yourself.`);
+      return true;
+    }
   }
   private startRework(card: Card): { rework: () => unknown } {
     const rework = this.rework!;

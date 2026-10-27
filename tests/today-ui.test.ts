@@ -62,10 +62,10 @@ test("Today opens first and gathers what needs you across every repository", asy
     await page.getByRole("heading", { name: "Today" }).waitFor();
     assert.deepEqual(await section(page, "Needs you").getByRole("listitem").allInnerTexts().then(items => items.map(item => item.split("\n")[0])),
       ["Card review-old", "Card review-new", "Card broken"]);
-    assert.deepEqual(await section(page, "Running").getByRole("listitem").allInnerTexts().then(items => items.map(item => item.split("\n")[0])), ["Card busy"]);
+    assert.deepEqual(await section(page, "In progress").getByRole("listitem").allInnerTexts().then(items => items.map(item => item.split("\n")[0])), ["Card busy"]);
     assert.deepEqual(await section(page, "Finished since your last visit").getByRole("listitem").allInnerTexts().then(items => items.map(item => item.split("\n")[0])), ["Card merged"]);
     assert.match(await page.getByRole("status", { name: "Since your last visit" }).innerText(), /1 merged · 3 need you · \$1\.75 in the last 24h/);
-    await section(page, "Running").getByRole("button", { name: /Card busy/ }).click();
+    await section(page, "In progress").getByRole("button", { name: /Card busy/ }).click();
     await page.getByRole("dialog").getByText("Card busy").waitFor();
   } finally { await page.close(); }
 });

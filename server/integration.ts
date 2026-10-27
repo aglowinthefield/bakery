@@ -177,6 +177,7 @@ export class Integration {
     }
     const number = Number(url.match(/\/pull\/(\d+)/)?.[1]);
     this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
+    this.board.recordPullRequestPush(card.id, run.id);
     return this.board.getCard(card.id)!;
   }
 

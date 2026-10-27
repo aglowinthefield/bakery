@@ -78,7 +78,7 @@ export class Worker {
     const ciPrompt = ciFeedback && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix (for example a check that needs a label or a human decision). The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
     const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${feedbackPrompt}${ciPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
     // Handed to this run; a later run should not see the same failures again.
-    if (ciPrompt) this.board.clearCiFeedback(card.id);
+    if (ciPrompt) this.board.startCiFix(card.id, run.id);
     const phase = conflict ? "conflict" : "work";
     const launch = () => this.launchPi(card, run, worktree, prompt, phase);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
@@ -165,7 +165,10 @@ export class Worker {
     let buffer = "", settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
     let turn = 0, lastWorktreeSnapshot = "", lastAgent = "";
     const tools = new Map<string, { name: string; finished: boolean; failed: boolean }>();
+    let touchedAt = Date.now();
     child.stdout?.on("data", (chunk: Buffer) => {
+      // Any output counts as activity; a write every 10s is enough for the board to tell working from quiet.
+      if (Date.now() - touchedAt >= 10_000) { touchedAt = Date.now(); this.board.touch(run.id); }
       buffer += chunk.toString("utf8");
       let i: number;
       while ((i = buffer.indexOf("\n")) >= 0) {

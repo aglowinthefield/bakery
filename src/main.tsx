@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useRef,
   useState,
@@ -21,6 +22,7 @@ import {
   CircleHelp,
   Clock3,
   GitBranch,
+  Hourglass,
   Pencil,
   Plus,
   RefreshCw,
@@ -71,9 +73,14 @@ import {
   byPriority,
   priorities,
   priorityLabel,
+  cardActivity,
+  countKey,
+  needsYourReview,
+  reviewWaitLabels,
   type BakerySettings,
   type Board,
   type Card,
+  type CountKey,
   type MergeConflict,
   type Priority,
   type Status,
@@ -120,7 +127,7 @@ const sidebarCounts: {
   icon: LucideIcon;
   /** Supplies the lane color. */
   color: Status;
-  statuses: Status[];
+  statuses: CountKey[];
   hideEmpty?: boolean;
 }[] = [
   {
@@ -135,7 +142,8 @@ const sidebarCounts: {
     label: "In progress",
     icon: LoaderCircle,
     color: "running",
-    statuses: ["running"],
+    // Review cards an agent, CI or GitHub still has are in progress, not waiting on you.
+    statuses: ["running", "reviewWaiting"],
   },
   {
     id: "review",
@@ -499,7 +507,7 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-  const seenStatuses = useRef(new Map<string, Map<string, Status>>());
+  const seenStatuses = useRef(new Map<string, Map<string, CountKey>>());
   const [selected, setSelected] = useState<string | null>(null);
   const [verificationDraft, setVerificationDraft] = useState("");
   const [remoteUrlDraft, setRemoteUrlDraft] = useState("");
@@ -555,12 +563,13 @@ function App() {
     localStorage.setItem("bakery-view", "today");
     setSelected(null);
   };
-  // Notify once per card as it enters Review, comparing against the last poll of the same scope.
+  // Notify once per card as it starts needing your review, comparing against the last poll of the same scope.
+  // Review cards an agent, CI or GitHub still has are tracked as `reviewWaiting`, so the notice waits for them.
   const notifyNewReviews = (scope: string, next: Card[]) => {
     const previous = seenStatuses.current.get(scope);
     seenStatuses.current.set(
       scope,
-      new Map(next.map((card) => [card.id, card.status])),
+      new Map(next.map((card) => [card.id, countKey(card)])),
     );
     if (
       !previous ||
@@ -571,7 +580,7 @@ function App() {
       return;
     for (const card of next) {
       if (
-        card.status !== "review" ||
+        countKey(card) !== "review" ||
         !previous.has(card.id) ||
         previous.get(card.id) === "review"
       )
@@ -905,7 +914,7 @@ function App() {
                     (sum, status) =>
                       sum +
                       (live
-                        ? cards.filter((c) => c.status === status).length
+                        ? cards.filter((c) => countKey(c) === status).length
                         : (item.cardCounts?.[status] ?? 0)),
                     0,
                   );
@@ -1246,9 +1255,17 @@ function App() {
         <div className="overflow-x-auto p-6 lg:p-10">
           <div className="flex min-h-[500px] min-w-max gap-4">
             {columns.map((column) => {
-              const laneCards = byPriority(
+              const sorted = byPriority(
                 visibleCards.filter((c) => c.status === column.id),
               );
+              // Review splits into cards that need you, then cards an agent, CI or GitHub still has.
+              const waitingCards = sorted.filter((c) => c.reviewWait);
+              const laneCards =
+                column.id === "review"
+                  ? [...sorted.filter((c) => !c.reviewWait), ...waitingCards]
+                  : sorted;
+              const firstWaiting =
+                column.id === "review" ? waitingCards[0]?.id : undefined;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
               const collapsible = cards
@@ -1382,6 +1399,7 @@ function App() {
                       )}
                       <div className="space-y-3">
                         {laneCards.map((item) => {
+                          const activity = cardActivity(item);
                           const content = (
                             <>
                               <div className="mb-4 flex items-start justify-between gap-2">
@@ -1400,6 +1418,10 @@ function App() {
                                   {item.prNumber && (
                                     <PullRequestBadge card={item} />
                                   )}
+                                  <ActivityBadge
+                                    card={item}
+                                    activity={activity}
+                                  />
                                   {item.attempts > 1 && (
                                     <span
                                       data-testid="attempt-count"
@@ -1485,16 +1507,34 @@ function App() {
                               </label>
                             );
                           }
-                          return (
+                          const tile = (
                             <button
                               key={item.id}
                               onClick={() => {
                                 setSelected(item.id);
                               }}
-                              className={`${cardClass} border-border/80`}
+                              data-activity={activity ?? undefined}
+                              className={`${cardClass} card-activity border-border/80`}
                             >
                               {content}
                             </button>
+                          );
+                          if (item.id !== firstWaiting) return tile;
+                          return (
+                            <Fragment key={item.id}>
+                              <div
+                                role="separator"
+                                aria-label="Not your turn yet"
+                                className="flex items-center gap-2 px-1 pt-2 text-[10px] font-semibold uppercase tracking-[.14em] text-muted-foreground"
+                              >
+                                Not your turn yet
+                                <span className="h-px flex-1 bg-border" />
+                                <span className="font-mono">
+                                  {waitingCards.length}
+                                </span>
+                              </div>
+                              {tile}
+                            </Fragment>
                           );
                         })}
                         {laneCards.length === 0 && (
@@ -2362,6 +2402,44 @@ function PullRequestBadge({ card }: { card: Card }) {
     </span>
   );
 }
+/** Says who has a Review card that is not your turn, or how long a running agent has been quiet. */
+function ActivityBadge({
+  card,
+  activity,
+}: {
+  card: Card;
+  activity: ReturnType<typeof cardActivity>;
+}) {
+  if (card.status === "review" && card.reviewWait)
+    return (
+      <span
+        data-testid="activity-badge"
+        className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+      >
+        {activity === "working" ? (
+          <LoaderCircle size={10} className="animate-spin" aria-hidden />
+        ) : (
+          <Hourglass size={10} aria-hidden />
+        )}
+        {reviewWaitLabels[card.reviewWait]}
+      </span>
+    );
+  if (activity !== "quiet" || !card.lastActivityAt) return null;
+  const minutes = Math.round(
+    (Date.now() - Date.parse(card.lastActivityAt)) / 60_000,
+  );
+  return (
+    <span
+      data-testid="activity-badge"
+      title="The agent has reported nothing for a while. A long command can be quiet; check the attempt log if it stays quiet."
+      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500"
+    >
+      <CirclePause size={10} aria-hidden />
+      Quiet {minutes}m
+    </span>
+  );
+}
+
 function WaitingBadge({ waiting }: { waiting: Card[] }) {
   return (
     <span
