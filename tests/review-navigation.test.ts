@@ -54,7 +54,8 @@ test("changed files open their own patches and focus the heading without changin
     assert.equal(await patchButton(1).evaluate(element => element === document.activeElement), true);
     assert.equal(await patchButton(1).evaluate(element => { const bounds = element.getBoundingClientRect(); return bounds.top >= 0 && bounds.bottom <= innerHeight; }), true);
     assert.equal(await page.getByText("Keep this note").count(), 2);
-    await page.getByRole("combobox", { name: "Comment on a line in src/second.ts" }).selectOption({ label: "+1  second" });
+    await page.locator("#review-file-1").locator('[data-line][data-line-type="change-addition"]').first().hover();
+    await page.locator("#review-file-1 [data-utility-button]").click();
     await page.getByPlaceholder("What should change?").fill("Keep draft text");
     await list.getByRole("button", { name: files[2] }).focus();
     await page.keyboard.press("Space");
