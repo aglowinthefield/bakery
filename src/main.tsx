@@ -1194,6 +1194,16 @@ function App() {
             Auto pickup paused: {currentBoard.autoPickupError}.
           </div>
         )}
+        {currentBoard?.integration === "github-pr" &&
+          currentBoard.integrationError && (
+            <div
+              role="alert"
+              className="mx-6 mt-5 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive lg:mx-10"
+            >
+              GitHub sync stopped and auto pickup is waiting:{" "}
+              {currentBoard.integrationError}
+            </div>
+          )}
         {error && (
           <div
             role="alert"
@@ -1386,6 +1396,9 @@ function App() {
                                     <WaitingBadge
                                       waiting={waitingOn(item, cards)}
                                     />
+                                  )}
+                                  {item.prNumber && (
+                                    <PullRequestBadge card={item} />
                                   )}
                                   {item.attempts > 1 && (
                                     <span
@@ -2062,6 +2075,53 @@ function App() {
           )}
           {editingBoard && (
             <div className="mt-8 border-t border-border pt-5 text-sm">
+              <div className="font-medium">Integration</div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Local: Approve merges the card into local main. GitHub pull
+                requests: Approve pushes bakery/&lt;card&gt; and opens a PR with
+                gh; the card is Done once the PR merges and the merge is on
+                origin/main. Local main is then only fast-forwarded to
+                origin/main. Needs gh signed in and a GitHub remote link.
+              </p>
+              <label className="mt-4 block text-xs">
+                Integration mode
+                <select
+                  aria-label="Integration mode"
+                  value={editingBoard.integration ?? "local"}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const integration = event.target.value;
+                    void action(async () => {
+                      const updated = await api<Board>(
+                        `/boards/${editingBoard.id}/settings`,
+                        {
+                          method: "PATCH",
+                          body: JSON.stringify({ integration }),
+                        },
+                      );
+                      setBoards((previous) =>
+                        previous.map((item) =>
+                          item.id === updated.id ? updated : item,
+                        ),
+                      );
+                      setEditingBoard(updated);
+                    });
+                  }}
+                  className="mt-2 block w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
+                >
+                  <option value="local">Local merge</option>
+                  <option value="github-pr">GitHub pull requests</option>
+                </select>
+              </label>
+              {editingBoard.integrationError && (
+                <p role="alert" className="mt-2 text-xs text-destructive">
+                  {editingBoard.integrationError}
+                </p>
+              )}
+            </div>
+          )}
+          {editingBoard && (
+            <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Unattended review</div>
               <p className="mt-2 text-xs text-muted-foreground">
                 A tool-free Pi reviewer inspects new Review cards; the
@@ -2231,6 +2291,9 @@ function App() {
         <CardDetails
           key={selected}
           boardId={detailBoardId}
+          integration={
+            boards.find((item) => item.id === detailBoardId)?.integration
+          }
           card={card}
           boardCards={scopeCards.filter((item) => item.repo === card?.repo)}
           onOpenCard={setSelected}
@@ -2270,6 +2333,33 @@ function App() {
         />
       )}
     </div>
+  );
+}
+function PullRequestBadge({ card }: { card: Card }) {
+  const tone =
+    card.prState === "MERGED"
+      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
+      : card.prState === "CLOSED" || card.prChecks === "failing"
+        ? "border-red-500/40 bg-red-500/10 text-red-500"
+        : "border-border text-muted-foreground";
+  return (
+    <span
+      data-testid="pr-badge"
+      title={[
+        card.prUrl,
+        card.prState?.toLowerCase(),
+        card.prChecks && `checks ${card.prChecks}`,
+        card.prError,
+      ]
+        .filter(Boolean)
+        .join(" \u00b7 ")}
+      className={`rounded border px-2 py-0.5 font-mono text-[10px] font-medium ${tone}`}
+    >
+      PR #{card.prNumber}
+      {card.prChecks && card.prState === "OPEN"
+        ? ` \u00b7 ${card.prChecks}`
+        : ""}
+    </span>
   );
 }
 function WaitingBadge({ waiting }: { waiting: Card[] }) {

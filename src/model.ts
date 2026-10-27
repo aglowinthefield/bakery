@@ -17,6 +17,10 @@ export type Board = {
   icon: RepoIcon;
   color: RepoColor;
   remoteUrl?: string;
+  /** local: Approve merges into local main. github-pr: Approve opens a PR; Done once it merges on GitHub. */
+  integration?: "local" | "github-pr";
+  /** Why GitHub sync last failed; auto pickup waits while it is set. */
+  integrationError?: string;
   autoCollapseEmptySwimlanes: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;
@@ -110,6 +114,13 @@ export type Card = {
   dependsOn?: string[];
   /** True while any card in dependsOn is not Done or archived. */
   blocked?: boolean;
+  /** A PR link attached by the operator; overrides the bakery/<id> branch lookup. */
+  prOverrideUrl?: string | null;
+  prNumber?: number | null;
+  prUrl?: string | null;
+  prState?: "OPEN" | "CLOSED" | "MERGED" | null;
+  prChecks?: string | null;
+  prError?: string | null;
 } & UsageFields;
 const finished = (status: Status) => status === "done" || status === "archived";
 /**

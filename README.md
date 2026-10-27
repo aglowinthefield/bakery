@@ -24,6 +24,7 @@ flowchart LR
 - [Card lifecycle](#card-lifecycle)
 - [Dependencies](#dependencies)
 - [Reviewing and merging](#reviewing-and-merging)
+- [GitHub pull request mode](#github-pull-request-mode)
 - [Watching a run](#watching-a-run)
 - [Automation (opt-in)](#automation-opt-in)
 - [CLI](#cli)
@@ -149,6 +150,39 @@ flowchart TD
 - Diffs over 200 files or 2 MB can't be approved in Bakery. Binary files need checking in the worktree.
 - If you merge a card's branch into `main` yourself, Bakery notices on its next tick and marks the card Done. This only applies when the worktree is clean and the merge actually changed `main`.
 
+## GitHub pull request mode
+
+By default a board integrates locally: Approve merges into local `main`. A board can instead integrate through GitHub pull requests, where a card is Done only when its PR has merged on GitHub and the merge commit is on `origin/main`.
+
+To turn it on, give the board a GitHub remote link (`https://github.com/OWNER/REPO`), then pick **GitHub pull requests** under Integration in the board's settings, or run `bakery-cli board --integration github-pr`. The repository's `origin` must be that GitHub repository, and its default branch must be `main`.
+
+[`gh`](https://cli.github.com) is required. If `gh` is missing or `gh auth status` fails, the board shows the error and Bakery does nothing on that board: no PR polling, no fetch, no automatic pickup. It never falls back to local detection. Set `BAKERY_GH_BIN` to use a different `gh` binary.
+
+What changes in this mode:
+
+- **New card worktrees** start from a freshly fetched `origin/main`, not from the local checkout's `HEAD`.
+- **Approve and open PR** commits the reviewed changes on `bakery/<card>`, pushes that branch to `origin`, and runs `gh pr create` with the card title and the card description plus the run summary. Nothing merges locally. If the branch already has an open PR, Approve pushes the new commits to it. `gh` errors, such as a repository's PR title rules, appear on the card word for word. Pi is still told never to push or open PRs. Your Approve is the authorization.
+- **Linking a PR.** Bakery finds a card's PR by its `bakery/<card>` branch. If your branch naming differs, attach the PR link on the card, or run `bakery-cli pr CARD_ID URL` (`off` clears it). A linked PR is only watched; Bakery doesn't push to it.
+- **Polling.** About once a minute per board, Bakery makes one `gh pr list` call for the board's Review cards:
+  - **Open:** the card stays in Review and shows the PR number and checks state.
+  - **Merged:** Bakery fetches `origin` and checks that the merge commit is an ancestor of `origin/main`. If it is, the card moves to Done and the merge is recorded. If not yet, the card stays in Review and Bakery checks again next time.
+  - **Closed without merging:** the card goes to Needs you with the reason.
+- **Cleanup.** After a card is Done, Bakery removes its worktree and local branch (with `wt remove` when Worktrunk is installed). Squash merges aren't ancestors of the branch, so the branch is force-deleted, but only after GitHub has confirmed the merge.
+- **Retries.** When you rerun a card whose committed branch is behind `origin/main` and hasn't been pushed, Bakery rebases it onto `origin/main` before Pi starts. If the rebase conflicts, the attempt goes to Needs you and the branch is left as it was. Cards in Review are never rebased, because that would change what you reviewed.
+- Auto-review and local merge detection are off for these boards.
+
+### Keeping local main current
+
+In this mode the main checkout is never a workspace. Every card works in its own worktree, so local `main` should always be clean and at or behind `origin/main`. On each sync, and right after a card goes Done, Bakery runs `git fetch origin --prune` and then `git merge --ff-only origin/main` in the main checkout.
+
+Main only ever fast-forwards. If it has uncommitted changes, has local commits, has diverged, or isn't checked out, Bakery doesn't reset, rebase, stash, or force anything. It shows the problem on the board and pauses automatic pickup there until a later sync succeeds. Untracked files don't block the sync unless the fast-forward would overwrite them.
+
+### Not detected
+
+- **Reverts after merge.** Once a card is Done, Bakery doesn't watch for its PR being reverted.
+- Force-pushes that rewrite `origin/main` after a card is Done.
+- PRs merged into a branch other than `main`. They never reach `origin/main`, so the card stays in Review.
+
 ## Watching a run
 
 Each attempt in a card's **Attempts** list shows:
@@ -223,6 +257,8 @@ npm run bakery -- start CARD_ID... --yes
 npm run bakery -- runs CARD_ID
 npm run bakery -- conflicts
 npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
+npm run bakery -- board [--integration local|github-pr]
+npm run bakery -- pr CARD_ID [URL|off]
 ```
 
 - `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body` and `--priority` as `create`.
@@ -238,6 +274,7 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
+- `board [--integration local|github-pr]` shows the board, or switches its integration mode. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
 - To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get a `bakery-cli` command on your `PATH`, run `npm link`.
 
 ## Boards and lanes
