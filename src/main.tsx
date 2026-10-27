@@ -467,6 +467,14 @@ function App() {
   const [view, setView] = useState<"today" | "board">(() =>
     localStorage.getItem("bakery-view") === "board" ? "board" : "today",
   );
+  const [reposCollapsed, setReposCollapsed] = useState(
+    () => localStorage.getItem("bakery-repos-collapsed") === "true",
+  );
+  const toggleRepos = () => {
+    const next = !reposCollapsed;
+    setReposCollapsed(next);
+    localStorage.setItem("bakery-repos-collapsed", String(next));
+  };
   const [allCards, setAllCards] = useState<Card[]>([]);
   const [since] = useState(
     () =>
@@ -912,92 +920,104 @@ function App() {
               </span>
             )}
           </button>
-          <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground">
-            Repositories
-          </div>
-          {boards.map((item) => (
-            <div
-              key={item.id}
-              className={`rounded-lg ${view === "board" && boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
-            >
-              <div className="flex items-center">
-                <button
-                  onClick={() => openBoard(item.id)}
-                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
-                  title={item.repo}
-                >
-                  <RepoBadge board={item} />
-                  <span className="truncate">
-                    {item.repo.split("/").at(-1)}
-                  </span>
-                </button>
-                <button
-                  aria-label={`Edit ${item.repo}`}
-                  title="Edit repository"
-                  className="mr-2 p-1 text-muted-foreground hover:text-foreground"
-                  onClick={() => {
-                    setError("");
-                    setRepoPath(item.repo);
-                    setIconDraft(item.icon);
-                    setColorDraft(item.color);
-                    setRemoteUrlDraft(item.remoteUrl ?? "");
-                    setVerificationDraft(item.verificationCommand ?? "");
-                    setEditingBoard(item);
-                  }}
-                >
-                  <Pencil size={13} />
-                </button>
-              </div>
-              <ul
-                aria-label="Card counts"
-                className="flex items-center gap-3 px-3 pb-2"
-              >
-                {sidebarCounts.map((group) => {
-                  const Icon = group.icon;
-                  const live =
-                    view === "board" &&
-                    boardId === item.id &&
-                    (cards.length || !item.cardCounts);
-                  const count = group.statuses.reduce(
-                    (sum, status) =>
-                      sum +
-                      (live
-                        ? cards.filter((c) => countKey(c) === status).length
-                        : (item.cardCounts?.[status] ?? 0)),
-                    0,
-                  );
-                  if (group.hideEmpty && !count) return null;
-                  return (
-                    <li
-                      key={group.id}
-                      data-group={group.id}
-                      data-status={group.color}
-                      title={`${count} ${group.label.toLowerCase()}`}
-                      aria-label={`${group.label}: ${count}`}
-                      className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
-                    >
-                      <Icon
-                        size={12}
-                        aria-hidden="true"
-                        className="lane-status-icon shrink-0"
-                      />
-                      <span className="font-mono">{count}</span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
-          <Button
-            variant="ghost"
-            className="mt-2 w-full justify-start"
-            onClick={() => {
-              setError("");
-              setAddingRepo(true);
-            }}
+          <button
+            onClick={toggleRepos}
+            aria-expanded={!reposCollapsed}
+            aria-controls="sidebar-repositories"
+            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground hover:text-foreground"
           >
-            <Plus size={15} /> Add repository
-          </Button>
+            Repositories
+            {reposCollapsed ? (
+              <ChevronRight size={12} aria-hidden="true" className="ml-auto" />
+            ) : (
+              <ChevronDown size={12} aria-hidden="true" className="ml-auto" />
+            )}
+          </button>
+          <div id="sidebar-repositories" hidden={reposCollapsed}>
+            {boards.map((item) => (
+              <div
+                key={item.id}
+                className={`rounded-lg ${view === "board" && boardId === item.id ? "bg-accent/50" : "hover:bg-accent/30"}`}
+              >
+                <div className="flex items-center">
+                  <button
+                    onClick={() => openBoard(item.id)}
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
+                    title={item.repo}
+                  >
+                    <RepoBadge board={item} />
+                    <span className="truncate">
+                      {item.repo.split("/").at(-1)}
+                    </span>
+                  </button>
+                  <button
+                    aria-label={`Edit ${item.repo}`}
+                    title="Edit repository"
+                    className="mr-2 p-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      setError("");
+                      setRepoPath(item.repo);
+                      setIconDraft(item.icon);
+                      setColorDraft(item.color);
+                      setRemoteUrlDraft(item.remoteUrl ?? "");
+                      setVerificationDraft(item.verificationCommand ?? "");
+                      setEditingBoard(item);
+                    }}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                </div>
+                <ul
+                  aria-label="Card counts"
+                  className="flex items-center gap-3 px-3 pb-2"
+                >
+                  {sidebarCounts.map((group) => {
+                    const Icon = group.icon;
+                    const live =
+                      view === "board" &&
+                      boardId === item.id &&
+                      (cards.length || !item.cardCounts);
+                    const count = group.statuses.reduce(
+                      (sum, status) =>
+                        sum +
+                        (live
+                          ? cards.filter((c) => countKey(c) === status).length
+                          : (item.cardCounts?.[status] ?? 0)),
+                      0,
+                    );
+                    if (group.hideEmpty && !count) return null;
+                    return (
+                      <li
+                        key={group.id}
+                        data-group={group.id}
+                        data-status={group.color}
+                        title={`${count} ${group.label.toLowerCase()}`}
+                        aria-label={`${group.label}: ${count}`}
+                        className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
+                      >
+                        <Icon
+                          size={12}
+                          aria-hidden="true"
+                          className="lane-status-icon shrink-0"
+                        />
+                        <span className="font-mono">{count}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+            <Button
+              variant="ghost"
+              className="mt-2 w-full justify-start"
+              onClick={() => {
+                setError("");
+                setAddingRepo(true);
+              }}
+            >
+              <Plus size={15} /> Add repository
+            </Button>
+          </div>
           <Button
             variant="ghost"
             className="mt-2 w-full justify-start"
