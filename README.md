@@ -52,6 +52,16 @@ Then:
 
 Uncommitted or untracked files in your checkout don't appear in card worktrees.
 
+### Worktrunk hooks
+
+If [Worktrunk](https://worktrunk.dev) is installed, Bakery runs your repository's creation hooks in each new card worktree before Pi starts. Use them to install dependencies or copy `.env` and other ignored files (`wt step copy-ignored`). Hooks live in `.config/wt.toml` in the repository, or in `~/.config/worktrunk/config.toml`.
+
+- `pre-start` hooks run first, and Pi waits for them. If one fails, the attempt fails with the hook output in its transcript. Bakery removes the new worktree and branch so the next attempt runs the hooks again.
+- `post-start` hooks start in the background, as they do under `wt switch`.
+- Hooks run only when Bakery creates the worktree. Retries and conflict repairs reuse it without running them.
+- Bakery passes `--yes`, so project hooks run without Worktrunk's approval prompt. Pi runs commands in the same worktree anyway.
+- Bakery still picks the worktree path and handles review and merge itself. It doesn't call `wt switch` or `wt merge`.
+
 ## Card lifecycle
 
 ```mermaid
@@ -225,7 +235,7 @@ A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-c
 ## Server, data, and restarts
 
 - The server listens only on `127.0.0.1` and has no authentication. Don't expose it on a network.
-- Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, and `BAKERY_PI_BIN` to use a different `pi` binary.
+- Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, `BAKERY_PI_BIN` to use a different `pi` binary, and `BAKERY_WT_BIN` to use a different `wt` binary. Set `BAKERY_WT_BIN=` (empty) to turn off Worktrunk hooks.
 - Only one server can own a data directory, which it locks with `server.lock`. If the PID in the lock is no longer running, the next server takes over the lock.
 - **Stop** ends a run and marks it Failed. Runs time out after 30 minutes.
 

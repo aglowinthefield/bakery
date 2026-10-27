@@ -22,7 +22,8 @@ let board: Board;
 try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const piBin = process.env.BAKERY_PI_BIN ?? "pi";
-const worker = new Worker(board, dataDir, piBin);
+// Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
+const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
 const autoReview = new AutoReview(board, integration, piBin);
 const autoPickup = new AutoPickup(board, worker);

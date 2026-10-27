@@ -2,7 +2,7 @@ import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
-import { piModelArgs } from "./agent-models.js";
+import { piModelArgs, type AgentPhase } from "./agent-models.js";
 import { Board, type Card, type Run } from "./board.js";
 
 function git(repo: string, ...args: string[]) {
@@ -20,7 +20,8 @@ export class Worker {
   private terminationReasons = new Map<string, string>();
   private draining = false;
   private idleWaiters: (() => void)[] = [];
-  constructor(private board: Board, private dataDir: string, private piBin = "pi") {}
+  /** `wtBin` enables Worktrunk hooks for new card worktrees; omit it to skip hooks entirely. */
+  constructor(private board: Board, private dataDir: string, private piBin = "pi", private wtBin?: string) {}
   private terminate(id: string, child: ChildProcess, reason: string) {
     if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
@@ -47,10 +48,11 @@ export class Worker {
       realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     const run = this.board.claim(card.id, startedBy);
+    let created = false;
     try {
       if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");
       mkdirSync(join(this.dataDir, "worktrees"), { recursive: true });
-      if (!existsSync(worktree)) git(root, "worktree", "add", "-b", branch, worktree, "HEAD");
+      if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, "HEAD"); created = true; }
     } catch (error) {
       this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
       return this.board.getRun(run.id)!;
@@ -60,9 +62,63 @@ export class Worker {
       : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action.";
     const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
     const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${feedbackPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, give brief plain-language progress updates about what you learned and what comes next, rather than narrating each tool call. At the end, state what changed, what you verified, and what remains. A finished agent session requests review; it does not mark the card done.`;
+    const phase = conflict ? "conflict" : "work";
+    const launch = () => this.launchPi(card, run, worktree, prompt, phase);
+    if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
+    return launch();
+  }
+  /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name (wiredtiger ships one). */
+  private hasWorktrunk() {
+    if (!this.wtBin) return false;
+    try { return /^wt v\d/.test(execFileSync(this.wtBin, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
+    catch { return false; }
+  }
+  private release(id: string) {
+    this.active.delete(id);
+    if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
+  }
+  /**
+   * Runs the repository's Worktrunk pre-start hooks in a freshly created card worktree, starts
+   * its post-start hooks in the background, then launches Pi. Approval prompts are skipped because
+   * nobody is at a terminal; Pi runs arbitrary commands in the same worktree anyway. If pre-start
+   * fails, the fresh worktree and branch are removed so a retry runs the hooks again.
+   */
+  private runWorktrunkHooks(run: Run, root: string, worktree: string, branch: string, launch: () => Run) {
+    this.board.append(run.id, "Running Worktrunk pre-start hooks…\n");
+    const child = spawn(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+    this.active.set(run.id, child);
+    if (child.pid) this.board.attach(run.id, child.pid, worktree);
+    let output = "", done = false;
+    const collect = (chunk: Buffer) => { output = (output + chunk.toString("utf8")).slice(-4000); };
+    child.stdout?.on("data", collect);
+    child.stderr?.on("data", collect);
+    const timer = setTimeout(() => this.terminate(run.id, child, "10-minute Worktrunk hook timeout"), 10 * 60 * 1000);
+    const settle = (failure: string | null) => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      const reason = this.terminationReasons.get(run.id);
+      this.terminationReasons.delete(run.id);
+      if (!failure && !reason) {
+        try { execFileSync(this.wtBin!, ["-C", worktree, "hook", "post-start", "--yes"], { cwd: worktree, stdio: "ignore", timeout: 30_000 }); }
+        catch { this.board.append(run.id, "Worktrunk post-start hooks could not start; continuing without them.\n"); }
+        this.board.append(run.id, "Worktrunk hooks done. Starting Pi.\n");
+        launch();
+        if (!this.active.has(run.id) || this.active.get(run.id) === child) this.release(run.id);
+        return;
+      }
+      this.release(run.id);
+      if (output.trim()) this.board.append(run.id, `${output.trimEnd()}\n`);
+      try { git(root, "worktree", "remove", "--force", worktree); git(root, "branch", "-D", branch); }
+      catch { /* Keep the hook error; a leftover worktree only means the next attempt skips hooks. */ }
+      this.board.finish(run.id, "failed", reason ? `Worktrunk pre-start hooks stopped; Bakery sent SIGTERM: ${reason}` : failure!);
+    };
+    child.on("error", error => settle(`Worktrunk could not start: ${error.message}`));
+    child.on("close", (code, signal) => settle(code === 0 ? null : `Worktrunk pre-start hooks failed (${signal ?? code ?? "unknown"}); hook output is in the transcript`));
+  }
+  private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase): Run {
     let child: ChildProcess;
     try {
-      const models = piModelArgs(this.board.agentModelFor(card.repo, conflict ? "conflict" : "work"));
+      const models = piModelArgs(this.board.agentModelFor(card.repo, phase));
       child = spawn(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
