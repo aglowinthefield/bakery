@@ -21,7 +21,7 @@ export type Check = {
 /** One open PR as the Pull requests page shows it. */
 export type RepoPullRequest = {
   number: number; title: string; url: string; headRefName: string; isDraft: boolean; updatedAt: string;
-  author?: { login?: string } | null; additions?: number; deletions?: number; reviewDecision?: string | null;
+  author?: { login?: string } | null; additions?: number; deletions?: number; reviewDecision?: string | null; checks?: string | null;
 };
 const prFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,statusCheckRollup";
 // statusCheckRollup is expensive: across 200 PRs on a busy repo GitHub's GraphQL API times out (HTTP 504).
@@ -141,9 +141,13 @@ export class GitHub {
   async listPullRequests(repo: string): Promise<PullRequest[]> {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "all", "--limit", "200", "--json", listFields])) as PullRequest[];
   }
-  /** Open PRs of a repository for the Pull requests page, newest first. */
+  /** Open PRs for the Pull requests page: the cheap fields, about half a second even on a busy repo. */
   async listOpenPullRequests(repo: string): Promise<RepoPullRequest[]> {
-    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,title,url,author,headRefName,isDraft,updatedAt,reviewDecision,additions,deletions"])) as RepoPullRequest[];
+    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,title,url,author,headRefName,isDraft,updatedAt"])) as RepoPullRequest[];
+  }
+  /** The fields GitHub is slow to compute (seconds on a busy repo), fetched apart so they never hold up the list. */
+  async listOpenPullRequestExtras(repo: string): Promise<(Pick<RepoPullRequest, "number" | "additions" | "deletions" | "reviewDecision"> & { statusCheckRollup?: Check[] })[]> {
+    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,reviewDecision,additions,deletions,statusCheckRollup"]));
   }
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {

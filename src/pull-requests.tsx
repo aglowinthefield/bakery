@@ -13,6 +13,7 @@ type PullRequest = {
   additions?: number;
   deletions?: number;
   reviewDecision?: string | null;
+  checks?: string | null;
   card?: { id: string; title: string; status: string; prChecks: string | null } | null;
 };
 
@@ -21,6 +22,8 @@ const decisions: Record<string, string> = {
   CHANGES_REQUESTED: "Changes requested",
   REVIEW_REQUIRED: "Review required",
 };
+
+const remembered = new Map<string, PullRequest[]>();
 
 /** Open pull requests of one repository, read from GitHub through the server. */
 export function PullRequests({
@@ -32,17 +35,30 @@ export function PullRequests({
   highlight?: number | null;
   onOpenCard: (cardId: string) => void;
 }) {
-  const [pulls, setPulls] = useState<PullRequest[] | null>(null);
+  const [pulls, setPulls] = useState<PullRequest[] | null>(() => remembered.get(boardId) ?? null);
   const [error, setError] = useState("");
+  // Opens from the last list seen, then follows the server's background refresh.
   useEffect(() => {
     let current = true;
-    setPulls(null);
+    let timer: ReturnType<typeof setTimeout>;
+    setPulls(remembered.get(boardId) ?? null);
     setError("");
-    api<PullRequest[]>(`/boards/${boardId}/pull-requests`)
-      .then((next) => current && setPulls(next))
-      .catch((err) => current && setError(String(err.message ?? err)));
+    const load = () =>
+      api<PullRequest[]>(`/boards/${boardId}/pull-requests`)
+        .then((next) => {
+          if (!current) return;
+          remembered.set(boardId, next);
+          setPulls(next);
+          setError("");
+        })
+        .catch((err) => current && setError(String(err.message ?? err)))
+        .finally(() => {
+          if (current) timer = setTimeout(load, 15_000);
+        });
+    void load();
     return () => {
       current = false;
+      clearTimeout(timer);
     };
   }, [boardId]);
   return (
@@ -67,6 +83,7 @@ export function PullRequests({
               </span>
             </a>
             {pr.isDraft && <span className="text-xs text-muted-foreground">Draft</span>}
+            {pr.checks && <span className="text-xs text-muted-foreground">Checks {pr.checks}</span>}
             {pr.reviewDecision && <span className="text-xs text-muted-foreground">{decisions[pr.reviewDecision] ?? pr.reviewDecision}</span>}
             {pr.card ? (
               <button
