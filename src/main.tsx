@@ -992,12 +992,12 @@ export function App() {
         <div className="px-4 pt-5">
           <button
             onClick={openToday}
-            className={`mb-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm ${view === "today" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+            className={`mb-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50" : "hover:bg-accent/30"}`}
           >
             <Sun size={16} aria-hidden="true" className="text-primary" />
             Today
             {needsYouCount > 0 && (
-              <span className="ml-auto rounded-full bg-primary/15 px-2 font-mono text-xs text-primary">
+              <span className="ml-auto rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary">
                 {needsYouCount}
               </span>
             )}
@@ -1006,7 +1006,7 @@ export function App() {
             onClick={toggleRepos}
             aria-expanded={!reposCollapsed}
             aria-controls="sidebar-repositories"
-            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground hover:text-foreground"
+            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[length:var(--text-sidebar-meta)] font-semibold uppercase tracking-[.18em] text-muted-foreground hover:text-foreground"
           >
             Repositories
             {reposCollapsed ? (
@@ -1024,7 +1024,7 @@ export function App() {
                 <div className="flex items-center">
                   <button
                     onClick={() => openBoard(item.id)}
-                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm"
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-[length:var(--text-sidebar)]"
                     title={item.repo}
                   >
                     <RepoBadge board={item} />
@@ -1075,7 +1075,7 @@ export function App() {
                         data-status={group.color}
                         title={`${count} ${group.label.toLowerCase()}`}
                         aria-label={`${group.label}: ${count}`}
-                        className={`flex items-center gap-1 text-xs ${count ? "" : "opacity-40"}`}
+                        className={`flex items-center gap-1 text-[length:var(--text-sidebar-meta)] ${count ? "" : "opacity-40"}`}
                       >
                         <Icon
                           size={12}
@@ -1091,7 +1091,7 @@ export function App() {
             ))}
             <Button
               variant="ghost"
-              className="mt-2 w-full justify-start"
+              className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
               onClick={() => {
                 setError("");
                 setAddingRepo(true);
@@ -1102,7 +1102,7 @@ export function App() {
           </div>
           <Button
             variant="ghost"
-            className="mt-2 w-full justify-start"
+            className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
             onClick={() => {
               setError("");
               setShowSettings(true);
@@ -1112,7 +1112,7 @@ export function App() {
           </Button>
         </div>
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 text-[length:var(--text-sidebar-meta)] text-muted-foreground">
             <span className="size-1.5 rounded-full bg-status-review" /> Local
             only <span className="ml-auto font-mono">v0.1</span>
           </div>
