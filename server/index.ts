@@ -8,6 +8,7 @@ import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
+import { GitHub, GitHubSync } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, validateAgentModels } from "./agent-models.js";
@@ -27,6 +28,9 @@ const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "w
 const integration = new Integration(board, dataDir);
 const autoReview = new AutoReview(board, integration, piBin);
 const autoPickup = new AutoPickup(board, worker);
+// github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
+const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
+const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000);
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
@@ -171,6 +175,12 @@ const server = createServer(async (req, res) => {
         if (Object.keys(input).length !== 1) throw new Error("Update agentModels separately from other board settings");
         send(res, 200, board.setAgentModels(repoBoard.id, input.agentModels)); return;
       }
+      if ("integration" in input) {
+        if (Object.keys(input).length !== 1) throw new Error("Update integration separately from other board settings");
+        const updated = board.setIntegration(repoBoard.id, input.integration);
+        if (updated.integration === "github-pr") void githubSync.syncBoard(updated.id);
+        send(res, 200, updated); return;
+      }
       if ("remoteUrl" in input) {
         if (Object.keys(input).length !== 1 || typeof input.remoteUrl !== "string") throw new Error("Update remoteUrl as a string, separately from other board settings");
         send(res, 200, board.setRemoteUrl(repoBoard.id, input.remoteUrl)); return;
@@ -217,7 +227,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|dependencies))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|dependencies|pull-request))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -269,7 +279,19 @@ const server = createServer(async (req, res) => {
         if (req.method === "POST" && action === "approve") {
           const { fingerprint } = await body(req);
           if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review diff before approving");
+          if (repoBoard.integration === "github-pr") {
+            const card = await integration.openPullRequest(item, fingerprint, github);
+            void githubSync.syncBoard(repoBoard.id);
+            send(res, 200, card); return;
+          }
           send(res, 200, integration.approve(item, fingerprint)); return;
+        }
+        if (req.method === "PUT" && action === "pull-request") {
+          const { url } = await body(req);
+          if (typeof url !== "string") throw new Error("url must be a pull request link, or empty to use the bakery/<card> branch");
+          const card = board.setPullRequestOverride(id, url);
+          if (repoBoard.integration === "github-pr") void githubSync.syncBoard(repoBoard.id);
+          send(res, 200, card); return;
         }
         if (req.method === "POST" && action === "withdraw") { send(res, 200, integration.withdraw(item)); return; }
         if (req.method === "POST" && action === "resolve") {
@@ -307,8 +329,8 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); });
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
+server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); githubSync.start(); });
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); githubSync.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 process.on("message", (message: unknown) => {

@@ -26,6 +26,8 @@ import {
 
 type Props = {
   boardId: string;
+  /** The board's integration mode; github-pr approves by opening a pull request. */
+  integration?: "local" | "github-pr";
   card: Card | undefined;
   /** The cards on this card's board that the page has loaded, for naming and choosing dependencies. */
   boardCards: Card[];
@@ -43,6 +45,7 @@ type Props = {
 
 export function CardDetails({
   boardId,
+  integration = "local",
   card,
   boardCards,
   onOpenCard,
@@ -313,6 +316,20 @@ export function CardDetails({
             </select>
           </label>
         )}
+        {card && integration === "github-pr" && (
+          <PullRequestLink
+            card={card}
+            busy={busy}
+            onSave={(url) =>
+              action(() =>
+                api<Card>(`/boards/${boardId}/cards/${card.id}/pull-request`, {
+                  method: "PUT",
+                  body: JSON.stringify({ url }),
+                }),
+              )
+            }
+          />
+        )}
         {card && (
           <Dependencies
             card={card}
@@ -563,7 +580,9 @@ export function CardDetails({
                 if (
                   !currentReview ||
                   !window.confirm(
-                    `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
+                    integration === "github-pr"
+                      ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
+                      : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
                   )
                 )
                   return;
@@ -578,7 +597,9 @@ export function CardDetails({
                 );
               }}
             >
-              Approve and merge
+              {integration === "github-pr"
+                ? "Approve and open PR"
+                : "Approve and merge"}
             </Button>
           )}
           {card?.status === "review" && !changesRequested && (
@@ -810,6 +831,73 @@ export function CardDetails({
 const statusLabel = (status: Status) =>
   status === "done" || status === "archived" ? "finished" : status;
 /** Lists the cards this one waits on (each opens that card), lets you add or remove one, and names the cards waiting on it. */
+/** github-pr boards: the card's pull request, its state and checks, and an optional link that overrides the branch lookup. */
+function PullRequestLink({
+  card,
+  busy,
+  onSave,
+}: {
+  card: Card;
+  busy: boolean;
+  onSave: (url: string) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState(card.prOverrideUrl ?? "");
+  const state = card.prState
+    ? { OPEN: "open", CLOSED: "closed", MERGED: "merged" }[card.prState]
+    : undefined;
+  return (
+    <div className="mt-3 text-xs text-muted-foreground">
+      <div>
+        Pull request:{" "}
+        {card.prUrl ? (
+          <a
+            href={card.prUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline-offset-2 hover:underline"
+          >
+            #{card.prNumber}
+          </a>
+        ) : (
+          `none yet (looks for bakery/${card.id})`
+        )}
+        {state && ` \u00b7 ${state}`}
+        {card.prChecks && ` \u00b7 checks ${card.prChecks}`}
+      </div>
+      {card.prError && (
+        <div role="status" className="mt-1 text-destructive">
+          {card.prError}
+        </div>
+      )}
+      <form
+        className="mt-2 flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onSave(draft.trim());
+        }}
+      >
+        <input
+          type="url"
+          aria-label="Pull request link"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          disabled={busy}
+          placeholder="https://github.com/owner/repo/pull/123 (optional)"
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 font-mono text-xs text-foreground"
+        />
+        <Button
+          type="submit"
+          variant="outline"
+          size="sm"
+          disabled={busy || draft.trim() === (card.prOverrideUrl ?? "")}
+        >
+          {draft.trim() || !card.prOverrideUrl ? "Link PR" : "Unlink"}
+        </Button>
+      </form>
+    </div>
+  );
+}
+
 function Dependencies({
   card,
   boardCards,

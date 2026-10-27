@@ -6,6 +6,8 @@ const usage = `bakery-cli — local Bakery API client
 
 Usage: bakery-cli add TITLE... [--body BODY] [--priority low|normal|high|urgent] [--board ID|PATH] [--json]
        bakery-cli boards [--json]
+       bakery-cli board [ID|PATH] [--integration local|github-pr] [--json]
+       bakery-cli pr CARD_ID [URL|off] [--board ID|PATH] [--json]
        bakery-cli cards [--board ID|PATH] [--json]
        bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority low|normal|high|urgent] [--after CARD_ID]... [--board ID|PATH] [--json]
        bakery-cli show CARD_ID [--board ID|PATH] [--json]
@@ -37,6 +39,9 @@ show prints a card with its dependencies, dependents, attempts and latest auto-r
 title and/or description.
 archive accepts only Done cards and archives all or none; restore moves one archived card back to Done.
 stats prints card counts per lane and the pickup state.
+board prints a board's integration mode; --integration github-pr makes a card Done when its GitHub pull request
+merges onto origin/main (needs gh and a GitHub remote link), --integration local merges on Approve.
+pr links a card to a pull request URL instead of the bakery/CARD_ID branch lookup; off removes the link.
 --yes is required before start, enabling or resetting pickup, or moving a card to Ready on a pickup-enabled
 board; each can start paid Pi runs. No command approves a merge.`;
 
@@ -44,7 +49,7 @@ function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
   // These may repeat; each occurrence adds one card ID.
   const lists = new Set(["after", "on"]);
-  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
@@ -142,16 +147,21 @@ async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
-  const expected = { boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { board: 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, stats: 0, depend: 1, undepend: 1 };
   const variadic = ["start", "archive", "add"];
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
-  if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (command === "board" && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (command === "board" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
   if (opts.priority !== undefined && !Object.hasOwn(priorities, opts.priority)) throw new Error("Priority must be low, normal, high, or urgent");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
+  if (opts.integration !== undefined && command !== "board") throw new Error("--integration is only valid with board");
+  if (opts.integration !== undefined && !["local", "github-pr"].includes(opts.integration)) throw new Error("Integration must be local or github-pr");
+  if (command === "board" && args.length && opts.board) throw new Error("Name the board once, as ID|PATH or with --board");
+  if (command === "pr") cardId(args[0]);
   if (["show", "edit", "archive", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
   if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
   if (opts.on.length && command !== "depend" && command !== "undepend") throw new Error("--on is only valid with depend or undepend");
@@ -170,7 +180,7 @@ async function main() {
     print(boards, opts.json, boards.map(item => `${item.id}\t${item.repo}\tpickup:${item.autoPickupEnabled ? "on" : "off"}\treview:${item.autoReviewEnabled ? "on" : "off"}${item.autoPickupError ? `\tpaused:${item.autoPickupError}` : ""}`));
     return;
   }
-  const board = selectBoard(boards, opts.board);
+  const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);
   const path = `/api/boards/${encodeURIComponent(board.id)}`;
   if (command === "cards") {
     const cards = await request(origin, `${path}/cards`);
@@ -251,6 +261,13 @@ async function main() {
     print({ boardId: board.id, repo: board.repo, counts, total, pickup }, opts.json, [
       ...lanes.map(lane => `${lane}\t${counts[lane]}`), `total\t${total}`, pickupSummary(board),
     ]);
+  } else if (command === "board") {
+    const updated = opts.integration === undefined ? board : await request(origin, `${path}/settings`, "PATCH", { integration: opts.integration });
+    print(updated, opts.json, [`${updated.id}\t${updated.repo}\tintegration:${updated.integration ?? "local"}${updated.remoteUrl ? `\tremote:${updated.remoteUrl}` : ""}${updated.integrationError ? `\terror:${updated.integrationError}` : ""}`]);
+  } else if (command === "pr") {
+    const card = args.length === 1 ? await findCard(origin, path, args[0])
+      : await request(origin, `${path}/cards/${encodeURIComponent(args[0])}/pull-request`, "PUT", { url: args[1] === "off" ? "" : args[1] });
+    print(card, opts.json, [`${card.id}\t${card.prUrl ?? "no pull request"}${card.prOverrideUrl ? "\t(linked)" : ""}${card.prState ? `\t${card.prState.toLowerCase()}` : ""}${card.prChecks ? `\tchecks:${card.prChecks}` : ""}${card.prError ? `\t${card.prError}` : ""}`]);
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));

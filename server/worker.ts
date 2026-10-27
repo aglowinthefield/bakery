@@ -9,6 +9,15 @@ function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+function fetchOrigin(repo: string) {
+  try { execFileSync("git", ["-C", repo, "fetch", "origin", "--prune", "--quiet"], { stdio: ["ignore", "pipe", "pipe"], timeout: 120_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }); }
+  catch (error) { throw new Error(`git fetch origin failed: ${((error as { stderr?: Buffer }).stderr?.toString() || String(error)).trim().slice(0, 2000)}`); }
+}
+function isAncestor(repo: string, ancestor: string, descendant: string) {
+  try { execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant], { stdio: "ignore" }); return true; }
+  catch (error) { if ((error as { status?: number }).status === 1) return false; throw error; }
+}
+
 // Pi's provider error text may include request details. Keep only the HTTP status in the card transcript.
 function providerFailure(error: unknown): string {
   const status = typeof error === "string" ? error.match(/\b[45]\d{2}\b/)?.[0] : undefined;
@@ -52,7 +61,11 @@ export class Worker {
     try {
       if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");
       mkdirSync(join(this.dataDir, "worktrees"), { recursive: true });
-      if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, "HEAD"); created = true; }
+      // On a github-pr board a card starts from origin/main, fetched now, so it never builds on a stale checkout.
+      const prMode = this.board.integrationFor(card.repo) === "github-pr";
+      if (prMode) fetchOrigin(root);
+      if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : "HEAD"); created = true; }
+      else if (prMode && !conflict) this.rebaseRetry(run, worktree, branch);
     } catch (error) {
       this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
       return this.board.getRun(run.id)!;
@@ -66,6 +79,27 @@ export class Worker {
     const launch = () => this.launchPi(card, run, worktree, prompt, phase);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
+  }
+  /**
+   * A retry on a github-pr board whose base is behind origin/main is rebased onto it before Pi starts, but only
+   * while nothing about it is published: a clean worktree whose branch was never pushed. A pushed branch is what
+   * the open PR shows, so it is left alone. Conflicts abort the rebase and fail the run for the operator.
+   */
+  private rebaseRetry(run: Run, worktree: string, branch: string) {
+    if (git(worktree, "status", "--porcelain")) return;
+    try { git(worktree, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`); return; } catch { /* Never pushed. */ }
+    if (isAncestor(worktree, "origin/main", "HEAD")) return;
+    this.board.append(run.id, "Rebasing the card branch onto origin/main…\n");
+    try {
+      if (this.hasWorktrunk()) execFileSync(this.wtBin!, ["-C", worktree, "step", "rebase", "origin/main", "--yes"], { cwd: worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
+      else git(worktree, "rebase", "origin/main");
+    } catch (error) {
+      let files = "";
+      try { files = git(worktree, "diff", "--name-only", "--diff-filter=U"); } catch { /* Keep the rebase error. */ }
+      try { git(worktree, "rebase", "--abort"); } catch { /* Nothing in progress. */ }
+      const detail = (error as { stderr?: string }).stderr?.toString().trim() || (error instanceof Error ? error.message : String(error));
+      throw new Error(`Rebase onto origin/main conflicted${files ? ` in ${files.split("\n").join(", ")}` : ""}; the card branch is unchanged. Resolve it in ${worktree}, then run again. ${detail.slice(0, 1000)}`);
+    }
   }
   /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name (wiredtiger ships one). */
   private hasWorktrunk() {

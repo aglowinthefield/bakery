@@ -2,12 +2,15 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { addAgent, type Usage } from "./agent.js";
 import { parseAgentModels, resolveAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
+import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string };
+/** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
+export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light"; agentModels: AgentModels };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
   autoReviewEnabledAt: row.autoReviewEnabledAt, pickupConcurrency: row.pickupConcurrency,
@@ -17,7 +20,7 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoar
   autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels),
   autoPickupNextAt: starts.length >= row.pickupDailyLimit
     ? new Date(Date.parse(starts[starts.length - row.pickupDailyLimit]) + 86_400_000).toISOString() : null,
-  pickupCostBudget: row.pickupCostBudget, cost24h,
+  pickupCostBudget: row.pickupCostBudget, cost24h, integration: row.integration, integrationError: row.integrationError,
   autoPickupBudgetReached: row.pickupCostBudget !== null && cost24h >= row.pickupCostBudget,
 });
 // Token and cost columns are NULL for attempts recorded before Bakery tracked usage; new attempts start at 0.
@@ -36,7 +39,9 @@ export function parsePriority(value: unknown): CardPriority {
   if (typeof value === "number" && Object.values(cardPriorities).includes(value as CardPriority)) return value as CardPriority;
   throw new Error("Priority must be low, normal, high, or urgent");
 }
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean } & UsageFields;
+/** The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup. */
+export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null };
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
 export type CardRef = { id: string; title: string; status: CardStatus };
 // A dependency is finished once it is Done or archived. Until then the dependent card is blocked.
@@ -50,7 +55,7 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError";
 const now = () => new Date().toISOString();
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COUNT(runs.id) AS attempts,
@@ -87,6 +92,8 @@ export class Board {
     const cardColumns = new Set((this.db.prepare("PRAGMA table_info(cards)").all() as { name: string }[]).map(column => column.name));
     if (!cardColumns.has("priority")) this.db.exec("ALTER TABLE cards ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
+    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT"])
+      if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
@@ -133,6 +140,8 @@ export class Board {
         .run("An automatic run failed; inspect it before re-enabling pickup");
     }
     if (!boardColumns.has("agentModels")) this.db.exec("ALTER TABLE boards ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
+    if (!boardColumns.has("integration")) this.db.exec("ALTER TABLE boards ADD COLUMN integration TEXT NOT NULL DEFAULT 'local' CHECK(integration IN ('local', 'github-pr'))");
+    if (!boardColumns.has("integrationError")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationError TEXT NOT NULL DEFAULT ''");
 
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
@@ -226,8 +235,67 @@ export class Board {
       if (value.length > 500 || !url || (url.protocol !== "https:" && url.protocol !== "http:"))
         throw new Error("Remote repository link must be an http:// or https:// URL (maximum 500 characters)");
     }
+    if (this.getBoard(id)!.integration === "github-pr" && !githubRepo(value)) throw new Error("This board integrates through GitHub pull requests; its remote must stay a https://github.com/OWNER/REPO link");
     this.db.prepare("UPDATE boards SET remoteUrl=? WHERE id=?").run(value, id);
     return this.getBoard(id)!;
+  }
+  /** github-pr needs a GitHub remote so Bakery knows which repository `gh` should query. */
+  setIntegration(id: string, mode: unknown): RepoBoard {
+    const board = this.getBoard(id);
+    if (!board) throw new Error("Board not found");
+    if (mode !== "local" && mode !== "github-pr") throw new Error("Integration must be local or github-pr");
+    if (mode === "github-pr" && !githubRepo(board.remoteUrl)) throw new Error("github-pr integration requires the board's remote to be a GitHub repository link (https://github.com/OWNER/REPO)");
+    this.db.prepare("UPDATE boards SET integration=?, integrationError='' WHERE id=?").run(mode, id);
+    return this.getBoard(id)!;
+  }
+  /** An integration error pauses automatic pickup on the board until a later sync clears it. */
+  setIntegrationError(id: string, error: string): void {
+    this.db.prepare("UPDATE boards SET integrationError=? WHERE id=?").run(error.slice(0, 2000), id);
+  }
+  boardForRepo(repo: string): RepoBoard | undefined { return this.listBoards().find(item => item.repo === repo); }
+  integrationFor(repo: string): IntegrationMode {
+    return (this.db.prepare("SELECT integration FROM boards WHERE repo=?").get(repo) as { integration: IntegrationMode } | undefined)?.integration ?? "local";
+  }
+  /** A PR URL that overrides the `bakery/<id>` branch lookup; an empty value restores the lookup. */
+  setPullRequestOverride(cardId: string, url: string): Card {
+    const card = this.getCard(cardId);
+    if (!card) throw new Error("Card not found");
+    if (card.status === "done" || card.status === "archived") throw new Error("This card is already Done");
+    const value = url.trim();
+    if (value && !parsePullRequestUrl(value)) throw new Error("Pull request link must look like https://github.com/OWNER/REPO/pull/NUMBER");
+    const board = this.boardForRepo(card.repo), pr = value ? parsePullRequestUrl(value)! : undefined, repo = board && githubRepo(board.remoteUrl);
+    if (pr && repo && pr.repo.toLowerCase() !== repo.toLowerCase()) throw new Error(`Pull request is in ${pr.repo}, but this board's remote is ${repo}`);
+    this.db.prepare("UPDATE cards SET prOverrideUrl=?, prNumber=?, prUrl=?, prState=NULL, prChecks=NULL, prError=NULL, updatedAt=? WHERE id=?")
+      .run(value || null, pr?.number ?? null, value || null, now(), cardId);
+    return this.getCard(cardId)!;
+  }
+  recordPullRequest(cardId: string, pr: { number: number; url: string; state: "OPEN" | "CLOSED" | "MERGED"; checks?: string | null; error?: string | null }): void {
+    this.db.prepare("UPDATE cards SET prNumber=?, prUrl=?, prState=?, prChecks=?, prError=? WHERE id=?")
+      .run(pr.number, pr.url, pr.state, pr.checks ?? null, pr.error ?? null, cardId);
+  }
+  recordPullRequestError(cardId: string, error: string): void {
+    this.db.prepare("UPDATE cards SET prError=? WHERE id=?").run(error.slice(0, 4000), cardId);
+  }
+  /** Review cards on a github-pr board, which the PR poller links and checks. */
+  listPullRequestCards(repo: string): Card[] { return this.listCards(repo).filter(card => card.status === "review" && card.attempts > 0); }
+  /** The PR merged and its merge commit is on origin/main: the card is Done. */
+  recordPullRequestMerge(cardId: string, candidate: string, mergeCommit: string): Card {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
+      if (card?.status !== "review" || !run || this.wasIntegrated(cardId)) throw new Error("Card changed during pull request reconciliation");
+      this.db.prepare("INSERT INTO external_integrations(cardId, runId, candidate, mergeCommit, integratedAt) VALUES (?, ?, ?, ?, ?)")
+        .run(cardId, run.id, candidate, mergeCommit, now());
+      this.db.prepare("UPDATE cards SET status='done', prState='MERGED', prError=NULL, updatedAt=? WHERE id=?").run(now(), cardId);
+      this.clearMergeFailure(cardId);
+      this.db.exec("COMMIT");
+      return this.getCard(cardId)!;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** A PR closed without merging needs the operator: the card fails with the reason. */
+  closePullRequestUnmerged(cardId: string, reason: string): Card {
+    this.db.prepare("UPDATE cards SET status='failed', prState='CLOSED', prError=?, updatedAt=? WHERE id=? AND status='review'").run(reason, now(), cardId);
+    return this.getCard(cardId)!;
   }
   setAgentModels(id: string, agentModels: unknown): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");
@@ -319,7 +387,7 @@ export class Board {
   listAutoPickupCandidates(): { card: Card; board: RepoBoard }[] {
     const result: { card: Card; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
-      if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached) continue;
+      if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached || repoBoard.integrationError) continue;
       const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY priority DESC, createdAt, rowid").all(repoBoard.repo) as { id: string }[];
       // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
       result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card)));
@@ -335,7 +403,8 @@ export class Board {
   }
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {
     const result: { card: Card; run: Run; board: RepoBoard }[] = [];
-    for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled)) {
+    // Unattended review merges locally, so it never runs on a board that integrates through GitHub pull requests.
+    for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled && item.integration === "local")) {
       for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
         const run = this.listRuns(card.id)[0];
         if (run?.status === "review" && run.finishedAt && repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&
@@ -585,6 +654,7 @@ export class Board {
     const ids = this.db.prepare(`SELECT cards.id FROM cards JOIN runs ON runs.cardId=cards.id
       WHERE cards.status IN ('review', 'failed') AND runs.attempt=(SELECT MAX(attempt) FROM runs WHERE cardId=cards.id)
         AND runs.worktree IS NOT NULL AND NOT EXISTS (SELECT 1 FROM approvals WHERE cardId=cards.id AND merged=0)
+        AND NOT EXISTS (SELECT 1 FROM boards WHERE boards.repo=cards.repo AND boards.integration='github-pr')
       ORDER BY cards.updatedAt`).all() as { id: string }[];
     return ids.map(({ id }) => ({ card: this.getCard(id)!, run: this.listRuns(id)[0] }));
   }
@@ -661,7 +731,7 @@ export class Board {
       if (repoBoard?.autoPickupEnabled && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
         throw new Error(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
-        this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached || this.autoPickupBlocker(repoBoard)))
+        this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       const id = randomUUID(), sessionId = `bakery-${cardId}`;

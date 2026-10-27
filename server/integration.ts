@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "./board.js";
+import { boardGithubRepo, fetchOrigin, type GitHub } from "./github.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false): string {
   try {
@@ -144,7 +145,57 @@ export class Integration {
     return this.board.getCard(card.id)!;
   }
 
+  /**
+   * Approve on a github-pr board: commit the reviewed work on `bakery/<id>`, push that branch to origin, and open
+   * a PR (or reuse the open one). Nothing merges locally; the card stays in Review until the PR merges on GitHub.
+   * The operator's Approve is the authorization to push; the agent itself never pushes.
+   */
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub): Promise<Card> {
+    const repoBoard = this.board.boardForRepo(card.repo);
+    if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge");
+    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
+    const slug = boardGithubRepo(repoBoard);
+    await github.check();
+    const { repo, worktree, run } = this.location(card);
+    if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
+    if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
+    const inspected = this.snapshot(card, false);
+    if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
+    const candidate = this.commitReviewed(card, worktree, inspected.tree);
+    await fetchOrigin(repo);
+    if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
+    const branch = `bakery/${card.id}`;
+    // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
+    git(worktree, "push", "origin", `${candidate}:refs/heads/${branch}`);
+    const existing = await github.findByBranch(slug, branch);
+    let url = existing?.state === "OPEN" ? existing.url : "";
+    if (!url) {
+      const summary = (run.output || "").trim().slice(-3000);
+      const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
+      const body = `${card.body.trim()}\n\n---\n\nOpened by Bakery for card \`${card.id}\`.${details}`;
+      url = await github.create(slug, branch, card.title.replace(/\s+/g, " ").trim().slice(0, 250) || `Bakery card ${card.id}`, body);
+    }
+    const number = Number(url.match(/\/pull\/(\d+)/)?.[1]);
+    this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
+    return this.board.getCard(card.id)!;
+  }
+
+  /** Commits the reviewed worktree on the card branch, if it has uncommitted changes, and returns the commit. */
+  private commitReviewed(card: Card, worktree: string, reviewedTree: string): string {
+    git(worktree, "add", "-A");
+    if (git(worktree, "write-tree") !== reviewedTree) throw new Error("Worktree changed since review; refresh the diff before approving");
+    if (git(worktree, "diff", "--cached", "--name-only")) {
+      git(worktree, "diff", "--cached", "--check");
+      git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`);
+    }
+    if (!clean(worktree)) throw new Error("Card worktree changed while committing; inspect it and retry");
+    const candidate = git(worktree, "rev-parse", "HEAD");
+    if (git(worktree, "rev-parse", "HEAD^{tree}") !== reviewedTree) throw new Error("Committed work changed since review; refresh the diff before approving");
+    return candidate;
+  }
+
   approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
+    if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const { repo, worktree, run } = this.location(card);
     const job = this.board.getAutoReviewJob(run.id);
     if (job?.state === "running" && origin !== "auto") throw new Error("Agent review is in progress; wait for its result");
@@ -162,15 +213,7 @@ export class Integration {
     if (approved) {
       if (approved.runId !== run.id || git(worktree, "rev-parse", "HEAD") !== approved.candidate || !clean(worktree)) throw new Error("Card worktree changed after approval; inspect it before retrying");
     } else {
-      git(worktree, "add", "-A");
-      if (git(worktree, "write-tree") !== inspected.tree) throw new Error("Worktree changed since review; refresh the diff before approving");
-      if (git(worktree, "diff", "--cached", "--name-only")) {
-        git(worktree, "diff", "--cached", "--check");
-        git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`);
-      }
-      if (!clean(worktree)) throw new Error("Card worktree changed while committing; inspect it and retry");
-      const candidate = git(worktree, "rev-parse", "HEAD");
-      if (git(worktree, "rev-parse", "HEAD^{tree}") !== inspected.tree) throw new Error("Committed work changed since review; refresh the diff before approving");
+      const candidate = this.commitReviewed(card, worktree, inspected.tree);
       // A card must contribute a commit, not merely close an unchanged run.
       if (!git(repo, "rev-list", "main.." + candidate)) throw new Error("This card has no unmerged commits to approve");
       approved = this.board.recordApproval(card.id, run.id, candidate);
