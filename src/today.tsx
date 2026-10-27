@@ -4,7 +4,13 @@ import { Button } from "./components/ui/button";
 import { date } from "./api.js";
 import { formatCost } from "./usage.js";
 import { RepoBadge } from "./repo-badge.js";
-import type { Board, Card, Status } from "./model.js";
+import {
+  needsYourReview,
+  reviewWaitLabels,
+  type Board,
+  type Card,
+  type Status,
+} from "./model.js";
 
 // What each status asks of you. Statuses not listed (Triage, Ready, Archived) stay on their boards.
 const needsYou: Partial<Record<Status, string>> = {
@@ -16,9 +22,12 @@ export const needsYouStatuses = Object.keys(needsYou) as Status[];
 const oldestFirst = (a: Card, b: Card) =>
   a.updatedAt.localeCompare(b.updatedAt);
 
-/** Review cards in the order the queue walks them: the longest-waiting first. */
+/**
+ * Review cards in the order the queue walks them: the longest-waiting first. Cards an agent, CI or GitHub
+ * still has are left out until they need you.
+ */
 export const reviewOrder = (cards: Card[]) =>
-  cards.filter((card) => card.status === "review").sort(oldestFirst);
+  cards.filter(needsYourReview).sort(oldestFirst);
 
 type Props = {
   boards: Board[];
@@ -39,13 +48,21 @@ export function Today({
   onCapture,
 }: Props) {
   const attention = cards
-    .filter((card) => card.status in needsYou)
+    .filter(
+      (card) =>
+        card.status in needsYou &&
+        (card.status !== "review" || needsYourReview(card)),
+    )
     .sort(
       (a, b) =>
         needsYouStatuses.indexOf(a.status) -
           needsYouStatuses.indexOf(b.status) || oldestFirst(a, b),
     );
-  const running = cards.filter((card) => card.status === "running");
+  const running = cards.filter(
+    (card) =>
+      card.status === "running" ||
+      (card.status === "review" && card.reviewWait),
+  );
   const finished = cards
     .filter((card) => card.status === "done" && card.updatedAt > since)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -90,12 +107,14 @@ export function Today({
         />
       </Section>
       {running.length > 0 && (
-        <Section title="Running">
+        <Section title="In progress">
           <CardList
             cards={running}
             boards={boards}
             onOpen={onOpen}
-            label={() => "Started"}
+            label={(card) =>
+              card.reviewWait ? reviewWaitLabels[card.reviewWait] : "Started"
+            }
           />
         </Section>
       )}

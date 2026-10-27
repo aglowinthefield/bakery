@@ -12,7 +12,8 @@ import { GitHub, GitHubSync, checksState, fastForwardMain, fixableFailures, hasW
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 
 // A local bare repository plays origin and a fake `gh` on PATH plays GitHub. The fake keeps its pull requests
-// in prs.json, logs each call to calls.log, and fails `auth status` while auth-fail exists.
+// in prs.json, logs each call to calls.log, fails `auth status` while auth-fail exists, and fails the batched
+// `pr list` (no --head) with GitHub's 504 while list-fail exists.
 const fakeGh = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const dir = process.env.FAKE_GH_DIR, args = process.argv.slice(2), file = path.join(dir, "prs.json");
@@ -28,6 +29,7 @@ if (args[0] === "auth" && args[1] === "status") {
 }
 if (args[0] === "pr" && args[1] === "list") {
   const head = flag("--head");
+  if (!head && fs.existsSync(path.join(dir, "list-fail"))) { console.error("HTTP 504: 504 Gateway Timeout (https://api.github.com/graphql)"); process.exit(1); }
   console.log(JSON.stringify(prs.filter(pr => !head || pr.headRefName === head).reverse().map(pick)));
   process.exit(0);
 }
@@ -195,6 +197,7 @@ test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, 
 
     // Local-merge approval is refused on this board; Approve opens a PR instead.
     const integration = new Integration(f.board, f.data);
+    assert.equal(card.reviewWait, null, "an unpushed run needs your Approve");
     assert.throws(() => integration.approve(card, integration.review(card).fingerprint), /GitHub pull requests/);
     const approved = await approve(f, card.id);
     assert.equal(approved.status, "review");
@@ -218,6 +221,8 @@ test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, 
     assert.equal(current.status, "review");
     assert.equal(current.prState, "OPEN");
     assert.equal(current.prChecks, "pending");
+    assert.equal(current.reviewWait, "github", "a pushed PR waiting on CI is not your turn");
+    assert.deepEqual(f.board.cardCounts()[f.repo], { reviewWaiting: 1 });
     assert.equal(git(f.repo, "rev-parse", "main"), upstreamTip, "local main fast-forwarded to origin/main");
     const listCalls = f.calls().filter(call => call[0] === "pr" && call[1] === "list" && !call.includes("--head"));
     assert.equal(listCalls.length, 1, "one batched gh pr list per board per tick");
@@ -231,6 +236,7 @@ test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, 
     current = f.board.getCard(card.id)!;
     assert.equal(current.status, "review");
     assert.match(current.prError ?? "", /waiting for .* to reach origin\/main/);
+    assert.equal(current.reviewWait, "github");
     assert.equal(externalRow(f, card.id), undefined);
 
     // Squash-merged and on origin/main: Done, recorded, main fast-forwarded, worktree and branch removed.
@@ -245,6 +251,40 @@ test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, 
     assert.equal(readFileSync(join(f.repo, "feature.txt"), "utf8"), `feature from ${card.id}\n`);
     assert.equal(existsSync(worktree), false, "the Done card's worktree was removed");
     assert.equal(git(f.repo, "branch", "--list", `bakery/${card.id}`), "", "the squash-merged branch was force-deleted after GitHub confirmed the merge");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: when the batched PR list times out, each Review card is still linked and settled on its own", async () => {
+  const f = fixture();
+  try {
+    // One card opened its PR through Approve; the other's PR was opened outside Bakery, so the card has no PR number yet.
+    const open = await reviewedCard(f, "Open one");
+    await approve(f, open.id);
+    const merged = await reviewedCard(f, "Merged one");
+    assert.equal(merged.prNumber, null);
+    const merge = f.landUpstream("merged.txt");
+    const [pr] = f.prs();
+    f.setPrs([
+      { ...pr, statusCheckRollup: [{ conclusion: "FAILURE" }] },
+      { number: 200, url: "https://github.com/acme/widgets/pull/200", state: "MERGED", mergedAt: new Date().toISOString(), mergeCommit: { oid: merge }, headRefName: `bakery/${merged.id}`, headRefOid: merge, statusCheckRollup: [] },
+    ]);
+    writeFileSync(join(f.ghDir, "list-fail"), "");
+    const before = f.calls().length;
+    await f.sync.syncBoard(f.repoBoard.id);
+
+    assert.equal(f.board.getBoard(f.repoBoard.id)?.integrationError, "", "a failed batched list is not a board error");
+    const calls = f.calls().slice(before);
+    assert.ok(calls.some(call => call[1] === "list" && !call.includes("--head")), "the batched list was tried");
+    assert.ok(calls.some(call => call.includes(`bakery/${merged.id}`)), "the card was looked up by its branch");
+    const current = f.board.getCard(open.id)!;
+    assert.equal(current.status, "review");
+    assert.equal(current.prNumber, 100);
+    assert.equal(current.prChecks, "failing");
+    assert.equal(current.prError ?? "", "");
+    const done = f.board.getCard(merged.id)!;
+    assert.equal(done.prNumber, 200, "the PR opened outside Bakery is linked");
+    assert.equal(done.status, "done");
+    assert.equal(git(f.repo, "rev-parse", "main"), merge, "main still fast-forwards");
   } finally { f.cleanup(); }
 });
 
@@ -446,6 +486,7 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
     await sync.syncBoard(f.repoBoard.id);
     assert.deepEqual(started, []);
     assert.equal(f.board.getCard(card.id)!.prChecks, "failing");
+    assert.equal(f.board.getCard(card.id)!.reviewWait, "ci_fix", "Bakery is about to send the failure to Pi");
 
     f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [lint, { ...lint, name: "test", conclusion: "SUCCESS", detailsUrl: "" }] }]);
     await sync.syncBoard(f.repoBoard.id);
@@ -458,6 +499,7 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
     assert.doesNotMatch(prompt, /CI \/ test/, "passing checks are left out");
     let current = f.board.getCard(card.id)!;
     assert.equal(current.ciReworks, 1);
+    assert.equal(current.reviewWait, null, "the fix run's work needs your Approve to reach the PR");
     assert.equal(f.board.getCiFeedback(card.id), undefined, "the failures went to that run");
 
     // The same commit is not sent back twice, even though the PR still shows it failing.
@@ -502,11 +544,13 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
     writeFileSync(join(worktree, "scratch.txt"), "wip\n");
     await sync.syncBoard(f.repoBoard.id);
     assert.deepEqual(started, []);
+    assert.equal(f.board.getCard(card.id)!.reviewWait, null, "a failure Bakery will not send back is yours");
     rmSync(join(worktree, "scratch.txt"));
 
     refuse = true;
     await sync.syncBoard(f.repoBoard.id);
     assert.match(f.board.getCard(card.id)!.prError ?? "", /could not start a fix run yet: Repository is at its 1-run concurrency limit/);
+    assert.equal(f.board.getCard(card.id)!.reviewWait, "ci_fix", "the fix run starts on the next sync");
     refuse = false;
     await sync.syncBoard(f.repoBoard.id);
     assert.deepEqual(started, [card.id], "the next sync started it");
@@ -517,16 +561,67 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
     assert.equal(f.board.getCiFeedback(card.id), undefined, "stale failures are dropped once CI passes");
     assert.equal(f.board.getCard(card.id)!.prChecks, "passing");
     assert.deepEqual(started, [card.id]);
+    assert.equal(f.board.getCard(card.id)!.ciReworks, 0, "a round that never ran is not counted");
+
+    // The same commit failing again after that rerun is sent back again.
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [{ ...lint, startedAt: new Date(Date.now() + 500).toISOString() }] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [card.id, card.id]);
+    f.board.dropCiFeedback(card.id);
 
     // A new pushed commit that fails again, with the limit used up: the card stays in Review with the reason.
     f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [{ ...lint, startedAt: new Date(Date.now() + 1000).toISOString() }] }]);
     const db = new DatabaseSync(join(f.dir, "board.sqlite"));
     try { db.prepare("UPDATE cards SET ciReworks=?, ciReworkSha='0000' WHERE id=?").run(maxCiReworks, card.id); } finally { db.close(); }
     await sync.syncBoard(f.repoBoard.id);
-    assert.deepEqual(started, [card.id]);
+    assert.deepEqual(started, [card.id, card.id]);
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/);
     await sync.syncBoard(f.repoBoard.id);
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/, "the reason stays on the card");
+    assert.equal(f.board.getCard(card.id)!.reviewWait, null, "past the limit, CI is yours to fix");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the operator starts still waits for Approve", async () => {
+  const f = fixture();
+  const fixPi = join(f.dir, "pi-fix");
+  writeFileSync(fixPi, `#!/bin/sh\necho fixed >> feature.txt\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fixPi, 0o755);
+  const worker = new Worker(f.board, f.data, fixPi);
+  const integration = new Integration(f.board, f.data);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github));
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    const done = new Date(Date.now() - 1000).toISOString();
+    const lint = { name: "lint", workflowName: "CI", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done, detailsUrl: "https://ci.example/lint" };
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [lint] }]);
+
+    await sync.syncBoard(f.repoBoard.id);
+    await waitFor(() => f.board.getCard(card.id)!.status === "review");
+    assert.equal(f.board.listRuns(card.id)[0].ciFix, 1);
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), pushed, "nothing pushed while the run was going");
+
+    await sync.syncBoard(f.repoBoard.id);
+    const fixed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    assert.notEqual(fixed, pushed, "the fix was pushed without Approve");
+    assert.equal(f.prs().length, 1, "to the same PR");
+    assert.equal(f.board.getCard(card.id)!.status, "review", "the card waits for the PR to merge");
+    const pushes = () => git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    f.setPrs([{ ...pr, headRefOid: fixed, statusCheckRollup: [{ ...lint, conclusion: "SUCCESS" }] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.equal(pushes(), fixed, "already pushed: nothing more to send");
+
+    // A run the operator started is not a CI fix: it waits for Approve.
+    f.board.setStatus(card.id, "ready");
+    const run = worker.start(f.board.getCard(card.id)!);
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running");
+    assert.equal(f.board.getRun(run.id)?.ciFix, 0);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.equal(pushes(), fixed, "a normal run is not pushed automatically");
   } finally { f.cleanup(); }
 });
 
