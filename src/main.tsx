@@ -554,6 +554,25 @@ function App() {
       })
       .catch((err) => setError(String(err)));
   }, []);
+  // A new tab opens what you last looked at, so the tab you return to re-records its view and repo.
+  useEffect(() => {
+    const remember = () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        localStorage.setItem("bakery-view", view);
+        if (boardId) localStorage.setItem("bakery-board", boardId);
+      } catch {
+        // Without storage, a new tab opens Today and the first repo.
+      }
+    };
+    remember();
+    window.addEventListener("focus", remember);
+    document.addEventListener("visibilitychange", remember);
+    return () => {
+      window.removeEventListener("focus", remember);
+      document.removeEventListener("visibilitychange", remember);
+    };
+  }, [view, boardId]);
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = () => setRefreshKey((value) => value + 1);
   const openBoard = (id: string) => {
