@@ -19,6 +19,13 @@ import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { Button } from "./components/ui/button";
 import { parseDiff, type DiffLine } from "./diff-lines.js";
 import {
+  DIFF_THEME_KEY,
+  diffThemes,
+  initialDiffTheme,
+  isDiffTheme,
+  type DiffTheme,
+} from "./diff-themes.js";
+import {
   diffStats,
   rowForTarget,
   targetForRow,
@@ -71,6 +78,15 @@ export function ReviewPanel({
       // The choice still applies for this session.
     }
   };
+  const [diffTheme, setDiffTheme] = useState<DiffTheme>(initialDiffTheme);
+  const chooseDiffTheme = (next: DiffTheme) => {
+    setDiffTheme(next);
+    try {
+      localStorage.setItem(DIFF_THEME_KEY, next);
+    } catch {
+      // The choice still applies for this session.
+    }
+  };
   return (
     <section
       aria-label="Review diff"
@@ -81,6 +97,21 @@ export function ReviewPanel({
           Review diff
         </h3>
         <div className="flex items-center gap-2">
+          <select
+            aria-label="Diff theme"
+            value={diffTheme}
+            onChange={(event) => {
+              if (isDiffTheme(event.target.value))
+                chooseDiffTheme(event.target.value);
+            }}
+            className="rounded-md border border-border bg-card px-1.5 py-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {(Object.keys(diffThemes) as DiffTheme[]).map((theme) => (
+              <option key={theme} value={theme}>
+                {diffThemes[theme].label}
+              </option>
+            ))}
+          </select>
           <div
             role="radiogroup"
             aria-label="Diff layout"
@@ -167,6 +198,7 @@ export function ReviewPanel({
                   )}
                   busy={busy}
                   diffStyle={diffStyle}
+                  diffTheme={diffTheme}
                   canComment={
                     !comments.some(
                       (comment) =>
@@ -243,6 +275,7 @@ function ReviewFile({
   busy,
   canComment,
   diffStyle,
+  diffTheme,
   onAdd,
 }: {
   file: ReviewDiff["files"][number];
@@ -252,6 +285,7 @@ function ReviewFile({
   busy: boolean;
   canComment: boolean;
   diffStyle: DiffStyle;
+  diffTheme: DiffTheme;
   onAdd: (path: string, line: number, body: string) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(true);
@@ -396,6 +430,7 @@ function ReviewFile({
             rows={rows}
             comments={comments}
             diffStyle={diffStyle}
+            diffTheme={diffTheme}
             selectedLine={commenting ? selectedLine : null}
             form={form}
             onSelect={canComment ? setSelectedLine : undefined}
@@ -422,11 +457,14 @@ function useThemeType(): "light" | "dark" {
 }
 // Pierre renders inside shadow DOM; CSS variables cross that boundary, so the diff
 // follows Bakery's palette instead of the library's default colors.
-const diffSurface = {
+const diffFont = {
   "--diffs-font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
   "--diffs-header-font-family": "inherit",
   "--diffs-font-size": "11.5px",
   "--diffs-line-height": "20px",
+} as CSSProperties;
+const diffSurface = {
+  ...diffFont,
   "--diffs-light-bg": "var(--code-background)",
   "--diffs-dark-bg": "var(--code-background)",
   "--diffs-bg-addition-override": "var(--diff-add)",
@@ -451,6 +489,7 @@ function DiffPatch({
   rows,
   comments,
   diffStyle,
+  diffTheme,
   selectedLine,
   form,
   onSelect,
@@ -460,6 +499,7 @@ function DiffPatch({
   rows: DiffLine[];
   comments: ReviewComment[];
   diffStyle: DiffStyle;
+  diffTheme: DiffTheme;
   selectedLine: number | null;
   form: ReactNode;
   onSelect?: (line: number) => void;
@@ -472,9 +512,15 @@ function DiffPatch({
   const select = useRef(onSelect);
   select.current = onSelect;
   const commentable = onSelect !== undefined;
+  // Only the Bakery theme repaints the diff with Bakery's surface; other themes
+  // keep their own background and add/remove colors.
+  const bakerySurface = diffTheme === "bakery";
   const options = useMemo<FileDiffOptions<Note, undefined>>(
     () => ({
-      theme: { dark: "pierre-dark", light: "pierre-light" },
+      theme: {
+        dark: diffThemes[diffTheme].dark,
+        light: diffThemes[diffTheme].light,
+      },
       themeType,
       diffStyle,
       diffIndicators: "classic",
@@ -482,7 +528,7 @@ function DiffPatch({
       lineDiffType: "word-alt",
       overflow: "scroll",
       disableFileHeader: true,
-      unsafeCSS: diffCSS,
+      unsafeCSS: bakerySurface ? diffCSS : undefined,
       enableGutterUtility: commentable,
       lineHoverHighlight: commentable ? "both" : "disabled",
       onGutterUtilityClick: (range) => {
@@ -490,7 +536,7 @@ function DiffPatch({
         if (row) select.current?.(row);
       },
     }),
-    [themeType, diffStyle, commentable, rows],
+    [themeType, diffTheme, bakerySurface, diffStyle, commentable, rows],
   );
   const target = selectedLine ? targetForRow(rows, selectedLine) : null;
   const selectedLines = useMemo(
@@ -521,11 +567,13 @@ function DiffPatch({
     );
   }
   return (
-    <div className="max-h-[32rem] overflow-auto bg-[var(--code-background)]">
+    <div
+      className={`max-h-[32rem] overflow-auto ${bakerySurface ? "bg-[var(--code-background)]" : ""}`}
+    >
       <FileDiff<Note>
         fileDiff={fileDiff}
         options={options}
-        style={diffSurface}
+        style={bakerySurface ? diffSurface : diffFont}
         lineAnnotations={annotations}
         selectedLines={selectedLines}
         renderAnnotation={(annotation) =>

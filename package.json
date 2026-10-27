@@ -12,8 +12,8 @@
     "start": "tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "bakery": "node scripts/bakery-cli.mjs",
-    "format": "prettier --write src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx",
-    "format:check": "prettier --check src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx"
+    "format": "prettier --write src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts",
+    "format:check": "prettier --check src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts"
   },
   "dependencies": {
     "@pierre/diffs": "^1.6.2",
