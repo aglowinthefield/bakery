@@ -100,41 +100,38 @@ test("theme picker changes board and reopened review, then loads the saved palet
     background: getComputedStyle(document.body).backgroundColor,
     sidebar: getComputedStyle(document.querySelector("aside")!).backgroundColor,
     details: getComputedStyle(document.querySelector('[role="dialog"]:has([aria-label="Resize card panel"])')!).backgroundColor,
-    add: getComputedStyle(document.querySelector('[data-change="add"]')!).backgroundColor,
-    remove: getComputedStyle(document.querySelector('[data-change="remove"]')!).backgroundColor,
-    addText: getComputedStyle(document.querySelector('[data-change="add"] .hljs-keyword')!).color,
-    removeText: getComputedStyle(document.querySelector('[data-change="remove"] .hljs-keyword')!).color,
+    add: getComputedStyle(document.querySelector("diffs-container")!.shadowRoot!.querySelector('[data-line][data-line-type="change-addition"]')!).backgroundColor,
+    remove: getComputedStyle(document.querySelector("diffs-container")!.shadowRoot!.querySelector('[data-line][data-line-type="change-deletion"]')!).backgroundColor,
+    code: getComputedStyle(document.querySelector("diffs-container")!.shadowRoot!.querySelector('[data-line][data-line-type="change-addition"] span')!).color,
   }));
+  const diffRendered = () => page.locator('[data-line][data-line-type="change-addition"] span').first().waitFor();
   try {
     await page.goto(url);
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.locator('[data-change="add"]').waitFor();
+    await diffRendered();
     const dark = await palette();
     assert.equal(dark.background, "rgb(26, 29, 33)");
     assert.equal(dark.add, "rgb(25, 53, 41)");
     assert.equal(dark.remove, "rgb(59, 37, 40)");
-    assert.equal(dark.addText, "rgb(182, 229, 197)");
-    assert.equal(dark.removeText, "rgb(240, 181, 181)");
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("radio", { name: "Light" }).check();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.locator('[data-change="add"]').waitFor();
+    await diffRendered();
     const light = await palette();
     assert.equal(light.background, "rgb(245, 243, 238)");
     assert.equal(light.add, "rgb(225, 242, 230)");
     assert.equal(light.remove, "rgb(250, 230, 231)");
-    assert.equal(light.addText, "rgb(24, 74, 48)");
-    assert.equal(light.removeText, "rgb(136, 43, 52)");
+    assert.notEqual(light.code, dark.code, "syntax colors follow the light palette");
     assert.notEqual(light.sidebar, dark.sidebar);
     assert.notEqual(light.details, dark.details);
     releasePatch();
     await page.waitForFunction(() => localStorage.getItem("bakery-theme") === "light");
     await page.reload();
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.locator('[data-change="add"]').waitFor();
+    await diffRendered();
     assert.deepEqual(await palette(), light);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(56, 104, 74)");
@@ -143,7 +140,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.locator('[data-change="add"]').waitFor();
+    await diffRendered();
     assert.deepEqual(await palette(), dark);
     failPatch = true;
     await page.getByRole("button", { name: "Settings" }).click();
@@ -151,7 +148,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.getByRole("alert").filter({ hasText: "Save rejected" }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.locator('[data-change="add"]').waitFor();
+    await diffRendered();
     assert.deepEqual(await palette(), dark);
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
   } finally { releasePatch(); await page.close(); }

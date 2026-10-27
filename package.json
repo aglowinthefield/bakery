@@ -16,6 +16,7 @@
     "format:check": "prettier --check src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts"
   },
   "dependencies": {
+    "@pierre/diffs": "^1.6.2",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-slot": "^1.2.3",
     "@tailwindcss/vite": "^4.1.16",

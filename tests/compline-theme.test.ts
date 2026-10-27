@@ -69,11 +69,11 @@ test("Settings switches between the preserved default and Compline after reload"
     await dialog.getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(180, 196, 188)");
-    const added = page.locator('[data-change="add"]');
-    const removed = page.locator('[data-change="remove"]');
+    const added = page.locator('[data-line][data-line-type="change-addition"]');
+    const removed = page.locator('[data-line][data-line-type="change-deletion"]');
     assert.equal(await added.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(41, 55, 47)");
     assert.equal(await removed.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(57, 46, 50)");
-    assert.equal(await added.locator("button").evaluate((el) => getComputedStyle(el).opacity), "1");
+    assert.equal(await page.locator('[data-column-number][data-line-type="change-addition"]').evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(41, 55, 47)");
     delaySettings = true;
     await page.reload();
     assert.equal(await page.locator("html").getAttribute("data-theme"), "compline");

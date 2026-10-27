@@ -51,7 +51,7 @@ test("changed files open their own patches and focus the heading without changin
     assert.equal(await patchButton(1).evaluate(element => element === document.activeElement), true);
     assert.equal(await patchButton(1).evaluate(element => { const bounds = element.getBoundingClientRect(); return bounds.top >= 0 && bounds.bottom <= innerHeight; }), true);
     assert.equal(await page.getByText("Keep this note").count(), 2);
-    await page.getByRole("button", { name: "Comment on src/second.ts line 1 (add)" }).click();
+    await page.getByRole("combobox", { name: "Comment on a line in src/second.ts" }).selectOption({ label: "+1  second" });
     await page.getByPlaceholder("What should change?").fill("Keep draft text");
     await list.getByRole("button", { name: files[2] }).focus();
     await page.keyboard.press("Space");
@@ -68,6 +68,54 @@ test("changed files open their own patches and focus the heading without changin
     assert.equal(await patchButton(1).evaluate(element => element === document.activeElement), true);
     assert.deepEqual(requests.filter(request => !request.startsWith("GET ")), []);
     assert.equal(requests.filter(request => request.endsWith("/review")).length, 1);
+  } finally { await page.close(); }
+});
+
+test("the gutter + button comments on the hovered diff row and the layout choice persists", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const fingerprint = "b".repeat(64);
+  const posted: unknown[] = [];
+  const patch = "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n const c = 4;\n";
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === "POST" && path.endsWith("/comments")) {
+      posted.push(route.request().postDataJSON());
+      await route.fulfill({ status: 201, json: { id: "new", cardId: "card", runId: "run", fingerprint, path: "src/app.ts", line: 7, fileLine: 2, kind: "add", code: "const b = 3;", body: "Why 3?", state: "draft", createdAt: "2026-01-01" } });
+      return;
+    }
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "dark" },
+      "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
+      "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/comments": [],
+      "/api/boards/board/cards/card/auto-review": [],
+      "/api/boards/board/cards/card/review": { fingerprint, files: [{ path: "src/app.ts", patch }] },
+    };
+    assert.ok(path in data, `Unexpected API request: ${path}`);
+    await route.fulfill({ json: data[path] });
+  });
+  try {
+    await page.goto(url);
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("button", { name: /src\/app\.ts.*1 added, 1 removed/ }).waitFor();
+    const added = page.locator('[data-line][data-line-type="change-addition"]');
+    await added.hover();
+    await page.locator("[data-utility-button]").click();
+    assert.equal(await page.getByText("Comment on src/app.ts:2").count(), 1);
+    await page.getByPlaceholder("What should change?").fill("Why 3?");
+    await page.getByRole("button", { name: "Add comment" }).click();
+    await page.getByPlaceholder("What should change?").waitFor({ state: "detached" });
+    assert.deepEqual(posted, [{ fingerprint, path: "src/app.ts", line: 7, body: "Why 3?" }]);
+    assert.equal(await page.locator("[data-unified]").count(), 1);
+    await page.getByRole("radio", { name: "split" }).click();
+    await page.locator("[data-additions]").waitFor();
+    await page.reload();
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.locator("[data-additions]").waitFor();
+    assert.equal(await page.getByRole("radio", { name: "split" }).getAttribute("aria-checked"), "true");
   } finally { await page.close(); }
 });
 
