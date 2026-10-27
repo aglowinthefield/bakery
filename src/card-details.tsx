@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "./components/ui/dialog";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
+import { PullRequestDialog } from "./pr-dialog.js";
 import {
   priorities,
   type AutoReviewJob,
@@ -86,6 +87,7 @@ export function CardDetails({
   useEffect(() => setPushProgress(null), [cardId]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [prDialog, setPrDialog] = useState(false);
   const [reload, setReload] = useState(0);
   const refresh = () => {
     setReload((value) => value + 1);
@@ -656,6 +658,16 @@ export function CardDetails({
                 )
               }
               onClick={() => {
+                // A new PR's title and body are drafted from the repository's rules and edited in a dialog.
+                if (
+                  currentReview &&
+                  integration === "github-pr" &&
+                  card.prState !== "OPEN"
+                ) {
+                  setError("");
+                  setPrDialog(true);
+                  return;
+                }
                 if (
                   !currentReview ||
                   !window.confirm(
@@ -684,6 +696,32 @@ export function CardDetails({
                   ? "Approve and open PR"
                   : "Approve and merge into local main"}
             </Button>
+          )}
+          {card?.status === "review" && currentReview && (
+            <PullRequestDialog
+              boardId={boardId}
+              card={card}
+              fingerprint={currentReview.fingerprint}
+              open={prDialog}
+              busy={busy}
+              submitError={error}
+              onOpenChange={setPrDialog}
+              onSubmit={(title, body) => {
+                onConflict(null);
+                void action(() =>
+                  api(`/boards/${boardId}/cards/${card.id}/approve`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      fingerprint: currentReview.fingerprint,
+                      title,
+                      body,
+                    }),
+                  }),
+                ).then((ok) => {
+                  if (ok) setPrDialog(false);
+                });
+              }}
+            />
           )}
           {card?.status === "review" && !changesRequested && (
             <Button

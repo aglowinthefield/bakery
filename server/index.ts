@@ -9,10 +9,11 @@ import { Integration, IntegrationConflictError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
+import { draftPullRequest } from "./pr-draft.js";
 import { GitHub, GitHubSync, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
-import { parseModelList, validateAgentModels } from "./agent-models.js";
+import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -35,7 +36,7 @@ const autoPickup = new AutoPickup(board, worker);
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card),
-  card => integration.openPullRequest(card, integration.review(card).fingerprint, github, true));
+  card => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true));
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
@@ -254,7 +255,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -304,11 +305,21 @@ const server = createServer(async (req, res) => {
         if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
         if (req.method === "POST" && action === "start") { send(res, 202, worker.start(item)); return; }
-        if (req.method === "POST" && action === "approve") {
+        if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);
+          if (repoBoard.integration !== "github-pr") throw new Error("This board merges locally; it opens no pull request");
+          const diff = integration.review(item), run = board.listRuns(id)[0];
+          if (typeof fingerprint !== "string" || diff.fingerprint !== fingerprint) throw new Error("Work changed since review; refresh the diff before approving");
+          const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
+          send(res, 200, await draftPullRequest({ card: item, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(item.repo, "review")) })); return;
+        }
+        if (req.method === "POST" && action === "approve") {
+          const { fingerprint, title, body: prBody } = await body(req);
           if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review diff before approving");
           if (repoBoard.integration === "github-pr") {
-            const card = await integration.openPullRequest(item, fingerprint, github);
+            if ((title !== undefined || prBody !== undefined) && (typeof title !== "string" || !title.trim() || title.length > 250 || typeof prBody !== "string" || prBody.length > 20_000))
+              throw new Error("Pull request title (up to 250 characters) and body (up to 20,000) are required");
+            const card = await integration.openPullRequest(item, fingerprint, github, typeof title === "string" ? { title, body: prBody as string } : undefined);
             void githubSync.syncBoard(repoBoard.id);
             send(res, 200, card); return;
           }

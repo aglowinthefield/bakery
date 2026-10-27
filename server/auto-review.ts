@@ -1,6 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { Board, type Card, type RepoBoard, type Run } from "./board.js";
-import { agentsInStream, usageInStream } from "./agent.js";
+import { agentsInStream, settledReply, usageInStream } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
 import { Integration } from "./integration.js";
 
@@ -24,24 +24,9 @@ function execute(command: string, args: string[], cwd: string, timeoutMs: number
 }
 
 export function reviewerVerdict(stream: string): { verdict: "approve" | "needs_human"; reason: string } {
-  let text: string | undefined, settled = false, aborted = false, stopReason: string | undefined, errorMessage: string | undefined, messages = 0;
-  for (const line of stream.split("\n").filter(Boolean)) {
-    const event = JSON.parse(line) as { type?: string; aborted?: boolean; message?: { role?: string; stopReason?: string; errorMessage?: string; content?: { type: string; text?: string }[] } };
-    if (event.type === "agent_settled") { settled = true; aborted = event.aborted === true; }
-    if (event.type === "message_end" && event.message?.role === "assistant") {
-      messages++;
-      stopReason = event.message.stopReason;
-      errorMessage = event.message.errorMessage;
-      text = event.message.content?.filter(part => part.type === "text").map(part => part.text ?? "").join("");
-    }
-  }
-  // Pi normalizes provider stop reasons (Anthropic end_turn, OpenAI stop, ...) to "stop" for a finished reply.
-  const unsettled = (detail: string) => new Error(`Agent review did not settle with one complete verdict: ${detail}`);
-  if (!settled) throw unsettled("Pi never reported agent_settled");
-  if (aborted) throw unsettled("the review was aborted");
-  if (messages !== 1) throw unsettled(`expected 1 assistant message, got ${messages}`);
-  if (stopReason !== "stop") throw unsettled(`stop reason was ${JSON.stringify(stopReason ?? null)}${errorMessage ? ` (${errorMessage.slice(0, 500)})` : ""}`);
-  if (!text?.trim()) throw unsettled("the reply had no text");
+  let text: string;
+  try { text = settledReply(stream); }
+  catch (error) { throw new Error(`Agent review did not settle with one complete verdict: ${(error as Error).message}`); }
   let answer: unknown;
   try { answer = JSON.parse(text.trim()); }
   catch { throw new Error(`Agent review reply was not a JSON object: ${JSON.stringify(text.trim().slice(0, 300))}`); }

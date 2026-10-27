@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "./board.js";
 import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
+import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
+import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
@@ -240,9 +242,11 @@ export class Integration {
    * Approve on a github-pr board: commit the reviewed work on `bakery/<id>`, push that branch to origin, and open
    * a PR (or reuse the open one). Nothing merges locally; the card stays in Review until the PR merges on GitHub.
    * The operator's Approve is the authorization to push; the agent itself never pushes.
+   * `draft` is the title and body the operator approved; without it the card title and body are used. A new PR's
+   * title must pass the repository's semantic-PR check, when it has one, before anything is pushed.
+   * `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it.
    */
-  /** `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it. */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, automatic = false): Promise<Card> {
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, automatic = false): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
@@ -253,38 +257,43 @@ export class Integration {
       const { repo, worktree, run } = this.location(card);
       if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
       if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
-      step("Committing the reviewed work");
       const inspected = this.snapshot(card, false);
       if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
+      const branch = `bakery/${card.id}`;
+      // An open PR keeps its title and body; only a new one must pass the repository's title check.
+      const existing = await github.findByBranch(slug, branch);
+      const hasOpenPr = existing?.state === "OPEN";
+      const title = draft ? draft.title.replace(/\s+/g, " ").trim().slice(0, 250) : cardTitle(card);
+      const semantic = readPullRequestRules(worktree).semantic;
+      const problem = !hasOpenPr && semantic ? semanticTitleProblem(title, semantic) : "";
+      if (problem) throw new Error(`Pull request title "${title}" would fail ${semantic!.source}: ${problem}. Edit the title in the Approve dialog`);
+      if (draft && !title) throw new Error("Pull request title is required");
+      step("Committing the reviewed work");
       const candidate = this.commitReviewed(card, worktree, inspected.tree);
       step("Fetching origin");
       await fetchOrigin(repo);
       if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
-      const branch = `bakery/${card.id}`;
       step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
       // A plain push: if the branch on GitHub has moved (someone pushed to the PR), Git refuses instead of overwriting it.
       await push(worktree, `${candidate}:refs/heads/${branch}`);
-      step(card.prState === "OPEN" ? "Updating the pull request" : "Opening the pull request");
+      step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
       const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
-      const { number, url } = await this.ensurePullRequest(card, run.output, slug, github, { sha: candidate, why });
-      this.board.recordPullRequest(card.id, { number, url, state: "OPEN" });
+      const pr = await this.ensurePullRequest(card, run.output, slug, github, { sha: candidate, why }, { title, body: draft ? draft.body : card.body });
+      this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
       this.board.recordPullRequestPush(card.id, run.id);
       return this.board.getCard(card.id)!;
     });
   }
 
-  /** The open PR from `bakery/<id>`, or a new one with the card title and the card body plus the run summary. */
-  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string }): Promise<{ number: number; url: string }> {
+  /** The open PR from `bakery/<id>`, or a new one with `content` (default: the card title and body) plus the footer and run summary. */
+  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string }, content?: { title: string; body: string }): Promise<{ number: number; url: string }> {
     const branch = `bakery/${card.id}`;
     const existing = await github.findByBranch(slug, branch);
     let url = existing?.state === "OPEN" ? existing.url : "";
     const summary = (output || "").trim().slice(-3000);
     const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
     if (existing && url) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
-    if (!url) {
-      const body = `${card.body.trim()}\n\n---\n\nOpened by Bakery for card \`${card.id}\`.${details}`;
-      url = await github.create(slug, branch, card.title.replace(/\s+/g, " ").trim().slice(0, 250) || `Bakery card ${card.id}`, body);
-    }
+    if (!url) url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
     return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url };
   }
 

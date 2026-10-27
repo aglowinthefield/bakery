@@ -1,3 +1,4 @@
+import type { SemanticTitleRules } from "./pr-title.js";
 import type { UsageFields } from "./usage.js";
 import type { AgentModels } from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
@@ -80,6 +81,15 @@ export type MergeConflict = {
   cardId: string;
   files: string[];
   details: string;
+};
+/** The Approve dialog's starting point for a new pull request; see server/pr-draft.ts. */
+export type PullRequestDraft = {
+  title: string;
+  body: string;
+  source: "agent" | "card";
+  problem: string;
+  templatePath: string | null;
+  semantic: SemanticTitleRules | null;
 };
 export type ReviewDiff = {
   cardId: string;

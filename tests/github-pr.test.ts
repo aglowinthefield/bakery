@@ -10,6 +10,8 @@ import { Worker } from "../server/worker.js";
 import { Integration } from "../server/integration.js";
 import { GitHub, GitHubSync, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
+import { draftPullRequest, readPullRequestRules } from "../server/pr-draft.js";
+import { semanticTitleProblem } from "../src/pr-title.js";
 
 // A local bare repository plays origin and a fake `gh` on PATH plays GitHub. The fake keeps its pull requests
 // in prs.json, logs each call to calls.log, fails `auth status` while auth-fail exists, and fails the batched
@@ -267,6 +269,142 @@ test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, 
     assert.equal(readFileSync(join(f.repo, "feature.txt"), "utf8"), `feature from ${card.id}\n`);
     assert.equal(existsSync(worktree), false, "the Done card's worktree was removed");
     assert.equal(git(f.repo, "branch", "--list", `bakery/${card.id}`), "", "the squash-merged branch was force-deleted after GitHub confirmed the merge");
+  } finally { f.cleanup(); }
+});
+
+// Shaped like silkcx/silk-remix: amannn/action-semantic-pull-request with types and scopes, and a template with
+// Staging QA and Screenshots sections that a separate workflow checks.
+const semanticWorkflow = `name: Semantic PR Title
+on:
+  pull_request:
+    types: [opened, edited]
+jobs:
+  semantic-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            chore
+          # Dependabot's own scopes must be allowed too.
+          scopes: |
+            web
+            api
+            deps
+      - name: Unrelated
+        with:
+          scopes: |
+            nope
+`;
+const prTemplate = "Summary\n\n- What changed and why?\n\n## Staging QA\n\n- Action: <action on staging>\n\n## Screenshots / Demos\n\n- Before: <URL>\n- After: <URL>\n";
+
+/** Lands the repository's PR rules on origin/main before the card starts, so its worktree has them. */
+function landPullRequestRules(f: Fixture) {
+  git(f.upstream, "pull", "-q", "--ff-only", "origin", "main");
+  mkdirSync(join(f.upstream, ".github", "workflows"), { recursive: true });
+  writeFileSync(join(f.upstream, ".github", "workflows", "semantic-pr.yml"), semanticWorkflow);
+  writeFileSync(join(f.upstream, ".github", "PULL_REQUEST_TEMPLATE.md"), prTemplate);
+  git(f.upstream, "add", ".github"); git(f.upstream, ...commitArgs, "pr rules"); git(f.upstream, "push", "-q", "origin", "main");
+}
+
+/** A tool-free Pi stand-in that records its arguments and replies with one JSON draft. */
+function fakeDrafter(f: Fixture, reply: string) {
+  const path = join(f.dir, "pi-drafter"), event = (value: unknown) => JSON.stringify(value).replace(/'/g, "'\\''");
+  writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' "$@" > "${join(f.dir, "drafter-args")}"\nprintf '%s\\n' '${event({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: reply }] } })}' '${event({ type: "agent_settled", aborted: false })}'\n`);
+  chmodSync(path, 0o755);
+  return { path, args: () => readFileSync(join(f.dir, "drafter-args"), "utf8") };
+}
+
+async function draftFor(f: Fixture, cardId: string, piBin: string) {
+  const card = f.board.getCard(cardId)!, run = f.board.listRuns(cardId)[0];
+  const patch = new Integration(f.board, f.data).review(card).files.map(file => file.patch).join("\n");
+  return draftPullRequest({ card, run, worktree: run.worktree!, patch, piBin, models: [] });
+}
+
+test("semantic PR rules: read from the workflow step's own types and scopes, and titles are checked against them", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-rules-"));
+  try {
+    assert.deepEqual(readPullRequestRules(dir), { template: null, semantic: null });
+    mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(dir, ".github", "workflows", "semantic-pr.yml"), semanticWorkflow);
+    writeFileSync(join(dir, ".github", "pull_request_template.md"), prTemplate);
+    const rules = readPullRequestRules(dir);
+    assert.deepEqual(rules.semantic, { types: ["feat", "fix", "chore"], scopes: ["web", "api", "deps"], requireScope: false, source: ".github/workflows/semantic-pr.yml" });
+    assert.deepEqual(rules.template, { path: ".github/pull_request_template.md", text: prTemplate });
+    const semantic = rules.semantic!;
+    assert.equal(semanticTitleProblem("feat(web): add the inbox filter", semantic), "");
+    assert.equal(semanticTitleProblem("fix: handle empty lists", semantic), "");
+    assert.equal(semanticTitleProblem("feat(web,api)!: drop v1", semantic), "");
+    assert.match(semanticTitleProblem("Add feature", semantic), /must look like "type\(scope\): subject/);
+    assert.match(semanticTitleProblem("docs(web): readme", semantic), /Unknown type "docs"; use one of feat, fix, chore/);
+    assert.match(semanticTitleProblem("feat(mobile): app", semantic), /Unknown scope "mobile"; use one of web, api, deps/);
+    assert.match(semanticTitleProblem("feat: x", { ...semantic, requireScope: true }), /scope is required/);
+    // Without a types list the action's defaults apply.
+    writeFileSync(join(dir, ".github", "workflows", "semantic-pr.yml"), "steps:\n  - uses: amannn/action-semantic-pull-request@v6\n");
+    assert.ok(readPullRequestRules(dir).semantic!.types.includes("refactor"));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("github-pr: with a PR template and a semantic-PR check, Approve drafts from them, refuses a bad title before pushing, and opens the edited PR", async () => {
+  const f = fixture();
+  try {
+    landPullRequestRules(f);
+    const card = await reviewedCard(f, "Add feature");
+    const drafter = fakeDrafter(f, JSON.stringify({ title: "feat(web): add feature file", body: "Summary\n\n- Adds feature.txt.\n\n## Staging QA\n\nNo manual step: test fixture\n\n## Screenshots / Demos\n\nNo screenshots: nonvisual fixture file" }));
+    const draft = await draftFor(f, card.id, drafter.path);
+    assert.equal(draft.source, "agent");
+    assert.equal(draft.title, "feat(web): add feature file");
+    assert.match(draft.body, /## Staging QA[\s\S]*## Screenshots/);
+    assert.equal(draft.problem, "");
+    assert.equal(draft.templatePath, ".github/PULL_REQUEST_TEMPLATE.md");
+    assert.deepEqual(draft.semantic?.scopes, ["web", "api", "deps"]);
+    const args = drafter.args();
+    assert.match(args, /--no-tools/, "the drafter cannot act");
+    assert.match(args, /type one of feat, fix, chore and scope, if any, one of web, api, deps/);
+    assert.match(args, /<template>\nSummary[\s\S]*## Staging QA/);
+    assert.match(args, /<card-title>\nAdd feature\n<\/card-title>/);
+    assert.match(args, /\+feature from/, "the diff is in the prompt");
+
+    // A title that fails the check, from the card or the dialog, is refused before anything is committed or pushed.
+    const integration = new Integration(f.board, f.data);
+    const fingerprint = integration.review(f.board.getCard(card.id)!).fingerprint;
+    await assert.rejects(integration.openPullRequest(f.board.getCard(card.id)!, fingerprint, f.github), /title "Add feature" would fail \.github\/workflows\/semantic-pr\.yml: Title must look like/);
+    await assert.rejects(integration.openPullRequest(f.board.getCard(card.id)!, fingerprint, f.github, { title: "feat(mobile): x", body: "b" }), /Unknown scope "mobile"/);
+    assert.throws(() => git(f.origin, "rev-parse", "--verify", "-q", `refs/heads/bakery/${card.id}`));
+    assert.equal(git(join(f.data, "worktrees", card.id), "status", "--porcelain"), "?? feature.txt", "the reviewed work is still uncommitted");
+
+    // The operator's edited draft becomes the PR, with Bakery's footer appended.
+    const approved = await integration.openPullRequest(f.board.getCard(card.id)!, fingerprint, f.github, { title: "fix(api): add feature file", body: `${draft.body}\n\nEdited.` });
+    assert.equal(approved.prNumber, 100);
+    const [pr] = f.prs();
+    assert.equal(pr.title, "fix(api): add feature file");
+    assert.match(pr.body, /^Summary\n\n- Adds feature\.txt\.[\s\S]*No screenshots: nonvisual fixture file\n\nEdited\.\n\n---\n\nOpened by Bakery for card `[\w-]+`\.\n\n<details><summary>Run summary/);
+
+    // An agent failure still gives the operator the template and the reason, and flags the card title.
+    const broken = await draftFor(f, card.id, join(f.dir, "no-such-pi"));
+    assert.equal(broken.source, "card");
+    assert.equal(broken.body, prTemplate.trim());
+    assert.match(broken.problem, /ENOENT[\s\S]*Title must look like/);
+    const fenced = await draftFor(f, card.id, fakeDrafter(f, "not json").path);
+    assert.match(fenced.problem, /reply was not JSON/);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: with neither a PR template nor a semantic-PR check, the draft is the card text and no agent runs", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f, "Add feature");
+    const draft = await draftFor(f, card.id, join(f.dir, "no-such-pi"));
+    assert.deepEqual({ ...draft }, { title: "Add feature", body: "Card body text.", source: "card", problem: "", templatePath: null, semantic: null });
+    const integration = new Integration(f.board, f.data);
+    await integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github, { title: "Any title at all", body: draft.body });
+    const [pr] = f.prs();
+    assert.equal(pr.title, "Any title at all");
+    assert.match(pr.body, /^Card body text\.\n\n---\n\nOpened by Bakery for card /);
   } finally { f.cleanup(); }
 });
 
@@ -638,7 +776,7 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
   const worker = new Worker(f.board, f.data, fixPi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, true));
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, true));
   try {
     const card = await reviewedCard(f);
     await approve(f, card.id);
