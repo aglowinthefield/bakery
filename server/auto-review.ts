@@ -119,8 +119,10 @@ export class AutoReview {
     }
   }
   private async review(prompt: string, cwd: string, runId: string, models: string[]): Promise<string> {
-    // --no-tools also disables extension tools; disable discovery and MCP to keep the process isolated.
-    const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", ...models, "--", prompt];
+    // --no-tools also disables extension tools, so the reviewer still can't act. Extensions stay loaded because
+    // provider auth and account routing (e.g. subscription auth, account pools) live there; without them a run
+    // that works for card runs fails here with a billing error.
+    const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", ...models, "--", prompt];
     const child = spawn(this.piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     this.reviewer = child;
     try { return await new Promise<string>((resolve, reject) => {

@@ -299,6 +299,8 @@ test("the agent reviewer uses the repository's review model before the prompt", 
     const separator = args.indexOf("--");
     assert.deepEqual(args.slice(separator - 4, separator), ["--model", "openai-codex/gpt-5.5", "--thinking", "low"]);
     assert.ok(args.includes("--no-tools"));
+    // Provider auth and account routing live in extensions; the reviewer must load them like card runs do.
+    assert.ok(!args.includes("--no-extensions"));
     assert.match(args[separator + 1], /independent reviewer/);
   } finally { item.close(); }
 });
