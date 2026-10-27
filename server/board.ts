@@ -9,7 +9,7 @@ export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | 
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
-export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light"; agentModels: AgentModels };
+export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: "default" | "compline" | "light"; density: "compact" | "default" | "cozy"; agentModels: AgentModels };
 type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationChosen: number; githubMainProtected: number | null; integrationNote: string };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
@@ -142,6 +142,7 @@ export class Board {
     const migratedSettings = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
     if (!migratedSettings.has("notifyOnReview")) this.db.exec("ALTER TABLE settings ADD COLUMN notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1))");
     if (!migratedSettings.has("agentModels")) this.db.exec("ALTER TABLE settings ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
+    if (!migratedSettings.has("density")) this.db.exec("ALTER TABLE settings ADD COLUMN density TEXT NOT NULL DEFAULT 'default' CHECK(density IN ('compact', 'default', 'cozy'))");
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("icon")) this.db.exec("ALTER TABLE boards ADD COLUMN icon TEXT NOT NULL DEFAULT 'layout-grid'");
@@ -220,13 +221,13 @@ export class Board {
   }
   close() { this.db.close(); }
   getSettings(): BakerySettings {
-    const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme, agentModels FROM settings WHERE id=1").get() as { confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"]; agentModels: string };
-    return { confirmRunStart: row.confirmRunStart === 1, notifyOnReview: row.notifyOnReview === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme, agentModels: parseAgentModels(row.agentModels) };
+    const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme, density, agentModels FROM settings WHERE id=1").get() as { confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"]; density: BakerySettings["density"]; agentModels: string };
+    return { confirmRunStart: row.confirmRunStart === 1, notifyOnReview: row.notifyOnReview === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme, density: row.density, agentModels: parseAgentModels(row.agentModels) };
   }
   updateSettings(settings: Partial<BakerySettings>): BakerySettings {
     const current = this.getSettings();
     const agentModels = settings.agentModels ? validateAgentModels(settings.agentModels) : current.agentModels;
-    this.db.prepare("UPDATE settings SET confirmRunStart=?, notifyOnReview=?, cardDetailsLayout=?, theme=?, agentModels=? WHERE id=1").run((settings.confirmRunStart ?? current.confirmRunStart) ? 1 : 0, (settings.notifyOnReview ?? current.notifyOnReview) ? 1 : 0, settings.cardDetailsLayout ?? current.cardDetailsLayout, settings.theme ?? current.theme, JSON.stringify(agentModels));
+    this.db.prepare("UPDATE settings SET confirmRunStart=?, notifyOnReview=?, cardDetailsLayout=?, theme=?, density=?, agentModels=? WHERE id=1").run((settings.confirmRunStart ?? current.confirmRunStart) ? 1 : 0, (settings.notifyOnReview ?? current.notifyOnReview) ? 1 : 0, settings.cardDetailsLayout ?? current.cardDetailsLayout, settings.theme ?? current.theme, settings.density ?? current.density, JSON.stringify(agentModels));
     return this.getSettings();
   }
   listRepos(): string[] { return this.listBoards().map(board => board.repo); }

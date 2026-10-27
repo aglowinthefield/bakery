@@ -65,6 +65,7 @@ export type BakerySettings = {
   notifyOnReview: boolean;
   cardDetailsLayout: "dialog" | "side";
   theme: "default" | "compline" | "light";
+  density: "compact" | "default" | "cozy";
   agentModels?: AgentModels;
 };
 export type ReviewComment = {

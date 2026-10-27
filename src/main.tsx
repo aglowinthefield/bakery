@@ -120,6 +120,19 @@ function writeTab(key: string, value: string | null) {
   }
 }
 
+// Older servers send no density; anything unknown renders as Default.
+function applyDensity(value: BakerySettings["density"] | undefined) {
+  const density = value === "compact" || value === "cozy" ? value : "default";
+  const root = document.documentElement;
+  if (density === "default") delete root.dataset.density;
+  else root.dataset.density = density;
+  try {
+    localStorage.setItem("bakery-density", density);
+  } catch {
+    // Private or full storage must not prevent settings from loading or saving.
+  }
+}
+
 function cacheTheme(theme: BakerySettings["theme"]) {
   try {
     localStorage.setItem("bakery-theme", theme);
@@ -596,6 +609,7 @@ export function App() {
       .then((next) => {
         document.documentElement.dataset.theme = next.theme;
         cacheTheme(next.theme);
+        applyDensity(next.density);
         setSettings(next);
       })
       .catch((err) => setError(String(err)));
@@ -773,6 +787,7 @@ export function App() {
     const previous = settings;
     setSettings({ ...settings, ...patch });
     if (patch.theme) document.documentElement.dataset.theme = patch.theme;
+    if (patch.density) applyDensity(patch.density);
     void action(async () => {
       try {
         const saved = await api<BakerySettings>("/settings", {
@@ -782,9 +797,11 @@ export function App() {
         setSettings(saved);
         document.documentElement.dataset.theme = saved.theme;
         cacheTheme(saved.theme);
+        applyDensity(saved.density);
       } catch (error) {
         setSettings(previous);
         document.documentElement.dataset.theme = previous.theme;
+        applyDensity(previous.density);
         throw error;
       }
     });
@@ -1853,6 +1870,33 @@ export function App() {
                     : theme === "compline"
                       ? "Compline"
                       : "Light"}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset
+            className="mt-6 border-t border-border pt-5 text-sm"
+            disabled={!settings || busy}
+          >
+            <legend className="pt-5 font-medium">Density</legend>
+            <div className="mt-3 flex gap-5">
+              {(["compact", "default", "cozy"] as const).map((density) => (
+                <label
+                  key={density}
+                  className="flex cursor-pointer items-center gap-2"
+                >
+                  <input
+                    type="radio"
+                    name="density"
+                    checked={(settings?.density ?? "default") === density}
+                    onChange={() => saveSettings({ density })}
+                    className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  />
+                  {density === "compact"
+                    ? "Compact"
+                    : density === "cozy"
+                      ? "Cozy"
+                      : "Default"}
                 </label>
               ))}
             </div>
