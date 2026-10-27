@@ -31,7 +31,8 @@ const autoPickup = new AutoPickup(board, worker);
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
-  card => worker.start(card));
+  card => worker.start(card),
+  card => integration.openPullRequest(card, integration.review(card).fingerprint, github));
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.

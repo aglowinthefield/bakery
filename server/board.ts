@@ -41,17 +41,29 @@ export function parsePriority(value: unknown): CardPriority {
   throw new Error("Priority must be low, normal, high, or urgent");
 }
 /** The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup. */
-export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null };
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean } & UsageFields & CardPullRequest;
+/**
+ * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
+ * `prCiPending` is set while Bakery holds a CI failure to send back to Pi (waiting for the other checks to settle).
+ */
+export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number };
+/**
+ * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Bakery is about to send
+ * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
+ */
+export type ReviewWait = "agent_review" | "ci_fix" | "github";
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean;
+  /** Last time the latest run's agent reported anything; null before the first run. */
+  lastActivityAt: string | null;
+  /** Set only for Review cards that are not your turn; null means a person is needed (or the card is not in Review). */
+  reviewWait: ReviewWait | null } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
 export type CardRef = { id: string; title: string; status: CardStatus };
 // A dependency is finished once it is Done or archived. Until then the dependent card is blocked.
 const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
-type CardRow = Omit<Card, "dependsOn" | "blocked"> & { dependsOn: string; blocked: number };
-const toCard = (row: CardRow): Card => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0 });
-export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string } & UsageFields;
+type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait"> & { dependsOn: string; blocked: number };
+export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
@@ -63,6 +75,7 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds,
   COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
   COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent,
+  (SELECT latest.lastActivityAt FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) AS lastActivityAt,
   ${usageColumns.map(column => `MAX(spend.${column}) AS ${column}`).join(", ")}, COALESCE(MAX(spend.unrecorded), 0) AS usageIncomplete,
   (SELECT json_group_array(edge.dependsOn) FROM (SELECT d.dependsOn FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id ORDER BY parent.createdAt, parent.rowid) edge) AS dependsOn,
   EXISTS (SELECT 1 FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id AND parent.status NOT IN ${finishedStatuses}) AS blocked
@@ -93,8 +106,14 @@ export class Board {
     const cardColumns = new Set((this.db.prepare("PRAGMA table_info(cards)").all() as { name: string }[]).map(column => column.name));
     if (!cardColumns.has("priority")) this.db.exec("ALTER TABLE cards ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
-    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT"])
+    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
+    if (!cardColumns.has("prPushedRunId")) {
+      // Before this column, a PR was opened from the latest run unless a CI fix run came after it. When a fix run may
+      // have, the card stays unknown and shows as needing you (Approve pushes the fix) rather than silently waiting.
+      this.db.exec(`UPDATE cards SET prPushedRunId=(SELECT id FROM runs WHERE runs.cardId=cards.id ORDER BY attempt DESC LIMIT 1)
+        WHERE prNumber IS NOT NULL AND prOverrideUrl IS NULL AND (ciReworks=0 OR (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id)=1)`);
+    }
     // CI failures from a card's PR, waiting to be handed to the card's next run.
     this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
@@ -165,6 +184,9 @@ export class Board {
     if (!runColumns.has("startedBy")) this.db.exec("ALTER TABLE runs ADD COLUMN startedBy TEXT NOT NULL DEFAULT 'manual'");
     // Older runs did not record their agent; they keep an empty label rather than a guess.
     if (!runColumns.has("agent")) this.db.exec("ALTER TABLE runs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
+    if (!runColumns.has("lastActivityAt")) this.db.exec("ALTER TABLE runs ADD COLUMN lastActivityAt TEXT");
+    // 1 when the run was handed a PR's CI failures; its result is pushed to the PR without a manual Approve.
+    if (!runColumns.has("ciFix")) this.db.exec("ALTER TABLE runs ADD COLUMN ciFix INTEGER NOT NULL DEFAULT 0");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
@@ -290,9 +312,13 @@ export class Board {
       .run(value || null, pr?.number ?? null, value || null, now(), cardId);
     return this.getCard(cardId)!;
   }
-  recordPullRequest(cardId: string, pr: { number: number; url: string; state: "OPEN" | "CLOSED" | "MERGED"; checks?: string | null; error?: string | null }): void {
-    this.db.prepare("UPDATE cards SET prNumber=?, prUrl=?, prState=?, prChecks=?, prError=? WHERE id=?")
-      .run(pr.number, pr.url, pr.state, pr.checks ?? null, pr.error ?? null, cardId);
+  recordPullRequest(cardId: string, pr: { number: number; url: string; state: "OPEN" | "CLOSED" | "MERGED"; checks?: string | null; error?: string | null; ciPending?: boolean }): void {
+    this.db.prepare("UPDATE cards SET prNumber=?, prUrl=?, prState=?, prChecks=?, prError=?, prCiPending=? WHERE id=?")
+      .run(pr.number, pr.url, pr.state, pr.checks ?? null, pr.error ?? null, pr.ciPending ? 1 : 0, cardId);
+  }
+  /** Approve pushed `runId`'s work to the card's PR. */
+  recordPullRequestPush(cardId: string, runId: string): void {
+    this.db.prepare("UPDATE cards SET prPushedRunId=? WHERE id=?").run(runId, cardId);
   }
   recordPullRequestError(cardId: string, error: string): void {
     this.db.prepare("UPDATE cards SET prError=? WHERE id=?").run(error.slice(0, 4000), cardId);
@@ -317,6 +343,23 @@ export class Board {
   /** CI failures waiting for the card's next run. */
   getCiFeedback(cardId: string): { headSha: string; failures: string } | undefined {
     return this.db.prepare("SELECT headSha, failures FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string } | undefined;
+  }
+  /**
+   * The waiting failures went stale before a fix run took them (CI is re-running or passed). The round never ran,
+   * so it is not counted, and the head commit can be sent back again if it fails again.
+   */
+  dropCiFeedback(cardId: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId).changes)
+        this.db.prepare("UPDATE cards SET ciReworks=MAX(ciReworks-1, 0), ciReworkSha=NULL WHERE id=?").run(cardId);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** Marks a run as a CI fix run and hands it the waiting failures. */
+  startCiFix(cardId: string, runId: string): void {
+    this.db.prepare("UPDATE runs SET ciFix=1 WHERE id=?").run(runId);
+    this.clearCiFeedback(cardId);
   }
   clearCiFeedback(cardId: string): void { this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId); }
   /** Review cards on a github-pr board, which the PR poller links and checks. */
@@ -450,12 +493,39 @@ export class Board {
     for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled && item.integration === "local")) {
       for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
         const run = this.listRuns(card.id)[0];
-        if (run?.status === "review" && run.finishedAt && repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&
-          !this.getAutoReviewJob(run.id) && !this.getApproval(card.id) && !this.getMergeFailure(card.id) &&
-          !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id)) result.push({ card, run, board: repoBoard });
+        if (run && this.awaitsAutoReview(repoBoard, card.id, run)) result.push({ card, run, board: repoBoard });
       }
     }
     return result.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
+  }
+  /** The run finished after auto-review was enabled and nothing (a person, an earlier job) has handled it yet. */
+  private awaitsAutoReview(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
+    return repoBoard.autoReviewEnabled && repoBoard.integration === "local" &&
+      run.status === "review" && !!run.finishedAt && !!repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&
+      !this.getAutoReviewJob(run.id) && !this.getApproval(cardId) && !this.getMergeFailure(cardId) &&
+      !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
+  }
+  /** See `ReviewWait`. Anything this does not recognize as someone else's turn is the person's turn. */
+  private reviewWait(card: Omit<Card, "reviewWait">, repoBoard: RepoBoard | undefined): ReviewWait | null {
+    if (card.status !== "review" || !repoBoard) return null;
+    const run = this.listRuns(card.id)[0];
+    if (run?.status !== "review") return null;
+    if (repoBoard.integration === "github-pr") {
+      if (card.prState === "MERGED") return "github";
+      // A run newer than the pushed one (a CI fix, a rerun) waits for Approve to push it.
+      if (card.prState !== "OPEN" || (!card.prOverrideUrl && card.prPushedRunId !== run.id)) return null;
+      if (card.prChecks !== "failing") return "github";
+      return card.prCiPending || this.getCiFeedback(card.id) ? "ci_fix" : null;
+    }
+    if (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run)) return "agent_review";
+    return null;
+  }
+  private toCards(rows: CardRow[]): Card[] {
+    const boards = new Map(this.listBoards().map(item => [item.repo, item]));
+    return rows.map(row => {
+      const card = { ...row, dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0 };
+      return { ...card, reviewWait: this.reviewWait(card, boards.get(card.repo)) };
+    });
   }
   autoReviewMergesToday(repo: string): number {
     return (this.db.prepare("SELECT COUNT(*) AS n FROM auto_review_jobs JOIN cards ON cards.id=auto_review_jobs.cardId WHERE cards.repo=? AND state='merged' AND julianday(finishedAt)>=julianday('now','-1 day')")
@@ -507,18 +577,24 @@ export class Board {
     if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status IN ('running', 'interrupted') LIMIT 1").get(board.repo)) throw new Error("Resolve running or interrupted cards before removing this board");
     this.db.prepare("UPDATE boards SET archived=1 WHERE id=?").run(id);
   }
-  cardCounts(): Record<string, Partial<Record<CardStatus, number>>> {
-    const counts: Record<string, Partial<Record<CardStatus, number>>> = {};
-    for (const row of this.db.prepare("SELECT repo, status, COUNT(*) AS count FROM cards GROUP BY repo, status").all() as { repo: string; status: CardStatus; count: number }[])
+  /** Cards per board and status. `review` counts only Review cards that need you; `reviewWaiting` counts the rest. */
+  cardCounts(): Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> {
+    const counts: Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> = {};
+    for (const row of this.db.prepare("SELECT repo, status, COUNT(*) AS count FROM cards WHERE status != 'review' GROUP BY repo, status").all() as { repo: string; status: CardStatus; count: number }[])
       (counts[row.repo] ??= {})[row.status] = Number(row.count);
+    const review = this.db.prepare(`${cardQuery} WHERE cards.status='review' GROUP BY cards.id`).all() as CardRow[];
+    for (const card of this.toCards(review)) {
+      const key = card.reviewWait ? "reviewWaiting" : "review", repo = (counts[card.repo] ??= {});
+      repo[key] = (repo[key] ?? 0) + 1;
+    }
     return counts;
   }
-  listCards(repo?: string): Card[] { return ((repo === undefined
+  listCards(repo?: string): Card[] { return this.toCards((repo === undefined
     ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all()
-    : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all(repo)) as CardRow[]).map(toCard); }
+    : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all(repo)) as CardRow[]); }
   getCard(id: string): Card | undefined {
     const row = this.db.prepare(`${cardQuery} WHERE cards.id=? GROUP BY cards.id`).get(id) as CardRow | undefined;
-    return row && toCard(row);
+    return row && this.toCards([row])[0];
   }
   /** The cards this card depends on, and the cards that depend on it. Edges to a missing card are ignored. */
   listDependencies(cardId: string): { dependsOn: CardRef[]; dependents: CardRef[] } {
@@ -786,7 +862,9 @@ export class Board {
   }
   getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
   listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }
-  attach(id: string, pid: number, worktree: string) { this.db.prepare("UPDATE runs SET pid=?, worktree=? WHERE id=? AND status='running'").run(pid, worktree, id); }
+  attach(id: string, pid: number, worktree: string) { this.db.prepare("UPDATE runs SET pid=?, worktree=?, lastActivityAt=? WHERE id=? AND status='running'").run(pid, worktree, now(), id); }
+  /** The run's agent reported something. Lets the board tell a working run from a quiet one. */
+  touch(id: string) { this.db.prepare("UPDATE runs SET lastActivityAt=? WHERE id=? AND status='running'").run(now(), id); }
   recordAgent(id: string, label: string) {
     const run = this.getRun(id);
     if (run?.status === "running") this.db.prepare("UPDATE runs SET agent=? WHERE id=?").run(addAgent(run.agent, label), id);

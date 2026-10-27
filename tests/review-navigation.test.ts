@@ -46,7 +46,7 @@ test("changed files open their own patches and focus the heading without changin
     const list = page.getByRole("list").filter({ has: page.getByRole("button", { name: files[1], exact: true }) });
     const patchButton = (index: number) => page.locator(`button[aria-controls="review-file-${index}"]`);
     await page.getByText("Changed files (3)").waitFor();
-    assert.equal(await patchButton(1).getAttribute("aria-expanded"), "false");
+    for (const index of [0, 1, 2]) assert.equal(await patchButton(index).getAttribute("aria-expanded"), "true");
     await list.getByRole("button", { name: files[1] }).focus();
     await page.keyboard.press("Enter");
     assert.equal(await patchButton(1).getAttribute("aria-expanded"), "true");
