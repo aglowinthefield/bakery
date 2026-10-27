@@ -41,15 +41,15 @@ export function parsePriority(value: unknown): CardPriority {
 }
 /** The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup. */
 export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null };
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean } & UsageFields & CardPullRequest;
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
 export type CardRef = { id: string; title: string; status: CardStatus };
 // A dependency is finished once it is Done or archived. Until then the dependent card is blocked.
 const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
-type CardRow = Omit<Card, "dependsOn" | "blocked"> & { dependsOn: string; blocked: number };
-const toCard = (row: CardRow): Card => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0 });
+type CardRow = Omit<Card, "dependsOn" | "blocked" | "locallyMerged"> & { dependsOn: string; blocked: number; locallyMerged: number };
+const toCard = (row: CardRow): Card => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0, locallyMerged: row.locallyMerged !== 0 });
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string } & UsageFields;
@@ -64,7 +64,8 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent,
   ${usageColumns.map(column => `MAX(spend.${column}) AS ${column}`).join(", ")}, COALESCE(MAX(spend.unrecorded), 0) AS usageIncomplete,
   (SELECT json_group_array(edge.dependsOn) FROM (SELECT d.dependsOn FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id ORDER BY parent.createdAt, parent.rowid) edge) AS dependsOn,
-  EXISTS (SELECT 1 FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id AND parent.status NOT IN ${finishedStatuses}) AS blocked
+  EXISTS (SELECT 1 FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id AND parent.status NOT IN ${finishedStatuses}) AS blocked,
+  EXISTS (SELECT 1 FROM approvals merged WHERE merged.cardId=cards.id AND merged.merged=1) AS locallyMerged
   FROM cards LEFT JOIN runs ON runs.cardId=cards.id
   LEFT JOIN (SELECT cardId, ${usageColumns.map(column => `SUM(${column}) AS ${column}`).join(", ")}, MAX(cost IS NULL) AS unrecorded
     FROM (SELECT cardId, ${usageColumns.join(", ")} FROM runs UNION ALL SELECT cardId, ${usageColumns.join(", ")} FROM auto_review_jobs) GROUP BY cardId) spend ON spend.cardId=cards.id`;
@@ -311,6 +312,32 @@ export class Board {
       this.db.prepare("INSERT INTO external_integrations(cardId, runId, candidate, mergeCommit, integratedAt) VALUES (?, ?, ?, ?, ?)")
         .run(cardId, run.id, candidate, mergeCommit, now());
       this.db.prepare("UPDATE cards SET status='done', prState='MERGED', prError=NULL, updatedAt=? WHERE id=?").run(now(), cardId);
+      this.clearMergeFailure(cardId);
+      this.db.exec("COMMIT");
+      return this.getCard(cardId)!;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** Done cards on this board that Bakery merged into local main (`approvals.merged=1`), with the approved candidate. */
+  listLocalMerges(repo: string): { card: Card; candidate: string }[] {
+    const rows = this.db.prepare(`SELECT approvals.cardId, approvals.candidate FROM approvals JOIN cards ON cards.id=approvals.cardId
+      WHERE cards.repo=? AND cards.status='done' AND approvals.merged=1
+        AND NOT EXISTS (SELECT 1 FROM external_integrations WHERE external_integrations.cardId=cards.id)
+      ORDER BY cards.updatedAt, cards.rowid`).all(repo) as { cardId: string; candidate: string }[];
+    return rows.map(row => ({ card: this.getCard(row.cardId)!, candidate: row.candidate }));
+  }
+  /**
+   * A locally merged card was published as a pull request: drop the local integration record and move it back to
+   * Review, linked to the PR, so the PR poller takes it to Done once the PR merges.
+   */
+  recordPublishedLocalMerge(cardId: string, candidate: string, pr: { number: number; url: string }): Card {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const card = this.getCard(cardId);
+      const approval = this.db.prepare("SELECT candidate FROM approvals WHERE cardId=? AND merged=1").get(cardId) as { candidate: string } | undefined;
+      if (card?.status !== "done" || approval?.candidate !== candidate) throw new Error("Card changed while publishing; reload it and retry");
+      this.db.prepare("DELETE FROM approvals WHERE cardId=?").run(cardId);
+      this.db.prepare("UPDATE cards SET status='review', prNumber=?, prUrl=?, prState='OPEN', prChecks=NULL, prError=NULL, updatedAt=? WHERE id=?")
+        .run(pr.number, pr.url, now(), cardId);
       this.clearMergeFailure(cardId);
       this.db.exec("COMMIT");
       return this.getCard(cardId)!;

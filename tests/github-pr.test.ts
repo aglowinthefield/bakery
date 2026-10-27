@@ -529,3 +529,102 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/, "the reason stays on the card");
   } finally { f.cleanup(); }
 });
+
+test("publish as PR: a card merged into local main goes back to Review, opens a PR, local main resets on confirmation, and the PR merge makes it Done", async () => {
+  const f = fixture();
+  try {
+    // The board integrated locally when the card was approved: Bakery merged it into local main.
+    f.board.setIntegration(f.repoBoard.id, "local");
+    const card = await reviewedCard(f);
+    const worktree = join(f.data, "worktrees", card.id);
+    const integration = new Integration(f.board, f.data);
+    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+    const candidate = git(worktree, "rev-parse", "HEAD");
+    const mergedTip = git(f.repo, "rev-parse", "main");
+    assert.equal(f.board.getCard(card.id)?.locallyMerged, true);
+
+    // Switched to github-pr: the card is listed, and main cannot be reset while the card exists only locally.
+    f.board.setIntegration(f.repoBoard.id, "github-pr");
+    let listed = await integration.localMerges(f.repo);
+    assert.deepEqual(listed.cards.map(item => [item.card.id, item.candidate, item.commits, item.blocker]), [[card.id, candidate, 1, ""]]);
+    assert.equal(listed.main?.tip, mergedTip);
+    assert.equal(listed.main?.resettable, false);
+    assert.match(listed.main?.reason ?? "", /still merged only into local main; publish it/);
+    await assert.rejects(integration.resetLocalMain(f.repo, mergedTip), /still merged only into local main/);
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.match(f.board.getBoard(f.repoBoard.id)!.integrationError, /Local main is ahead of origin\/main/);
+
+    // Publish: the approved candidate is pushed to bakery/<id>, a PR opens, the local record is cleared.
+    const published = await integration.publishLocalMerge(f.board.getCard(card.id)!, f.github);
+    assert.equal(published.card.status, "review");
+    assert.equal(published.card.prNumber, 100);
+    assert.equal(published.card.prState, "OPEN");
+    assert.equal(published.card.locallyMerged, false);
+    assert.equal(f.board.wasIntegrated(card.id), false);
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), candidate);
+    const [pr] = f.prs();
+    assert.equal(pr.title, "Add feature");
+    assert.equal(pr.headRefName, `bakery/${card.id}`);
+    assert.match(pr.body, /^Card body text\.[\s\S]*Opened by Bakery for card/);
+    assert.equal(git(f.repo, "rev-parse", "main"), mergedTip, "publishing does not touch local main");
+    assert.deepEqual((await integration.localMerges(f.repo)).cards, [], "a published card is no longer offered");
+    await assert.rejects(integration.publishLocalMerge(f.board.getCard(card.id)!, f.github), /Only a Done card/);
+
+    // Local main now holds only the published card merge: it may be reset, but only on confirming its tip.
+    assert.equal(published.main?.resettable, true, published.main?.reason);
+    assert.equal(published.main?.recoveryBranch, `bakery-recovery/${mergedTip.slice(0, 12)}`);
+    await assert.rejects(integration.resetLocalMain(f.repo, "0".repeat(40)), /moved since you confirmed/);
+    assert.equal(git(f.repo, "rev-parse", "main"), mergedTip);
+    assert.equal(await integration.resetLocalMain(f.repo, mergedTip), null, "nothing left to reset");
+    assert.equal(git(f.repo, "rev-parse", "main"), git(f.repo, "rev-parse", "origin/main"));
+    assert.equal(git(f.repo, "rev-parse", `bakery-recovery/${mergedTip.slice(0, 12)}`), mergedTip, "the old tip is saved");
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getBoard(f.repoBoard.id)!.integrationError, "", "main is back in step");
+
+    // The PR merges on GitHub: the card is Done through the PR, and main fast-forwards to the merge.
+    const merge = f.squashMerge(`bakery/${card.id}`);
+    f.setPrs([{ ...pr, state: "MERGED", mergedAt: new Date().toISOString(), mergeCommit: { oid: merge }, headRefOid: candidate }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    const done = f.board.getCard(card.id)!;
+    assert.equal(done.status, "done", done.prError ?? "");
+    assert.equal(done.prState, "MERGED");
+    assert.equal(externalRow(f, card.id)?.mergeCommit, merge);
+    assert.equal(git(f.repo, "rev-parse", "main"), merge);
+    assert.equal(readFileSync(join(f.repo, "feature.txt"), "utf8"), `feature from ${card.id}\n`);
+    assert.equal(existsSync(worktree), false);
+  } finally { f.cleanup(); }
+});
+
+test("publish as PR: refused on a local board and for a branch carrying other local merges; main with other local commits is not offered a reset", async () => {
+  const f = fixture();
+  try {
+    f.board.setIntegration(f.repoBoard.id, "local");
+    const integration = new Integration(f.board, f.data);
+    const first = await reviewedCard(f, "First");
+    integration.approve(first, integration.review(first).fingerprint);
+    // Started from local main after the first merge, so its branch contains that merge.
+    const second = await reviewedCard(f, "Second");
+    integration.approve(second, integration.review(second).fingerprint);
+    await assert.rejects(integration.publishLocalMerge(f.board.getCard(first.id)!, f.github), /Switch this board to GitHub pull requests/);
+
+    f.board.setIntegration(f.repoBoard.id, "github-pr");
+    const listed = await integration.localMerges(f.repo);
+    assert.deepEqual(listed.cards.map(item => item.card.id).sort(), [first.id, second.id].sort());
+    assert.match(listed.cards.find(item => item.card.id === second.id)!.blocker, /includes 1 merge commit from local main .*Merge card: First/);
+    await assert.rejects(integration.publishLocalMerge(f.board.getCard(second.id)!, f.github), /includes 1 merge commit/);
+    assert.equal(f.board.getCard(second.id)?.status, "done", "a refused publish changes nothing");
+    assert.equal(f.prs().length, 0);
+
+    await integration.publishLocalMerge(f.board.getCard(first.id)!, f.github);
+    let main = (await integration.localMerges(f.repo)).main;
+    assert.equal(main?.resettable, false);
+    assert.match(main?.reason ?? "", /Second .* still merged only into local main/);
+
+    // A commit on main that is not a Bakery card merge is never reset away.
+    writeFileSync(join(f.repo, "mine.txt"), "mine\n"); git(f.repo, "add", "mine.txt"); git(f.repo, ...commitArgs, "operator commit");
+    main = (await integration.localMerges(f.repo)).main;
+    assert.match(main?.reason ?? "", /\(operator commit\) that is not a Bakery card merge/);
+    await assert.rejects(integration.resetLocalMain(f.repo, main!.tip), /not a Bakery card merge/);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s", "main"), "operator commit");
+  } finally { f.cleanup(); }
+});

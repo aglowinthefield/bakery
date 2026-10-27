@@ -123,6 +123,8 @@ export type Card = {
   prError?: string | null;
   /** Times Bakery sent this card back because its PR failed CI. */
   ciReworks?: number;
+  /** Bakery merged this card into local main (local integration), not through a PR. */
+  locallyMerged?: boolean;
 } & UsageFields;
 const finished = (status: Status) => status === "done" || status === "archived";
 /**

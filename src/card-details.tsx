@@ -23,6 +23,7 @@ import {
   type Run,
   type Status,
 } from "./model.js";
+import { MainReset, type MainRecovery } from "./local-merges.js";
 
 type Props = {
   boardId: string;
@@ -73,6 +74,8 @@ export function CardDetails({
   const [review, setReview] = useState<ReviewDiff | null>(null);
   const [reviewError, setReviewError] = useState("");
   const [reviewRefresh, setReviewRefresh] = useState(0);
+  const [mainRecovery, setMainRecovery] = useState<MainRecovery | null>(null);
+  useEffect(() => setMainRecovery(null), [cardId]);
   const [approvalPending, setApprovalPending] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -315,6 +318,50 @@ export function CardDetails({
               ))}
             </select>
           </label>
+        )}
+        {card &&
+          integration === "github-pr" &&
+          card.status === "done" &&
+          card.locallyMerged && (
+            <div className="mt-4 rounded-md border border-border p-3 text-xs">
+              <p>
+                Bakery merged this card into local main, not through a pull
+                request. Publish as PR pushes the approved work to bakery/
+                {card.id}, opens a pull request, and moves the card back to
+                Review until the PR merges.
+              </p>
+              <Button
+                className="mt-2"
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() =>
+                  action(async () => {
+                    const result = await api<{ main: MainRecovery | null }>(
+                      `/boards/${boardId}/cards/${card.id}/publish`,
+                      { method: "POST" },
+                    );
+                    setMainRecovery(result.main);
+                  })
+                }
+              >
+                Publish as PR
+              </Button>
+            </div>
+          )}
+        {card && mainRecovery && (
+          <MainReset
+            boardId={boardId}
+            main={mainRecovery}
+            onError={(message) => {
+              setError(message);
+              onError(message);
+            }}
+            onReset={(main) => {
+              setMainRecovery(main);
+              refresh();
+            }}
+          />
         )}
         {card && integration === "github-pr" && (
           <PullRequestLink
@@ -583,8 +630,8 @@ export function CardDetails({
                     integration === "github-pr" && card.prState === "OPEN"
                       ? `Approve the reviewed diff and push it to pull request #${card.prNumber}? Bakery commits unignored files on bakery/${card.id} and pushes that branch to origin, which updates the open PR. The card is Done once the PR merges on GitHub.`
                       : integration === "github-pr"
-                      ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
-                      : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
+                        ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
+                        : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
                   )
                 )
                   return;
@@ -602,8 +649,8 @@ export function CardDetails({
               {integration === "github-pr" && card.prState === "OPEN"
                 ? `Approve and update PR #${card.prNumber}`
                 : integration === "github-pr"
-                ? "Approve and open PR"
-                : "Approve and merge"}
+                  ? "Approve and open PR"
+                  : "Approve and merge"}
             </Button>
           )}
           {card?.status === "review" && !changesRequested && (
