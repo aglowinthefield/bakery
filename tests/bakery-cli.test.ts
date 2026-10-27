@@ -100,7 +100,12 @@ test("card creation and status changes go through the API; Ready needs consent w
     assert.equal(JSON.parse(created.stdout).id, "new-card");
     const triage = await f.run("triage", "card-one");
     assert.equal(triage.code, 0, triage.stderr);
-    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { status: "triage" }]);
+    const keyed = await f.run("create", "--title", "Scripted", "--key", "nightly-1");
+    assert.equal(keyed.code, 0, keyed.stderr);
+    assert.equal(keyed.stdout, "new-card\ttriage\tScripted\n");
+    assert.match((await f.run("cards", "--key", "nightly-1")).stderr, /only valid with create/);
+    assert.match((await f.run("create", "--title", "Long", "--key", "k".repeat(201))).stderr, /1 to 200/);
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { status: "triage" }, { title: "Scripted", body: "", idempotencyKey: "nightly-1" }]);
   } finally { await f.close(); }
 });
 

@@ -63,6 +63,48 @@ test("existing Ready cards stay Ready when the database opens", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("an idempotency key returns the board's existing card, in any status", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite")), other = join(dir, "other");
+    const first = board.createCard({ title: "Nightly", body: "", repo: dir, idempotencyKey: "nightly-1" });
+    assert.equal(first.idempotencyKey, "nightly-1");
+    const again = board.createCard({ title: "Changed title", body: "x", repo: dir, idempotencyKey: "nightly-1" });
+    assert.equal(again.id, first.id);
+    assert.equal(again.title, "Nightly");
+    board.setStatus(first.id, "done");
+    board.setArchived(dir, [first.id], true);
+    assert.equal(board.createCard({ title: "Nightly", body: "", repo: dir, idempotencyKey: "nightly-1" }).id, first.id, "archived cards still match");
+    const elsewhere = board.createCard({ title: "Nightly", body: "", repo: other, idempotencyKey: "nightly-1" });
+    assert.notEqual(elsewhere.id, first.id, "another board can reuse the key");
+    const plain = [board.createCard({ title: "Plain", body: "", repo: dir }), board.createCard({ title: "Plain", body: "", repo: dir })];
+    assert.notEqual(plain[0].id, plain[1].id);
+    assert.equal(plain[0].idempotencyKey, null);
+    assert.equal(board.listCards(dir).length, 3);
+    assert.throws(() => board.createCard({ title: "Long", body: "", repo: dir, idempotencyKey: "k".repeat(201) }), /1 to 200/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("older card tables gain a nullable idempotency key with a per-board unique index", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const legacy = new DatabaseSync(path);
+    legacy.exec("CREATE TABLE cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)");
+    legacy.prepare("INSERT INTO cards VALUES ('old', 'Old', '', ?, 'triage', 'manual', '2025-01-01', '2025-01-01')").run(dir);
+    legacy.close();
+    const board = new Board(path);
+    assert.equal(board.getCard("old")?.idempotencyKey, null);
+    const keyed = board.createCard({ title: "New", body: "", repo: dir, idempotencyKey: "k" });
+    board.close();
+    const raw = new DatabaseSync(path);
+    assert.throws(() => raw.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt) VALUES ('dup', 'Dup', '', ?, 'triage', 'manual', 'k', '', '')").run(dir), /UNIQUE/);
+    raw.close();
+    assert.ok(keyed.id);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("settings default to notifications off and persist across restarts", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {

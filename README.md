@@ -184,7 +184,7 @@ The CLI talks to the running server's HTTP API, so it goes through the same chec
 ```sh
 npm run bakery -- boards
 npm run bakery -- cards
-npm run bakery -- create --title "..." --body "..."
+npm run bakery -- create --title "..." --body "..." [--key KEY]
 npm run bakery -- show CARD_ID
 npm run bakery -- edit CARD_ID [--title "..."] [--body "..."]
 npm run bakery -- archive CARD_ID...
@@ -200,6 +200,7 @@ npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 
 
 - Add `--board ID|PATH` if you have more than one board, and `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
+- `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
 - `cards` prints each card's ID, status, attempt count, review rounds, and title.
 - `show` prints a card's title, status, repository, description, each attempt's status, agent and error, and the latest auto-review verdict.
 - `edit` changes a card's title, description, or both. `--body ""` clears the description. You can't edit a running card.

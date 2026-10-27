@@ -81,6 +81,7 @@ export type Card = {
   body: string;
   repo: string;
   source: "manual";
+  idempotencyKey?: string | null;
   status: Status;
   createdAt: string;
   updatedAt: string;

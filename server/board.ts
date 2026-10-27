@@ -27,7 +27,7 @@ const usageDefinitions = "inputTokens INTEGER, outputTokens INTEGER, cacheReadTo
 const usageUpdate = usageColumns.map(column => `${column}=COALESCE(${column}, 0)+?`).join(", ");
 const usageValues = (usage: Usage) => usageColumns.map(column => usage[column]);
 // A card's usage sums its attempts and agent reviews; usageIncomplete is 1 when an older one has no record.
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number } & UsageFields;
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number } & UsageFields;
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string } & UsageFields;
@@ -61,6 +61,10 @@ export class Board {
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline', 'light')), notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
+    // Scripts may pass an idempotency key so a re-run returns the card it already created on that board.
+    const cardColumns = new Set((this.db.prepare("PRAGMA table_info(cards)").all() as { name: string }[]).map(column => column.name));
+    if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
     const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
@@ -377,10 +381,20 @@ export class Board {
     ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.createdAt DESC`).all()
     : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.createdAt DESC`).all(repo)) as Card[]; }
   getCard(id: string): Card | undefined { return this.db.prepare(`${cardQuery} WHERE cards.id=? GROUP BY cards.id`).get(id) as Card | undefined; }
-  createCard(input: { title: string; body: string; repo: string }): Card {
+  /** The card created on this board with the key, in any status including archived. */
+  getCardByIdempotencyKey(repo: string, key: string): Card | undefined {
+    const row = this.db.prepare("SELECT id FROM cards WHERE repo=? AND idempotencyKey=?").get(repo, key) as { id: string } | undefined;
+    return row && this.getCard(row.id);
+  }
+  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null }): Card {
+    const key = input.idempotencyKey ?? null;
+    if (key !== null && (!key.trim() || key.length > 200)) throw new Error("Idempotency key must be 1 to 200 characters");
+    const existing = key === null ? undefined : this.getCardByIdempotencyKey(input.repo, key);
+    if (existing) return existing;
     const id = randomUUID(), time = now();
     this.addRepo(input.repo);
-    this.db.prepare("INSERT INTO cards VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?)").run(id, input.title, input.body, input.repo, time, time);
+    this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?)")
+      .run(id, input.title, input.body, input.repo, key, time, time);
     return this.getCard(id)!;
   }
   updateCard(id: string, input: { title: string; body: string; repo: string }): Card {
