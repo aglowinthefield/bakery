@@ -6,7 +6,7 @@ const usage = `bakery-cli — local Bakery API client
 
 Usage: bakery-cli boards [--json]
        bakery-cli cards [--board ID|PATH] [--json]
-       bakery-cli create --title TITLE [--body BODY] [--key KEY] [--board ID|PATH] [--json]
+       bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority low|normal|high|urgent] [--board ID|PATH] [--json]
        bakery-cli show CARD_ID [--board ID|PATH] [--json]
        bakery-cli edit CARD_ID [--title TITLE] [--body BODY] [--board ID|PATH] [--json]
        bakery-cli archive CARD_ID... [--board ID|PATH] [--json]
@@ -33,7 +33,7 @@ board; each can start paid Pi runs. No command approves a merge.`;
 
 function options(argv) {
   const result = { positionals: [], json: false, yes: false };
-  const values = new Set(["board", "title", "body", "key", "concurrency", "limit", "budget"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
@@ -96,6 +96,9 @@ function usageTotal(items) {
   const total = Object.fromEntries(usageKeys.map(key => [key, recorded.length ? recorded.reduce((sum, item) => sum + (item[key] ?? 0), 0) : null]));
   return { ...total, incomplete: recorded.length < items.length };
 }
+// Mirrors server/board.ts cardPriorities; the API returns the stored integer.
+const priorities = { low: -1, normal: 0, high: 1, urgent: 2 };
+const priorityName = value => Object.keys(priorities).find(key => priorities[key] === (value ?? 0)) ?? String(value);
 const money = cost => typeof cost !== "number" ? "—" : cost > 0 && cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
 const lanes = ["triage", "ready", "running", "review", "failed", "interrupted", "done", "archived"];
 const pickupSummary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
@@ -125,7 +128,8 @@ async function main() {
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
   if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command !== "create" && command !== "edit" && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create or edit");
-  if (command !== "create" && opts.key !== undefined) throw new Error("--key is only valid with create");
+  if (command !== "create" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create");
+  if (opts.priority !== undefined && !Object.hasOwn(priorities, opts.priority)) throw new Error("Priority must be low, normal, high, or urgent");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
   if (["show", "edit", "archive", "restore"].includes(command)) args.forEach(cardId);
@@ -146,14 +150,15 @@ async function main() {
   const path = `/api/boards/${encodeURIComponent(board.id)}`;
   if (command === "cards") {
     const cards = await request(origin, `${path}/cards`);
-    print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
+    print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tpriority:${priorityName(item.priority)}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
   } else if (command === "create") {
     if (!opts.title?.trim()) throw new Error("create requires --title TITLE");
     if (opts.key !== undefined && (!opts.key.trim() || opts.key.length > 200)) throw new Error("--key must be 1 to 200 characters");
     const input = { title: opts.title, body: opts.body ?? "" };
+    if (opts.priority !== undefined) input.priority = opts.priority;
     if (opts.key !== undefined) input.idempotencyKey = opts.key;
     const card = await request(origin, `${path}/cards`, "POST", input);
-    print(card, opts.json, [`${card.id}\t${card.status}\t${card.title}`]);
+    print(card, opts.json, [`${card.id}\t${card.status}\tpriority:${priorityName(card.priority)}\t${card.title}`]);
   } else if (command === "ready" || command === "triage") {
     if (command === "ready" && board.autoPickupEnabled && !opts.yes) throw new Error("Auto pickup is enabled: Ready may start paid Pi immediately. Repeat with --yes to confirm.");
     const card = await request(origin, `${path}/cards/${cardId(args[0])}/status`, "POST", { status: command });

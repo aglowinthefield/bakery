@@ -324,6 +324,7 @@ test("existing cards become repository boards without losing runs", () => {
     const board = new Board(path);
     assert.deepEqual(board.listRepos(), [repo]);
     assert.equal(board.listCards(repo)[0]?.id, "old-card");
+    assert.equal(board.listCards(repo)[0]?.priority, 0, "cards from before priorities migrate to Normal");
     assert.equal(board.listRuns("old-card")[0]?.sessionId, "old-session");
     assert.equal(board.listCards(repo)[0]?.turns, 3);
     assert.equal(board.listCards(repo)[0]?.turnsIncomplete, 1);

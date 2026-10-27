@@ -11,14 +11,16 @@ import {
   DialogTitle,
 } from "./components/ui/dialog";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
-import type {
-  AutoReviewJob,
-  BakerySettings,
-  Card,
-  MergeConflict,
-  ReviewComment,
-  ReviewDiff,
-  Run,
+import {
+  priorities,
+  type AutoReviewJob,
+  type BakerySettings,
+  type Card,
+  type MergeConflict,
+  type Priority,
+  type ReviewComment,
+  type ReviewDiff,
+  type Run,
 } from "./model.js";
 
 type Props = {
@@ -245,6 +247,41 @@ export function CardDetails({
           </span>{" "}
           Manual card · {card && card.repo}
         </DialogDescription>
+        {card && (
+          <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            Priority
+            <select
+              aria-label="Card priority"
+              value={card.priority ?? 0}
+              disabled={busy || card.status === "running"}
+              title={
+                card.status === "running"
+                  ? "Priority cannot change while a run is active"
+                  : "Higher priority Ready cards are picked up first"
+              }
+              onChange={(event) => {
+                const priority = Number(event.target.value) as Priority;
+                void action(() =>
+                  api<Card>(`/boards/${boardId}/cards/${card.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({
+                      title: card.title,
+                      body: card.body,
+                      priority,
+                    }),
+                  }),
+                );
+              }}
+              className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+            >
+              {priorities.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {card && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>Card ID</span>

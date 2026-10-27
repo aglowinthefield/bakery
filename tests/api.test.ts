@@ -143,6 +143,13 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;
     assert.equal(card.repo, realpathSync(alpha));
     assert.equal(card.status, "triage");
+    assert.equal(card.priority, 0, "new cards default to Normal");
+    for (const priority of ["critical", "HIGH", 3, 0.5, null])
+      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Bad", body: "", priority })).data.error, /Priority must be low, normal, high, or urgent/);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: "bogus" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: "high" })).data.priority, 1);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "Edited" })).data.priority, 1, "omitting priority on edit keeps it");
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: 0 })).data.priority, 0);
     assert.equal(card.idempotencyKey, null);
     const keyed = await request(`/boards/${first.id}/cards`, "POST", { title: "Keyed", body: "", idempotencyKey: "script-1" });
     assert.equal(keyed.status, 201);

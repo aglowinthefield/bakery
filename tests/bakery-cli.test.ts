@@ -8,7 +8,7 @@ const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url))
 const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
 const cards = [
-  { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", attempts: 3, reviewRounds: 2 },
+  { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", priority: 1, attempts: 3, reviewRounds: 2 },
   { id: "card-done", title: "Finished", body: "", repo: board.repo, status: "done", attempts: 0, reviewRounds: 0 },
   { id: "card-old", title: "Old work", body: "", repo: board.repo, status: "archived", attempts: 0, reviewRounds: 0 },
 ];
@@ -70,7 +70,7 @@ test("lists boards, cards, runs and conflicts through the HTTP API", async () =>
   const f = await fixture();
   try {
     assert.match((await f.run("boards")).stdout, /bakery-project/);
-    assert.match((await f.run("cards")).stdout, /card-one\ttriage\tattempts:3\treview-rounds:2\tMake an improvement/);
+    assert.match((await f.run("cards")).stdout, /card-one\ttriage\tpriority:high\tattempts:3\treview-rounds:2\tMake an improvement/);
     const runs = JSON.parse((await f.run("runs", "card-one", "--json")).stdout);
     assert.equal(runs.cardId, "card-one");
     assert.deepEqual(runs.runs.map((run: { id: string }) => run.id), ["run-two", "run-one"]);
@@ -100,12 +100,18 @@ test("card creation and status changes go through the API; Ready needs consent w
     assert.equal(JSON.parse(created.stdout).id, "new-card");
     const triage = await f.run("triage", "card-one");
     assert.equal(triage.code, 0, triage.stderr);
+    const urgent = await f.run("create", "--title", "Hotfix", "--priority", "urgent");
+    assert.equal(urgent.code, 0, urgent.stderr);
+    const bad = await f.run("create", "--title", "Nope", "--priority", "critical");
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.stderr, /Priority must be low, normal, high, or urgent/);
+    assert.match((await f.run("cards", "--priority", "high")).stderr, /only valid with create/);
     const keyed = await f.run("create", "--title", "Scripted", "--key", "nightly-1");
     assert.equal(keyed.code, 0, keyed.stderr);
-    assert.equal(keyed.stdout, "new-card\ttriage\tScripted\n");
+    assert.equal(keyed.stdout, "new-card\ttriage\tpriority:normal\tScripted\n");
     assert.match((await f.run("cards", "--key", "nightly-1")).stderr, /only valid with create/);
     assert.match((await f.run("create", "--title", "Long", "--key", "k".repeat(201))).stderr, /1 to 200/);
-    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { status: "triage" }, { title: "Scripted", body: "", idempotencyKey: "nightly-1" }]);
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { status: "triage" }, { title: "Hotfix", body: "", priority: "urgent" }, { title: "Scripted", body: "", idempotencyKey: "nightly-1" }]);
   } finally { await f.close(); }
 });
 

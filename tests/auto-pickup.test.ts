@@ -64,6 +64,26 @@ test("auto-pickup is opt-in, starts oldest Ready cards, and counts manual runs t
   } finally { await item.close(); }
 });
 
+test("pickup starts the highest priority Ready card first, then the oldest", async () => {
+  const item = fixture();
+  try {
+    const ready = (title: string, priority: -1 | 0 | 1 | 2) => item.board.setStatus(item.board.createCard({ title, body: "Small change", repo: item.repo, priority }).id, "ready");
+    const oldLow = ready("Old low", -1), oldNormal = ready("Old normal", 0), high = ready("High", 1), newerUrgent = ready("Newer urgent", 2), newestUrgent = ready("Newest urgent", 2);
+    assert.deepEqual(item.board.listCards(item.repo).map(card => card.title), ["Newest urgent", "Newer urgent", "High", "Old normal", "Old low"],
+      "listing keeps newest-first within a priority");
+    item.board.setAutoPickup(item.repoBoard.id, true, 2);
+    assert.deepEqual(item.board.listAutoPickupCandidates().map(({ card }) => card.title), ["Newer urgent", "Newest urgent", "High", "Old normal", "Old low"]);
+    item.pickup.tick();
+    assert.deepEqual([newerUrgent, newestUrgent, high, oldNormal, oldLow].map(card => item.board.listRuns(card.id).length), [1, 1, 0, 0, 0]);
+    item.release();
+    await waitFor(() => item.board.getCard(newerUrgent.id)?.status === "review" && item.board.getCard(newestUrgent.id)?.status === "review");
+    item.board.updateCard(oldLow.id, { title: "Old low", body: "Small change", repo: item.repo, priority: 1 });
+    item.pickup.tick();
+    assert.deepEqual([high, oldLow, oldNormal].map(card => item.board.listRuns(card.id).length), [1, 1, 0], "a raised priority overtakes older Normal cards; ties go to the oldest");
+    await waitFor(() => item.board.getCard(high.id)?.status === "review" && item.board.getCard(oldLow.id)?.status === "review");
+  } finally { await item.close(); }
+});
+
 test("turning off pickup blocks new runs but leaves already running Pi alone", async () => {
   const item = fixture();
   try {

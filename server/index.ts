@@ -3,7 +3,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync,
 import { execFile, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, extname, isAbsolute, resolve } from "node:path";
-import { Board } from "./board.js";
+import { Board, parsePriority } from "./board.js";
 import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
 import { AutoReview } from "./auto-review.js";
@@ -55,7 +55,8 @@ async function body(req: IncomingMessage) {
 function fields(value: Record<string, unknown>) {
   const title = value.title, description = value.body;
   if (typeof title !== "string" || !title.trim() || title.length > 200 || typeof description !== "string" || description.length > 16000) throw new Error("Title and description are required");
-  return { title: title.trim(), body: description };
+  // Omitted priority keeps the card's current one on edit and means Normal on create.
+  return { title: title.trim(), body: description, ...("priority" in value ? { priority: parsePriority(value.priority) } : {}) };
 }
 function idempotencyKey(value: unknown) {
   if (value === undefined || value === null) return null;

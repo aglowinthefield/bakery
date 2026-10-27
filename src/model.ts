@@ -75,6 +75,19 @@ export type ReviewDiff = {
   fingerprint: string;
   files: { path: string; patch: string }[];
 };
+// Mirrors server/board.ts: stored as an integer, higher is picked up first.
+export const priorities = [
+  { value: 2, name: "urgent", label: "Urgent" },
+  { value: 1, name: "high", label: "High" },
+  { value: 0, name: "normal", label: "Normal" },
+  { value: -1, name: "low", label: "Low" },
+] as const;
+export type Priority = (typeof priorities)[number]["value"];
+export const priorityLabel = (value: number) =>
+  priorities.find((item) => item.value === value)?.label ?? "Normal";
+// Stable sort: equal priorities keep the server's existing order.
+export const byPriority = <T extends { priority?: number }>(items: T[]) =>
+  [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 export type Card = {
   id: string;
   title: string;
@@ -83,6 +96,7 @@ export type Card = {
   source: "manual";
   idempotencyKey?: string | null;
   status: Status;
+  priority: Priority;
   createdAt: string;
   updatedAt: string;
   turns: number;
