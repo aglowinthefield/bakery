@@ -262,3 +262,31 @@ test("a second Board connection does not interrupt live runs; explicit server re
     afterRestart.close();
   } finally { await item.close(); }
 });
+
+test("a reached daily cost budget makes pickup wait with a reason while manual starts still run", async () => {
+  const item = fixture();
+  try {
+    const usage = { input: 1000, output: 200, cacheRead: 50, cacheWrite: 10, totalTokens: 1260, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.6 } };
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage } })}' '{"type":"agent_settled","aborted":false}'\n`);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.pickupCostBudget, null, "budget is off by default");
+    assert.throws(() => item.board.setAutoPickup(item.repoBoard.id, true, 1, 6, 0), /cost budget/);
+    const first = item.card("First"), second = item.card("Second"), manual = item.card("Manual");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1, 6, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(first.id)?.status === "review");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.cost24h, 0.6);
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(second.id)?.status === "review");
+    const capped = item.board.getBoard(item.repoBoard.id)!;
+    assert.ok(Math.abs(capped.cost24h - 1.2) < 1e-9);
+    assert.equal(capped.autoPickupBudgetReached, true);
+    assert.equal(capped.autoPickupEnabled, true, "budget waits like the start limit instead of disabling pickup");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(manual.id).length, 0, "pickup waits at the budget");
+    assert.throws(() => item.board.claim(manual.id, "auto"), /not eligible/);
+    item.worker.start(item.board.getCard(manual.id)!);
+    await waitFor(() => item.board.getCard(manual.id)?.status === "review");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1, 6, null);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupBudgetReached, false, "turning the budget off clears the wait");
+  } finally { await item.close(); }
+});

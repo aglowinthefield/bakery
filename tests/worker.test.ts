@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, chmodSync, renameSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
@@ -248,6 +249,53 @@ test("draining refuses new runs and resolves only after active Pi runs finish on
     await drain;
     assert.equal(board.getRun(run.id)?.status, "review");
     assert.equal(worker.activeCount, 0);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Pi usage is summed per attempt and per card, and older attempts stay unrecorded", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    const usage = (input: number, output: number, total: number) => ({ input, output, cacheRead: 100, cacheWrite: 10, totalTokens: input + output + 110, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total } });
+    const events = [
+      { type: "message_start", message: { role: "assistant", provider: "anthropic", model: "claude" } },
+      { type: "message_end", message: { role: "assistant", stopReason: "toolUse", usage: usage(1000, 200, 0.25) } },
+      { type: "message_end", message: { role: "user", usage: usage(9, 9, 9) } },
+      { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "overloaded", usage: usage(5, 0, 0.01) } },
+      { type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { ...usage(500, 100, 0.125), cost: "bogus" } } },
+      { type: "agent_settled", aborted: false },
+    ];
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' ${events.map(event => `'${JSON.stringify(event)}'`).join(" ")}\n`);
+    chmodSync(fakePi, 0o755);
+    const path = join(dir, "board.sqlite");
+    let board = new Board(path);
+    const card = board.createCard({ title: "Usage", body: "", repo });
+    board.setStatus(card.id, "ready");
+    // Simulate an attempt recorded before usage tracking existed.
+    const legacy = board.claim(card.id);
+    board.finish(legacy.id, "failed", "old");
+    board.close();
+    const db = new DatabaseSync(path);
+    db.prepare("UPDATE runs SET inputTokens=NULL, outputTokens=NULL, cacheReadTokens=NULL, cacheWriteTokens=NULL, cost=NULL WHERE id=?").run(legacy.id);
+    db.close();
+    board = new Board(path);
+    const worker = new Worker(board, join(dir, "data"), fakePi);
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(run.id)?.status === "review");
+    const recorded = board.getRun(run.id)!;
+    assert.deepEqual([recorded.inputTokens, recorded.outputTokens, recorded.cacheReadTokens, recorded.cacheWriteTokens], [1505, 300, 300, 30]);
+    assert.ok(Math.abs(recorded.cost! - 0.26) < 1e-9, "user messages and malformed cost are ignored");
+    assert.equal(board.getRun(legacy.id)?.cost, null, "older attempts are not reported as free");
+    const total = board.getCard(card.id)!;
+    assert.ok(Math.abs(total.cost! - 0.26) < 1e-9);
+    assert.equal(total.inputTokens, 1505);
+    assert.equal(total.usageIncomplete, 1, "card total flags the unrecorded older attempt");
+    assert.ok(Math.abs(board.listBoards()[0].cost24h - 0.26) < 1e-9);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

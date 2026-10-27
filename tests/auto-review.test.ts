@@ -11,7 +11,8 @@ import { AutoReview, reviewerVerdict } from "../server/auto-review.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 const settle = (verdict: string) => [
-  JSON.stringify({ type: "message_end", message: { role: "assistant", provider: "openai-codex", model: "gpt-5.5", stopReason: "stop", content: [{ type: "text", text: verdict }] } }),
+  JSON.stringify({ type: "message_end", message: { role: "assistant", provider: "openai-codex", model: "gpt-5.5", stopReason: "stop", content: [{ type: "text", text: verdict }],
+    usage: { input: 4000, output: 50, cacheRead: 0, cacheWrite: 0, totalTokens: 4050, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.03 } } } }),
   JSON.stringify({ type: "agent_settled", aborted: false }), "",
 ].join("\n");
 function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and correct"}') {
@@ -63,6 +64,9 @@ test("new opt-in reviews run a separate tool-free reviewer and verify before loc
     assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "merged");
     assert.equal(item.board.getAutoReviewJob(current.run.id)?.agent, "openai-codex/gpt-5.5");
     assert.equal(item.board.getCard(current.card.id)?.reviewAgent, "openai-codex/gpt-5.5");
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.cost, 0.03, "agent review spend is recorded");
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.inputTokens, 4000);
+    assert.equal(item.board.getCard(current.card.id)?.cost, 0.03, "card total includes its agent review");
     assert.equal(item.board.autoReviewMergesToday(item.repo), 1);
     assert.match(readFileSync(join(item.repo, "README.md"), "utf8"), new RegExp(current.card.id));
     assert.equal(item.board.getCard(old.card.id)?.status, "review");

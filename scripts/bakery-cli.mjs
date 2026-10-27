@@ -12,16 +12,18 @@ Usage: bakery-cli boards [--json]
        bakery-cli start CARD_ID... [--board ID|PATH] --yes
        bakery-cli runs CARD_ID [--board ID|PATH] [--json]
        bakery-cli conflicts [--board ID|PATH] [--json]
-       bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--board ID|PATH] [--yes]
+       bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--budget USD|off] [--board ID|PATH] [--yes]
 
 Set BAKERY_URL (or BAKERY_PORT) to use a different local server. --json prints full API data.
+runs lists each attempt's tokens and cost ("—" when an older attempt has no record) and the card total,
+including agent reviews; runs --json prints { cardId, total, runs, reviews }.
 start runs Pi on Ready, Review or Failed cards (a retry reuses the card's worktree and Pi session).
 --yes is required before start, enabling or resetting pickup, or moving a card to Ready on a pickup-enabled
 board; each can start paid Pi runs. No command approves a merge.`;
 
 function options(argv) {
   const result = { positionals: [], json: false, yes: false };
-  const values = new Set(["board", "title", "body", "concurrency", "limit"]);
+  const values = new Set(["board", "title", "body", "concurrency", "limit", "budget"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
@@ -75,6 +77,17 @@ function cardId(value) {
   return value;
 }
 
+const usageKeys = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "cost"];
+// Older attempts have null usage: they are unknown, not free.
+function usageTotal(items) {
+  const recorded = items.filter(item => typeof item.cost === "number");
+  const total = Object.fromEntries(usageKeys.map(key => [key, recorded.length ? recorded.reduce((sum, item) => sum + (item[key] ?? 0), 0) : null]));
+  return { ...total, incomplete: recorded.length < items.length };
+}
+const money = cost => typeof cost !== "number" ? "—" : cost > 0 && cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
+const usageText = item => typeof item.cost !== "number" ? "—"
+  : `${money(item.cost)} (${item.inputTokens ?? 0} in, ${item.outputTokens ?? 0} out, ${item.cacheReadTokens ?? 0} cache read, ${item.cacheWriteTokens ?? 0} cache write)`;
+
 function print(data, json, lines) {
   if (json) console.log(JSON.stringify(data, null, 2));
   else for (const line of lines) console.log(line);
@@ -88,7 +101,7 @@ async function main() {
   if (!(command in expected) && command !== "pickup" && command !== "start") throw new Error(`Unknown command: ${command}\n${usage}`);
   if (command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "start" ? !args.length : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command !== "create" && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create");
-  if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined)) throw new Error("--concurrency and --limit are only valid with pickup");
+  if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
   if (opts.yes && !(command === "ready" || command === "pickup" || command === "start")) throw new Error("--yes is only valid with ready, start or pickup");
   if (command === "start") {
     args.forEach(cardId);
@@ -124,16 +137,23 @@ async function main() {
     print(results, opts.json, results.map(item => item.run ? `${item.cardId}\tattempt #${item.run.attempt}\t${item.run.status}` : `${item.cardId}\terror\t${item.error}`));
     if (results.some(item => item.error)) process.exitCode = 1;
   } else if (command === "runs") {
-    const runs = await request(origin, `${path}/cards/${cardId(args[0])}/runs`);
-    print(runs, opts.json, runs.map(run => `${run.id}\t${run.status}\t${run.startedBy ?? "manual"}\t${run.startedAt ?? ""}\t${run.agent || "-"}${run.error ? `\t${run.error}` : ""}`));
+    const id = cardId(args[0]);
+    const runs = await request(origin, `${path}/cards/${id}/runs`);
+    const reviews = await request(origin, `${path}/cards/${id}/auto-review`);
+    const total = usageTotal([...runs, ...reviews]);
+    print({ cardId: id, total, runs, reviews }, opts.json, [
+      ...runs.map(run => `${run.id}\t${run.status}\t${run.startedBy ?? "manual"}\t${run.startedAt ?? ""}\t${run.agent || "-"}\t${usageText(run)}${run.error ? `\t${run.error}` : ""}`),
+      ...reviews.map(job => `review ${job.runId}\t${job.state}\t${job.agent || "-"}\t${usageText(job)}`),
+      `total\t${total.cost === null ? "—" : usageText(total)}${total.incomplete && total.cost !== null ? "\t(older attempts not recorded)" : ""}`,
+    ]);
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));
   } else if (command === "pickup") {
-    const summary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
+    const summary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
     if (!args.length) { print(board, opts.json, [summary(board)]); return; }
     if (args[0] === "reset") {
-      if (opts.concurrency !== undefined || opts.limit !== undefined) throw new Error("pickup reset does not accept --concurrency or --limit");
+      if (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined) throw new Error("pickup reset does not accept --concurrency, --limit or --budget");
       if (!opts.yes) throw new Error("Resetting the limit can start paid Pi runs immediately. Repeat with --yes to confirm.");
       const updated = await request(origin, `${path}/auto-pickup/reset-limit`, "POST");
       print(updated, opts.json, [summary(updated)]);
@@ -146,7 +166,13 @@ async function main() {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 99) throw new Error("Limit must be an integer from 1 to 99");
     if (args[0] === "on" && board.autoPickupEnabled && limit > board.pickupDailyLimit && !opts.yes)
       throw new Error("Raising the limit can start paid Pi runs immediately. Repeat with --yes to confirm.");
-    const updated = await request(origin, `${path}/settings`, "PATCH", { autoPickupEnabled: args[0] === "on", pickupConcurrency: concurrency, pickupDailyLimit: limit });
+    const input = { autoPickupEnabled: args[0] === "on", pickupConcurrency: concurrency, pickupDailyLimit: limit };
+    if (opts.budget !== undefined) {
+      const budget = opts.budget === "off" ? null : Number(opts.budget.replace(/^\$/, ""));
+      if (budget !== null && (!Number.isFinite(budget) || budget < 0.01 || budget > 10000)) throw new Error("Budget must be off or a USD amount from 0.01 to 10000");
+      input.pickupCostBudget = budget;
+    }
+    const updated = await request(origin, `${path}/settings`, "PATCH", input);
     print(updated, opts.json, [summary(updated)]);
   }
 }

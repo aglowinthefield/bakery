@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { Check, Copy, Maximize2, Minimize2, Square } from "lucide-react";
 import { api } from "./api.js";
-import { AgentBadge, AttemptList } from "./attempts.js";
+import { AgentBadge, AttemptList, CostBadge } from "./attempts.js";
 import { Markdown } from "./markdown-view.js";
 import { Button } from "./components/ui/button";
 import {
@@ -331,7 +331,8 @@ export function CardDetails({
               phase="Review"
               agent={autoJobs[0].agent}
               pending={autoJobs[0].state === "running"}
-            />
+            />{" "}
+            <CostBadge usage={autoJobs[0]} label="Review cost" />
             {autoJobs[0].details && (
               <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
                 {autoJobs[0].details}

@@ -75,6 +75,7 @@ import {
   type ThinkingLevel,
 } from "../server/agent-models.js";
 import { AgentBadge, reworkSummary } from "./attempts.js";
+import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
@@ -458,6 +459,7 @@ function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [verificationDraft, setVerificationDraft] = useState("");
   const [remoteUrlDraft, setRemoteUrlDraft] = useState("");
+  const [budgetDraft, setBudgetDraft] = useState("");
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Card | null>(null);
   const [error, setError] = useState("");
@@ -560,6 +562,10 @@ function App() {
   }, [boardId, refreshKey, settings?.notifyOnReview]);
   const currentBoard = boards.find((item) => item.id === boardId);
   const card = cards.find((item) => item.id === selected);
+  const savedBudget = currentBoard?.pickupCostBudget ?? null;
+  useEffect(() => {
+    setBudgetDraft(savedBudget === null ? "" : String(savedBudget));
+  }, [boardId, savedBudget]);
   const saveSettings = (patch: Partial<BakerySettings>) => {
     if (!settings) return;
     const previous = settings;
@@ -617,6 +623,44 @@ function App() {
         `/boards/${currentBoard.id}/auto-pickup/reset-limit`,
         { method: "POST" },
       );
+      setBoards((previous) =>
+        previous.map((item) => (item.id === updated.id ? updated : item)),
+      );
+    });
+  };
+  // The budget is optional (blank means off). Raising or clearing a reached budget can start runs at once.
+  const saveCostBudget = (event: FormEvent) => {
+    event.preventDefault();
+    if (!currentBoard) return;
+    const text = budgetDraft.trim().replace(/^\$/, "");
+    const budget = text ? Number(text) : null;
+    if (
+      budget !== null &&
+      (!Number.isFinite(budget) || budget < 0.01 || budget > 10000)
+    ) {
+      setError(
+        "Daily cost budget must be blank (off) or between $0.01 and $10,000",
+      );
+      return;
+    }
+    if (
+      currentBoard.autoPickupEnabled &&
+      currentBoard.autoPickupBudgetReached &&
+      (budget === null || budget > (currentBoard.cost24h ?? 0)) &&
+      !window.confirm(
+        `${budget === null ? "Turn off" : "Raise"} the daily cost budget for ${currentBoard.repo}? Ready cards may start immediately and spend model tokens.`,
+      )
+    )
+      return;
+    void action(async () => {
+      const updated = await api<Board>(`/boards/${currentBoard.id}/settings`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          autoPickupEnabled: currentBoard.autoPickupEnabled,
+          pickupConcurrency: currentBoard.pickupConcurrency,
+          pickupCostBudget: budget,
+        }),
+      });
       setBoards((previous) =>
         previous.map((item) => (item.id === updated.id ? updated : item)),
       );
@@ -892,6 +936,18 @@ function App() {
               Auto pickup · {currentBoard.pickupConcurrency} at a time
             </span>
           )}
+          {currentBoard && (
+            <span
+              title="Model cost of attempts and agent reviews running or finished in the last 24 hours"
+              className={
+                currentBoard.autoPickupBudgetReached ? "text-amber-600" : ""
+              }
+            >
+              Last 24h: {formatCost(currentBoard.cost24h ?? 0)}
+              {typeof currentBoard.pickupCostBudget === "number" &&
+                ` of ${formatCost(currentBoard.pickupCostBudget)} budget`}
+            </span>
+          )}
           <span className="hidden items-center gap-1.5 lg:flex">
             <CircleHelp size={13} /> Starting a run may use paid model tokens
           </span>
@@ -917,6 +973,22 @@ function App() {
               >
                 Reset start limit
               </button>
+            </div>
+          )}
+        {currentBoard?.autoPickupEnabled &&
+          currentBoard.autoPickupBudgetReached && (
+            <div
+              role="alert"
+              className="mx-6 mt-5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm lg:mx-10"
+            >
+              <strong>
+                Auto pickup waiting: daily cost budget reached (
+                {formatCost(currentBoard.cost24h ?? 0)} of{" "}
+                {formatCost(currentBoard.pickupCostBudget)} in the last 24
+                hours).
+              </strong>{" "}
+              Pickup resumes as older spend leaves the 24-hour window, or raise
+              the budget in Settings. Manual starts still work.
             </div>
           )}
         {currentBoard?.autoPickupError && (
@@ -1357,10 +1429,10 @@ function App() {
             <p className="mt-2 text-xs text-muted-foreground">
               Automatically start Ready cards in creation order, up to the
               concurrency limit including manual runs. The configurable rolling
-              start limit protects against unbounded paid runs; it is not a
-              token budget. A failed automatic run or interrupted run pauses
-              pickup. Starting Pi may spend model tokens. Turn off pickup to
-              stop new starts; existing runs continue.
+              start limit and the optional daily cost budget protect against
+              unbounded paid runs. A failed automatic run or interrupted run
+              pauses pickup. Starting Pi may spend model tokens. Turn off pickup
+              to stop new starts; existing runs continue.
             </p>
             <label className="mt-4 flex items-center gap-2 text-xs">
               Concurrent runs{" "}
@@ -1450,6 +1522,45 @@ function App() {
               {currentBoard?.pickupDailyLimit ?? 6} starts in the rolling day.
               {currentBoard?.autoPickupNextAt &&
                 ` Next slot around ${date(currentBoard.autoPickupNextAt)}.`}
+            </p>
+            <form
+              className="mt-3 flex flex-wrap items-center gap-2 text-xs"
+              onSubmit={saveCostBudget}
+            >
+              <label className="flex items-center gap-2">
+                Daily cost budget (USD){" "}
+                <input
+                  aria-label="Auto pickup daily cost budget"
+                  inputMode="decimal"
+                  placeholder="Off"
+                  value={budgetDraft}
+                  disabled={!currentBoard || busy}
+                  onChange={(event) => setBudgetDraft(event.target.value)}
+                  className="w-24 rounded-md border border-border bg-background px-2 py-1"
+                />
+              </label>
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                disabled={
+                  !currentBoard ||
+                  busy ||
+                  budgetDraft.trim() ===
+                    (savedBudget === null ? "" : String(savedBudget))
+                }
+              >
+                Save budget
+              </Button>
+            </form>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {formatCost(currentBoard?.cost24h ?? 0)} spent in the last 24
+              hours
+              {typeof currentBoard?.pickupCostBudget === "number"
+                ? ` of ${formatCost(currentBoard.pickupCostBudget)}.`
+                : "."}{" "}
+              Leave blank for no budget. At the budget, automatic pickup waits;
+              running work and manual starts continue.
             </p>
             {currentBoard?.autoPickupEnabled &&
               currentBoard.autoPickupStarts >=

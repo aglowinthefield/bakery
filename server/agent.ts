@@ -29,3 +29,33 @@ export function agentsInStream(stream: string): string {
   }
   return agents;
 }
+
+// Pi reports token usage and its provider-priced cost on each assistant message_end. Bakery sums them per
+// attempt. Missing or malformed fields count as 0 so one odd event never poisons the attempt total.
+export type Usage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number };
+const amount = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+
+export function messageUsage(message: unknown): Usage | null {
+  if (!message || typeof message !== "object") return null;
+  const { role, usage } = message as { role?: unknown; usage?: unknown };
+  if (role !== "assistant" || !usage || typeof usage !== "object") return null;
+  const value = usage as { input?: unknown; output?: unknown; cacheRead?: unknown; cacheWrite?: unknown; cost?: unknown };
+  const cost = value.cost && typeof value.cost === "object" ? (value.cost as { total?: unknown }).total : undefined;
+  return {
+    inputTokens: Math.round(amount(value.input)), outputTokens: Math.round(amount(value.output)),
+    cacheReadTokens: Math.round(amount(value.cacheRead)), cacheWriteTokens: Math.round(amount(value.cacheWrite)), cost: amount(cost),
+  };
+}
+
+export function usageInStream(stream: string): Usage {
+  const total: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0 };
+  for (const line of stream.split("\n")) {
+    try {
+      const event = JSON.parse(line) as { type?: string; message?: unknown };
+      if (event.type !== "message_end") continue;
+      const usage = messageUsage(event.message);
+      if (usage) for (const key of Object.keys(total) as (keyof Usage)[]) total[key] += usage[key];
+    } catch { /* The verdict parser reports malformed streams. */ }
+  }
+  return total;
+}
