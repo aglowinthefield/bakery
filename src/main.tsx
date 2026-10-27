@@ -1252,11 +1252,11 @@ export function App() {
                 </button>
               )}
             </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {currentBoard
-                ? currentBoard.repo
-                : "Add a Git repository to create its board."}
-            </p>
+            {!currentBoard && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Add a Git repository to create its board.
+              </p>
+            )}
             {currentBoard?.remoteUrl && (
               <RemoteLink url={currentBoard.remoteUrl} />
             )}
