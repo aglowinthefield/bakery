@@ -1,4 +1,16 @@
 @import "tailwindcss";
+/* Density scales Tailwind's spacing unit and type scale together. Every p-*, gap-*, size-* and text-* utility reads these. */
+:root { --density-space: 1; --density-text: 1; }
+:root[data-density="compact"] { --density-space: 0.8; --density-text: 0.93; }
+:root[data-density="cozy"] { --density-space: 1.12; --density-text: 1.05; }
+:root {
+  --spacing: calc(0.25rem * var(--density-space));
+  --text-xs: calc(0.75rem * var(--density-text));
+  --text-sm: calc(0.875rem * var(--density-text));
+  --text-base: calc(1rem * var(--density-text));
+  --text-lg: calc(1.125rem * var(--density-text));
+  --text-xl: calc(1.25rem * var(--density-text));
+}
 :root {
   color-scheme: dark;
   --background: #1a1d21;

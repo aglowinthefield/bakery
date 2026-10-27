@@ -143,7 +143,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(56, 104, 74)");
     await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByRole("radio", { name: "Default" }).check();
+    await page.getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();

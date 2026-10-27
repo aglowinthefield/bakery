@@ -43,7 +43,7 @@ test("Settings switches between the preserved default and Compline after reload"
     await page.goto(server.resolvedUrls!.local[0]);
     await page.getByRole("button", { name: "Settings" }).click();
     const dialog = page.getByRole("dialog");
-    assert.equal(await dialog.getByRole("radio", { name: "Default" }).isChecked(), true);
+    assert.equal(await dialog.getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).isChecked(), true);
     const background = await page.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor);
     const defaultSidebar = await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor);
     await dialog.getByRole("radio", { name: "Compline" }).check();
@@ -89,7 +89,7 @@ test("Settings switches between the preserved default and Compline after reload"
     await page.getByRole("button", { name: "Settings" }).click();
     assert.equal(await page.getByRole("dialog").getByRole("radio", { name: "Compline" }).isChecked(), true);
     assert.equal(await page.locator("html").getAttribute("data-theme"), "compline");
-    await page.getByRole("dialog").getByRole("radio", { name: "Default" }).check();
+    await page.getByRole("dialog").getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default");
     assert.equal(await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor), defaultSidebar);
     await page.close();
