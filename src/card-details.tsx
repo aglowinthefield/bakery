@@ -599,7 +599,7 @@ export function CardDetails({
             >
               {integration === "github-pr"
                 ? "Approve and open PR"
-                : "Approve and merge"}
+                : "Approve and merge into local main"}
             </Button>
           )}
           {card?.status === "review" && !changesRequested && (

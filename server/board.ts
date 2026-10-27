@@ -41,7 +41,7 @@ export function parsePriority(value: unknown): CardPriority {
 }
 /** The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup. */
 export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null };
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean } & UsageFields & CardPullRequest;
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; originMain?: "pushed" | "local" } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
 export type CardRef = { id: string; title: string; status: CardStatus };
 // A dependency is finished once it is Done or archived. Until then the dependent card is blocked.
@@ -473,6 +473,13 @@ export class Board {
   listCards(repo?: string): Card[] { return ((repo === undefined
     ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all()
     : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all(repo)) as CardRow[]).map(toCard); }
+  /** The commit that put each integrated card on local main: Bakery's merge, or the merge found by reconciliation. */
+  listMergeCommits(repo: string): Map<string, string> {
+    const rows = this.db.prepare(`SELECT cards.id AS cardId, COALESCE(a.preparedHead, e.mergeCommit) AS mergeCommit FROM cards
+      LEFT JOIN approvals a ON a.cardId=cards.id AND a.merged=1 LEFT JOIN external_integrations e ON e.cardId=cards.id
+      WHERE cards.repo=? AND COALESCE(a.preparedHead, e.mergeCommit) IS NOT NULL`).all(repo) as { cardId: string; mergeCommit: string }[];
+    return new Map(rows.map(row => [row.cardId, row.mergeCommit]));
+  }
   getCard(id: string): Card | undefined {
     const row = this.db.prepare(`${cardQuery} WHERE cards.id=? GROUP BY cards.id`).get(id) as CardRow | undefined;
     return row && toCard(row);
@@ -555,7 +562,7 @@ export class Board {
     if (!card) throw new Error("Card not found");
     if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
     if (card.status === "archived") throw new Error("Restore this archived card to Done first");
-    if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge");
+    if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge into local main");
     if (status === "triage" && (card.status !== "ready" || this.listRuns(id).length)) throw new Error("Only unstarted Ready cards can move to Triage");
     if (status === "done" && this.listRuns(id).length) throw new Error("Cards with run work cannot be marked Done without approval and integration");
     // Recover cards closed by the old status-only action without launching another Pi run.
@@ -724,7 +731,7 @@ export class Board {
       if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
       // Manual and automatic starts both claim here, so neither can skip the dependency gate.
       if (waitsOnDependencies(card)) throw this.blockedError(cardId);
-      if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry Approve and merge");
+      if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry Approve and merge into local main");
       if (this.db.prepare("SELECT 1 FROM auto_review_jobs WHERE cardId=? AND state='running' LIMIT 1").get(cardId))
         throw new Error("Agent review is in progress; wait for its result before running Pi again");
       const repoBoard = this.listBoards().find(item => item.repo === card.repo);

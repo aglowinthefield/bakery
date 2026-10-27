@@ -121,6 +121,11 @@ export type Card = {
   prState?: "OPEN" | "CLOSED" | "MERGED" | null;
   prChecks?: string | null;
   prError?: string | null;
+  /**
+   * Local boards with a GitHub remote: whether this Done card's merge commit is on origin/main,
+   * as of the last fetch. "local" means merged into local main but not pushed.
+   */
+  originMain?: "pushed" | "local";
 } & UsageFields;
 const finished = (status: Status) => status === "done" || status === "archived";
 /**

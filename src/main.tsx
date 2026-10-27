@@ -1002,6 +1002,16 @@ function App() {
             {currentBoard?.remoteUrl && (
               <RemoteLink url={currentBoard.remoteUrl} />
             )}
+            {currentBoard && (
+              <p
+                data-testid="integration-mode"
+                className="mt-1 text-xs text-muted-foreground"
+              >
+                {currentBoard.integration === "github-pr"
+                  ? "Integration: GitHub pull requests. Approve opens a PR; Done once it merges"
+                  : "Integration: local main. Approve merges into local main; Bakery does not push"}
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
@@ -1400,6 +1410,12 @@ function App() {
                                   {item.prNumber && (
                                     <PullRequestBadge card={item} />
                                   )}
+                                  {item.status === "done" &&
+                                    item.originMain && (
+                                      <OriginMainBadge
+                                        state={item.originMain}
+                                      />
+                                    )}
                                   {item.attempts > 1 && (
                                     <span
                                       data-testid="attempt-count"
@@ -2359,6 +2375,25 @@ function PullRequestBadge({ card }: { card: Card }) {
       {card.prChecks && card.prState === "OPEN"
         ? ` \u00b7 ${card.prChecks}`
         : ""}
+    </span>
+  );
+}
+function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
+  return (
+    <span
+      data-testid="origin-main-badge"
+      title={
+        state === "pushed"
+          ? "The merge commit is on origin/main, as of the last fetch"
+          : "Merged into local main only; origin/main did not have it at the last fetch. Push main to publish it"
+      }
+      className={`rounded border px-2 py-0.5 text-[10px] font-medium ${
+        state === "pushed"
+          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
+          : "border-amber-500/40 bg-amber-500/10 text-amber-500"
+      }`}
+    >
+      {state === "pushed" ? "On origin/main" : "Merged locally, not pushed"}
     </span>
   );
 }
