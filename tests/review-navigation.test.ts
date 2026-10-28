@@ -47,6 +47,7 @@ test("changed files open their own patches and focus the heading without changin
     await page.getByRole("button", { name: /Review card/ }).click();
     const list = page.getByRole("list").filter({ has: page.getByRole("button", { name: files[1], exact: true }) });
     const patchButton = (index: number) => page.locator(`button[aria-controls="review-file-${index}"]`);
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.getByText("Changed files (3)").waitFor();
     for (const index of [0, 1, 2]) assert.equal(await patchButton(index).getAttribute("aria-expanded"), "true");
     await list.getByRole("button", { name: files[1] }).focus();
@@ -109,6 +110,7 @@ test("the gutter + button comments on the hovered diff row and the layout choice
   try {
     await page.goto(url);
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.getByRole("button", { name: /src\/app\.ts.*1 added, 1 removed/ }).waitFor();
     const added = page.locator('[data-line][data-line-type="change-addition"]');
     await added.hover();
@@ -123,6 +125,7 @@ test("the gutter + button comments on the hovered diff row and the layout choice
     await page.locator("[data-additions]").waitFor();
     // The reload reopens the card this tab had open.
     await page.reload();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.locator("[data-additions]").waitFor();
     assert.equal(await page.getByRole("radio", { name: "split" }).getAttribute("aria-checked"), "true");
   } finally { await page.close(); }
@@ -161,6 +164,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
   try {
     await page.goto(url);
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.locator('[data-line-type="change-addition"]').first().waitFor();
     const picker = page.getByRole("combobox", { name: "Diff theme" });
     assert.equal(await picker.inputValue(), "bakery");
@@ -171,6 +175,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
     assert.notEqual(bakery, "rgb(0, 43, 54)");
     await page.reload();
     // The reload reopens the card this tab had open.
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.locator('[data-line-type="change-addition"]').first().waitFor();
     assert.equal(await page.getByRole("combobox", { name: "Diff theme" }).inputValue(), "solarized");
     await solarized();
@@ -292,6 +297,7 @@ test("the side panel switches cards without leaking the previous card's review o
   try {
     await page.goto(url);
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.getByText("Changed files (1)").waitFor();
     await page.getByRole("tab", { name: /^Attempts/ }).click();
     await page.getByText("Old output").waitFor();
@@ -300,6 +306,7 @@ test("the side panel switches cards without leaking the previous card's review o
     assert.equal(await page.getByText("Old output").count(), 0);
     assert.equal(await page.getByRole("heading", { name: "Review diff" }).count(), 0);
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.getByText("Changed files (1)").waitFor();
     await page.getByRole("heading", { name: "Review card" }).click();
     assert.equal(await page.getByRole("dialog").count(), 1, "clicking inside keeps the rail open");
