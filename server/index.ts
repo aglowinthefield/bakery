@@ -98,11 +98,11 @@ function repoRoot(value: unknown) {
 const server = createServer(async (req, res) => {
   try {
     const host = req.headers.host?.split(":")[0];
-    if (host !== "127.0.0.1" && host !== "localhost") { send(res, 403, { error: "Local access only" }); return; }
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "bakery.localhost") { send(res, 403, { error: "Local access only" }); return; }
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (req.method !== "GET") {
       const origin = req.headers.origin;
-      if (origin && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
+      if (origin && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
     if (path === "/api/status" && req.method === "GET") { send(res, 200, { draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0 }); return; }
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
