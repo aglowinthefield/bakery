@@ -1382,6 +1382,10 @@ function RunReport({
 }
 
 /** Each attempt's agent review and the changes a person requested, newest attempt first. */
+function requestedChanges(job: AutoReviewJob): { path: string; line?: number; comment: string }[] {
+  try { return job.changes ? JSON.parse(job.changes) : []; } catch { return []; }
+}
+
 function ReviewHistory({
   entries,
 }: {
@@ -1410,7 +1414,9 @@ function ReviewHistory({
                     ? "merged locally"
                     : job.requeued
                       ? "interrupted by a restart, queued again"
-                      : "needs human review"}
+                      : requestedChanges(job).length
+                        ? "sent back to the implementer"
+                        : "needs human review"}
               </strong>{" "}
               <AgentBadge
                 phase="Review"
@@ -1425,6 +1431,19 @@ function ReviewHistory({
               )}
             </div>
           )}
+          {job &&
+            requestedChanges(job).map((change, index) => (
+              <p
+                key={index}
+                className="mt-2 whitespace-pre-wrap text-muted-foreground"
+              >
+                <span className="font-medium text-foreground/80">
+                  Requested change on {change.path}
+                  {change.line ? `:${change.line}` : ""}:
+                </span>{" "}
+                {change.comment}
+              </p>
+            ))}
           {requested.map((comment) => (
             <p
               key={comment.id}
