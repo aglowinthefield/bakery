@@ -408,6 +408,8 @@ const server = createServer(async (req, res) => {
     }
     if (path.startsWith("/api/")) { send(res, 404, { error: "Not found" }); return; }
     if (req.method !== "GET") { send(res, 405, { error: "Method not allowed" }); return; }
+    // Dev runs the UI on Vite (5173); a built dist here goes stale and looks like the app. Serve it only on request.
+    if (process.env.BAKERY_SERVE_UI !== "1") { send(res, 404, { error: "This is the Bakery API. Open the UI on http://127.0.0.1:5173, or set BAKERY_SERVE_UI=1 to serve the built dist here." }); return; }
     const dist = resolve("dist");
     const file = resolve(dist, `.${path === "/" ? "/index.html" : path}`);
     const target = file.startsWith(dist + sep) && existsSync(file) ? file : join(dist, "index.html");
