@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bakery is restarting</title>
+<style>
+  :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }
+  main { width: min(26rem, 90vw); }
+  h1 { font-size: 1.1rem; margin: 0 0 .5rem; }
+  p { margin: .25rem 0; font-size: .9rem; opacity: .75; }
+  .bar { height: 4px; margin: 1rem 0; border-radius: 2px; background: color-mix(in srgb, CanvasText 15%, transparent); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: CanvasText; transition: width .5s linear; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Bakery is restarting</h1>
+  <div class="bar"><i id="fill"></i></div>
+  <p id="detail">Checking status…</p>
+  <p id="timing"></p>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const secs = ms => Math.max(0, Math.round(ms / 1000)) + "s";
+  async function tick() {
+    try {
+      const s = await (await fetch("/__bakery/state", { cache: "no-store" })).json();
+      if (s.phase === "up") { location.reload(); return; }
+      const skew = Date.now() - s.now; // server clock vs this one
+      const now = Date.now() - skew;
+      if (s.phase === "crashed") {
+        $("title").textContent = "Bakery stopped unexpectedly";
+        $("detail").textContent = "Retrying in " + secs(s.retryAt - now) + ", or as soon as a file changes.";
+        $("timing").textContent = "";
+        $("fill").style.width = "0";
+      } else if (s.phase === "draining") {
+        $("title").textContent = "Update ready";
+        $("detail").textContent = s.activeRuns > 0 ? "Waiting for " + s.activeRuns + " active run" + (s.activeRuns === 1 ? "" : "s") + " to finish." : "Restarting…";
+        $("timing").textContent = "Waiting " + secs(now - s.changeAt);
+      } else {
+        const since = now - (s.phase === "starting" ? s.startedAt : s.changeAt);
+        $("title").textContent = "Bakery is restarting";
+        $("detail").textContent = "Starting the server. This page reloads when it is ready.";
+        $("timing").textContent = "Elapsed " + secs(since) + " · usually about " + secs(s.bootMs);
+        $("fill").style.width = Math.min(95, (since / s.bootMs) * 100) + "%";
+      }
+    } catch { $("detail").textContent = "Waiting for the dev supervisor…"; }
+  }
+  tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>
