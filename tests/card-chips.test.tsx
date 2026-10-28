@@ -16,3 +16,12 @@ test("a card id in markdown becomes a short chip that opens the card", () => {
   const plain = renderToStaticMarkup(createElement(Markdown, { source }));
   assert.match(plain, /<code[^>]*>38bdc7df<\/code>/);
 });
+
+import { latestNarration } from "../src/card-details.js";
+
+test("the live status shows the agent's latest sentence, trimmed", () => {
+  assert.equal(latestNarration(null), "");
+  assert.equal(latestNarration("Checked the schema.\n\nNext I will run the **coverage** query. It may be slow."), "It may be slow.");
+  assert.equal(latestNarration("- Reading `a.ts` now"), "Reading a.ts now");
+  assert.ok(latestNarration("x".repeat(400)).length <= 180);
+});
