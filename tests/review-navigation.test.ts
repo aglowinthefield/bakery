@@ -38,6 +38,7 @@ test("changed files open their own patches and focus the heading without changin
       "/api/boards/board/cards/card/auto-review": [],
       "/api/boards/board/cards/card/review": { fingerprint, files: files.map((file, index) => ({ path: file, patch: `@@ -0,0 +1 @@\n+${["first", "second", "third"][index]}\n` })) },
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
@@ -101,6 +102,7 @@ test("the gutter + button comments on the hovered diff row and the layout choice
       "/api/boards/board/cards/card/auto-review": [],
       "/api/boards/board/cards/card/review": { fingerprint, files: [{ path: "src/app.ts", patch }] },
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
@@ -146,6 +148,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
       "/api/boards/board/cards/card/auto-review": [],
       "/api/boards/board/cards/card/review": { fingerprint, files: [{ path: "src/app.ts", patch }] },
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
@@ -195,6 +198,7 @@ test("Run again is unavailable while agent review is running and returns when it
       "/api/boards/board/cards/card/auto-review": [{ cardId: "card", runId: "run", state: reviewState, details: "", fingerprint: "", startedAt: "2026-01-01", finishedAt: null }],
       "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [] },
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
@@ -202,6 +206,7 @@ test("Run again is unavailable while agent review is running and returns when it
     await page.goto(url);
     await page.getByRole("button", { name: /Review card/ }).click();
     const runAgain = page.getByRole("button", { name: "Run again" });
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.getByText("Agent review: checking").waitFor();
     assert.equal(await runAgain.isDisabled(), true);
     reviewState = "needs_human";
@@ -238,6 +243,7 @@ test("a request failure remains visible after closing card details", async () =>
       "/api/boards/board/cards/ready/comments": [],
       "/api/boards/board/cards/ready/auto-review": [],
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
@@ -279,6 +285,7 @@ test("the side panel switches cards without leaking the previous card's review o
       "/api/boards/board/cards/ready/comments": [],
       "/api/boards/board/cards/ready/auto-review": [],
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
@@ -286,6 +293,7 @@ test("the side panel switches cards without leaking the previous card's review o
     await page.goto(url);
     await page.getByRole("button", { name: /Review card/ }).click();
     await page.getByText("Changed files (1)").waitFor();
+    await page.getByRole("tab", { name: /^Attempts/ }).click();
     await page.getByText("Old output").waitFor();
     await page.getByRole("button", { name: /Ready card/ }).click();
     await page.getByRole("heading", { name: "Ready card" }).waitFor();

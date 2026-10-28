@@ -35,6 +35,7 @@ test("lanes sort by priority, non-Normal cards show a badge, and details can cha
         await route.fulfill({ json: { ...cards[1], ...input } });
         return;
       }
+      if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });

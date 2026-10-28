@@ -36,6 +36,7 @@ async function openAttempts() {
   });
   await page.goto(`http://127.0.0.1:${address.port}/`);
   await page.getByRole("button", { name: /Copy a path/ }).click();
+  await page.getByRole("tab", { name: /^Attempts/ }).click();
   await page.getByRole("heading", { name: "Attempts" }).waitFor();
   await page.getByText(failedWorktree, { exact: true }).waitFor();
   return { page, browser, server };

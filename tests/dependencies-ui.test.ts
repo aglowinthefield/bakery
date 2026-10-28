@@ -35,6 +35,7 @@ test("a blocked Ready card shows a waiting badge, and details list, link, add an
         await route.fulfill({ json: cards[0] });
         return;
       }
+      if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });
@@ -48,6 +49,7 @@ test("a blocked Ready card shows a waiting badge, and details list, link, add an
     assert.equal(await ready.getByRole("button", { name: /free card/ }).getByTestId("waiting-badge").count(), 0);
 
     await child.click();
+    await page.getByRole("tab", { name: "Details" }).click();
     const details = page.getByRole("region", { name: "Dependencies" });
     await details.waitFor();
     assert.deepEqual(await details.getByTestId("dependency").evaluateAll(items => items.map(item => item.textContent)), ["parent cardrunningRemove", "merged cardfinishedRemove"]);
@@ -62,6 +64,7 @@ test("a blocked Ready card shows a waiting badge, and details list, link, add an
 
     // Each dependency links to its card; that card names the cards waiting on it.
     await details.getByRole("button", { name: "parent card", exact: true }).click();
+    await page.getByRole("tab", { name: "Details" }).click();
     await page.getByRole("region", { name: "Dependencies" }).getByText("Needed by:").waitFor();
     assert.equal(await page.getByRole("region", { name: "Dependencies" }).getByRole("button", { name: "child card", exact: true }).count(), 1);
   } finally {

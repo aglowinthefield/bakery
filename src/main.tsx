@@ -1591,7 +1591,10 @@ export function App() {
           </div>
         )}
         {boardId && loadedBoard !== boardId && (
-          <p role="status" className="px-6 pt-6 text-sm text-muted-foreground lg:px-10">
+          <p
+            role="status"
+            className="px-6 pt-6 text-sm text-muted-foreground lg:px-10"
+          >
             Loading cards…
           </p>
         )}

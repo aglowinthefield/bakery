@@ -21,6 +21,7 @@ test("clicking the already open repo in the sidebar does nothing", async () => {
         "/api/boards/board/cards": [{ id: "card", title: "Open card", body: "", repo: "/tmp/repo", source: "manual", status: "triage", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }],
         "/api/boards/board/conflicts": [],
       };
+      if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });

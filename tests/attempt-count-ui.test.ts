@@ -27,6 +27,7 @@ test("cards that needed rework show their attempt count in every lane and review
     };
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
+      if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });
@@ -42,6 +43,7 @@ test("cards that needed rework show their attempt count in every lane and review
     await archived.waitFor();
     assert.equal((await archived.getByTestId("attempt-count").textContent())?.trim(), "2 attempts");
     await done.click();
+    await page.getByRole("tab", { name: /^Attempts/ }).click();
     const summary = page.getByTestId("rework-summary");
     await summary.waitFor();
     assert.equal((await summary.textContent())?.trim(), "3 attempts · 2 review rounds (Request changes)");

@@ -49,11 +49,13 @@ test("attempts show their cost, older attempts show a dash, and the card shows i
   const { page, close } = await open({ ...baseBoard, cost24h: 0.5, pickupCostBudget: null, autoPickupBudgetReached: false });
   try {
     await page.getByRole("button", { name: /Count tokens/ }).click();
+    await page.getByRole("tab", { name: /^Attempts/ }).click();
     await page.getByRole("heading", { name: "Attempts" }).waitFor();
     await page.getByRole("button", { name: /Attempt #2/ }).getByText("Cost: $0.42").waitFor();
     await page.getByRole("button", { name: /Attempt #1/ }).getByText("Cost: —").waitFor();
     assert.match(await page.getByRole("button", { name: /Attempt #2/ }).getByText("Cost: $0.42").getAttribute("title") ?? "", /1,200 input, 300 output, 5,000 cache read, 100 cache write/);
     await page.getByText("Card total: $0.50 + older attempts not recorded").waitFor();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.getByText("Review cost: $0.08").waitFor();
   } finally { await close(); }
 });
