@@ -97,6 +97,7 @@ import {
   type Status,
   waitingOn,
 } from "./model.js";
+import { formatRoute, parseRoute } from "./route.js";
 import { themeNames, themes } from "./themes.js";
 import { UpdateNotice } from "./update-notice.js";
 
@@ -476,6 +477,7 @@ function AgentModelFields({
 }
 // The entry module renders App, so edits here hot-swap instead of reloading the page.
 export function App() {
+  const [initialRoute] = useState(() => parseRoute(location.pathname));
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardId, setBoardId] = useState<string | null>(null);
   const [settings, setSettings] = useState<BakerySettings | null>(null);
@@ -514,6 +516,7 @@ export function App() {
   // Today is the landing page until you pick a board; the last choice persists.
   const [view, setView] = useState<"today" | "board" | "pulls" | "stats">(
     () => {
+      if (initialRoute) return initialRoute.view;
       const saved =
         readTab("bakery-view") ?? localStorage.getItem("bakery-view");
       return saved === "board" || saved === "pulls" || saved === "stats"
@@ -712,7 +715,12 @@ export function App() {
   const seenStatuses = useRef(new Map<string, Map<string, CountKey>>());
   const [selected, setSelected] = useState<string | null>(null);
   // The card this tab had open before a reload; reopened once the first poll finds it.
-  const restoreCard = useRef(readTab("bakery-card"));
+  const restoreCard = useRef(
+    initialRoute ? initialRoute.cardId : readTab("bakery-card"),
+  );
+  const routeReady = useRef(false);
+  const firstSync = useRef(true);
+  const [routeTick, setRouteTick] = useState(0);
   useEffect(() => {
     if (selected === null && restoreCard.current) return;
     writeTab("bakery-card", selected);
@@ -752,13 +760,16 @@ export function App() {
       .then((items) => {
         setBoards(items);
         setBoardId(
-          items.find((item) => item.id === readTab("bakery-board"))?.id ??
+          items.find((item) => item.id === initialRoute?.boardId)?.id ??
+            items.find((item) => item.id === readTab("bakery-board"))?.id ??
             items.find(
               (item) => item.id === localStorage.getItem("bakery-board"),
             )?.id ??
             items[0]?.id ??
             null,
         );
+        routeReady.current = true;
+        setRouteTick((n) => n + 1);
       })
       .catch((err) => setError(String(err)));
     void api<BakerySettings>("/settings")
@@ -793,6 +804,37 @@ export function App() {
     writeTab("bakery-view", view);
     if (boardId) writeTab("bakery-board", boardId);
   }, [view, boardId]);
+  // Keep the URL in step with the screen so the browser's back/forward buttons walk between screens.
+  useEffect(() => {
+    if (!routeReady.current) return;
+    if (selected === null && restoreCard.current) return;
+    const path = formatRoute({ view, boardId, cardId: selected });
+    if (path === location.pathname) return;
+    // The first sync only canonicalises the landing URL, so back doesn't return to it.
+    if (firstSync.current) history.replaceState(null, "", path);
+    else history.pushState(null, "", path);
+    firstSync.current = false;
+  }, [view, boardId, selected, routeTick]);
+  useEffect(() => {
+    const onPopState = () => {
+      const route = parseRoute(location.pathname);
+      if (!route) return;
+      setView(route.view);
+      if (route.boardId && route.boardId !== boardId) {
+        if (!boards.some((item) => item.id === route.boardId)) return;
+        setBoardId(route.boardId);
+        setCards([]);
+        setMergeConflicts([]);
+        setSelected(null);
+        restoreCard.current = route.cardId;
+      } else {
+        restoreCard.current = null;
+        setSelected(route.cardId);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [boardId, boards]);
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = () => setRefreshKey((value) => value + 1);
   const openBoard = (id: string) => {
@@ -2920,6 +2962,19 @@ export function App() {
           />
         </DialogContent>
       </Dialog>
+      {!showShortcuts && (
+        <button
+          type="button"
+          onClick={() => setShowShortcuts(true)}
+          className="fixed right-3 bottom-3 z-40 flex items-center gap-1.5 rounded-md border bg-card/60 px-2 py-1 text-xs text-muted-foreground opacity-60 backdrop-blur-md transition-opacity hover:opacity-100"
+        >
+          Press
+          <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+            ?
+          </kbd>
+          for shortcuts
+        </button>
+      )}
       <Dialog open={showShortcuts} onOpenChange={setShowShortcuts}>
         <DialogContent
           className="bg-card/80 backdrop-blur-md"
