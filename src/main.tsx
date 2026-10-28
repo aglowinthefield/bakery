@@ -2920,6 +2920,19 @@ export function App() {
           />
         </DialogContent>
       </Dialog>
+      {!showShortcuts && (
+        <button
+          type="button"
+          onClick={() => setShowShortcuts(true)}
+          className="fixed right-3 bottom-3 z-40 flex items-center gap-1.5 rounded-md border bg-card/60 px-2 py-1 text-xs text-muted-foreground opacity-60 backdrop-blur-md transition-opacity hover:opacity-100"
+        >
+          Press
+          <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+            ?
+          </kbd>
+          for shortcuts
+        </button>
+      )}
       <Dialog open={showShortcuts} onOpenChange={setShowShortcuts}>
         <DialogContent
           className="bg-card/80 backdrop-blur-md"
