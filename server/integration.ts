@@ -175,8 +175,10 @@ export class Integration {
 
   private snapshot(card: Card, includeFiles: boolean) {
     const { repo, worktree, run } = this.location(card);
+    // The fingerprint keys on the merge base, not the branch tip: committing the reviewed work (as opening a PR
+    // does) moves HEAD without changing the tree, and must not mark the loaded diff stale.
     const main = git(repo, "rev-parse", "main"), branch = git(worktree, "rev-parse", "HEAD");
-    const base = includeFiles ? git(worktree, "merge-base", main, branch) : "";
+    const base = git(worktree, "merge-base", main, branch);
     const temp = mkdtempSync(join(tmpdir(), "bakery-review-"));
     try {
       const index = join(temp, "index");
@@ -193,7 +195,7 @@ export class Integration {
       catch { gitCommand(worktree, ["read-tree", "HEAD"], index); }
       gitCommand(worktree, ["add", "-A"], index);
       const tree = gitCommand(worktree, ["write-tree"], index);
-      const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, branch, tree })).digest("hex");
+      const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, base, tree })).digest("hex");
       if (!includeFiles) return { fingerprint, tree, main, files: [] as ReviewDiff["files"] };
       const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
       if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Bakery");
