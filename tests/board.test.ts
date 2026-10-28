@@ -550,3 +550,25 @@ test("a card whose latest report ends with a bakery-plan block is plan-only", ()
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("creating cards from a plan records their ids and refuses a second set", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-plan-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const card = board.createCard({ title: "Plan it", body: "", repo: dir });
+    assert.throws(() => board.createPlanCards(card.id), /no plan report/);
+    board.setStatus(card.id, "ready");
+    const run = board.claim(card.id);
+    const plan = [{ id: "a", title: "First", body: "Do a" }, { id: "b", title: "Second", body: "Do b", dependsOn: ["a"] }];
+    board.recordReport(run.id, `Plan\n\n\`\`\`bakery-plan\n${JSON.stringify(plan)}\n\`\`\``);
+    board.finish(run.id, "review");
+    assert.equal(board.getCard(card.id)!.createdCardIds, null);
+    const done = board.createPlanCards(card.id);
+    assert.equal(done.createdCardIds?.length, 2);
+    const [first, second] = done.createdCardIds!.map(id => board.getCard(id)!);
+    assert.equal(first.title, "First");
+    assert.deepEqual(second.dependsOn, [first.id]);
+    assert.throws(() => board.createPlanCards(card.id), /already created/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
