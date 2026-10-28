@@ -35,6 +35,10 @@
         $("detail").textContent = "Retrying in " + secs(s.retryAt - now) + ", or as soon as a file changes.";
         $("timing").textContent = "";
         $("fill").style.width = "0";
+      } else if (s.phase === "ui") {
+        $("title").textContent = "Bakery is starting the UI";
+        $("detail").textContent = "The server is up; the Vite dev server is still starting. This page reloads when it is ready.";
+        $("timing").textContent = "";
       } else if (s.phase === "draining") {
         $("title").textContent = "Update ready";
         $("detail").textContent = s.activeRuns > 0 ? "Waiting for " + s.activeRuns + " active run" + (s.activeRuns === 1 ? "" : "s") + " to finish." : "Restarting…";
