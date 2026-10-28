@@ -91,6 +91,7 @@ import {
   waitingOn,
 } from "./model.js";
 import { themeNames, themes } from "./themes.js";
+import { UpdateNotice } from "./update-notice.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1047,6 +1048,7 @@ export function App() {
   if (!settings && !error) return null;
   return (
     <div className="min-h-screen lg:flex">
+      <UpdateNotice />
       {sidebarHidden && (
         <button
           aria-label="Show sidebar"

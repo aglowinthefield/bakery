@@ -103,6 +103,7 @@ const server = createServer(async (req, res) => {
       const origin = req.headers.origin;
       if (origin && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
+    if (path === "/api/status" && req.method === "GET") { send(res, 200, { draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0 }); return; }
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
@@ -414,11 +415,14 @@ server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http:/
   for (const item of board.listBoards().filter(item => item.githubMainProtected === null && item.remoteUrl))
     void detectGithubIntegration(board, item.id, github, false).catch(error => console.error(`GitHub main check for ${item.repo}: ${error}`));
 });
+// Set once the dev supervisor asks for a drain. /api/status reports it so the UI can say a restart is coming.
+const draining = { on: false };
 const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 process.on("message", (message: unknown) => {
   if ((message as { type?: unknown } | null)?.type !== "drain") return;
+  draining.on = true;
   autoPickup.shutdown();
   // Agent reviews count too: a restart would kill the reviewer mid-review.
   process.send?.({ type: "draining", activeRuns: worker.activeCount + (autoReview.active ? 1 : 0) });
