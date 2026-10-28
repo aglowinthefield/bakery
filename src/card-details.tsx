@@ -550,6 +550,9 @@ export function CardDetails({
                   <RunReport
                     report={runs[0].report}
                     runId={runs[0].id}
+                    planCreated={boardCards.some((item) =>
+                      item.body.includes(`Part of the plan from card ${card.id}:`),
+                    )}
                     onCreatePlan={async (subtasks) => {
                       const created = new Map<string, string>();
                       try {
@@ -559,7 +562,7 @@ export function CardDetails({
                             body: JSON.stringify({
                               title: task.title,
                               body: `${task.body}\n\nPart of the plan from card ${card.id}: ${card.title}`,
-                              idempotencyKey: `plan:${runs[0].id}:${task.id}`,
+                              idempotencyKey: `plan:${card.id}:${task.id}`,
                               dependsOn: task.dependsOn.map((dep) => created.get(dep)),
                             }),
                           });
@@ -1454,11 +1457,14 @@ function RunReport({
   runId,
   onAddFollowUp,
   onCreatePlan,
+  planCreated,
   findingsOnly,
   onCopyError,
 }: {
   report: string;
   runId: string;
+  /** A card made from this card's plan already exists; a plan is turned into cards once per card. */
+  planCreated: boolean;
   /** Creates one Triage card per subtask, dependencies wired, in order; resolves false when any failed (a retry skips cards already made). */
   onCreatePlan: (subtasks: Subtask[]) => Promise<boolean>;
   /** Creates a Triage card for follow-up `index`; resolves false when it could not. */
@@ -1544,7 +1550,7 @@ function RunReport({
                 className="mt-3"
                 size="sm"
                 variant="outline"
-                disabled={planMade}
+                disabled={planMade || planCreated}
                 onClick={() =>
                   void onCreatePlan(plan.subtasks).then((ok) => {
                     setPlanMade(ok);
@@ -1552,7 +1558,7 @@ function RunReport({
                   })
                 }
               >
-                {planMade ? "Cards in Triage" : `Create ${plan.subtasks.length} Triage cards`}
+                {planMade || planCreated ? "Cards already created from this card" : `Create ${plan.subtasks.length} Triage cards`}
               </Button>
               {planFailed && (
                 <p className="mt-2 text-xs text-destructive">
