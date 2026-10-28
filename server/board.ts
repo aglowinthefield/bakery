@@ -69,7 +69,7 @@ export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) =>
 type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "locallyMerged"> & { dependsOn: string; blocked: number; locallyMerged: number };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number } & UsageFields;
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationChosen, githubMainProtected, integrationNote";
@@ -213,6 +213,7 @@ export class Board {
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
+    if (!jobColumns.has("changes")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN changes TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("requeued")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN requeued INTEGER NOT NULL DEFAULT 0");
     // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
@@ -612,9 +613,18 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  finishAutoReview(runId: string, state: "needs_human" | "merged", details: string, fingerprint = ""): void {
-    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=? WHERE runId=? AND state='running'")
-      .run(state, details.slice(0, 4000), fingerprint, now(), runId);
+  finishAutoReview(runId: string, state: "needs_human" | "merged", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
+    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
+      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", runId);
+  }
+  /** How many times the agent reviewer has sent this card back to its implementer. */
+  reviewerSendBacks(cardId: string): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM auto_review_jobs WHERE cardId=? AND changes<>''").get(cardId) as { n: number }).n;
+  }
+  /** Changes the agent reviewer requested on this run, if any. */
+  getReviewerChanges(runId: string): { path: string; line?: number; comment: string }[] {
+    const job = this.getAutoReviewJob(runId);
+    return job?.changes ? JSON.parse(job.changes) : [];
   }
   recordAutoReviewAgent(runId: string, label: string): void {
     const job = this.getAutoReviewJob(runId);

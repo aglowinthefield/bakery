@@ -32,7 +32,7 @@ const piBin = process.env.BAKERY_PI_BIN ?? "pi";
 // Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
-const autoReview = new AutoReview(board, integration, piBin);
+const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card));
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
