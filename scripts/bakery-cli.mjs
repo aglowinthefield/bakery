@@ -15,6 +15,7 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority low|normal|high|urgent]
        bakery-cli undepend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
        bakery-cli edit CARD_ID [--title TITLE] [--body BODY] [--board ID|PATH] [--json]
        bakery-cli archive CARD_ID... [--board ID|PATH] [--json]
+       bakery-cli close CARD_ID [--board ID|PATH] [--json]
        bakery-cli restore CARD_ID [--board ID|PATH] [--json]
        bakery-cli stats [--board ID|PATH] [--json]
        bakery-cli ready CARD_ID [--board ID|PATH] [--yes]
@@ -37,6 +38,7 @@ depend CARD_ID --on OTHER adds that dependency (repeat --on for several); undepe
 waiting on an unfinished dependency is not picked up, and start refuses it until its dependencies are Done.
 show prints a card with its dependencies, dependents, attempts and latest auto-review; edit changes its
 title and/or description.
+close moves a Review card to Done without merging; its worktree and branch stay.
 archive accepts only Done cards and archives all or none; restore moves one archived card back to Done.
 stats prints card counts per lane and the pickup state.
 board prints a board's integration mode; --integration github-pr makes a card Done when its GitHub pull request
@@ -147,7 +149,7 @@ async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
-  const expected = { board: 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { board: 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   const variadic = ["start", "archive", "add"];
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
   if (command === "board" && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
@@ -162,7 +164,7 @@ async function main() {
   if (opts.integration !== undefined && !["local", "github-pr"].includes(opts.integration)) throw new Error("Integration must be local or github-pr");
   if (command === "board" && args.length && opts.board) throw new Error("Name the board once, as ID|PATH or with --board");
   if (command === "pr") cardId(args[0]);
-  if (["show", "edit", "archive", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
+  if (["show", "edit", "archive", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
   if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
   if (opts.on.length && command !== "depend" && command !== "undepend") throw new Error("--on is only valid with depend or undepend");
   if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
@@ -249,6 +251,9 @@ async function main() {
     // PATCH needs both fields, so keep whichever one was not supplied.
     const current = opts.title === undefined || opts.body === undefined ? await findCard(origin, path, id) : {};
     const card = await request(origin, `${path}/cards/${id}`, "PATCH", { title: opts.title ?? current.title, body: opts.body ?? current.body ?? "" });
+    print(card, opts.json, [cardLine(card)]);
+  } else if (command === "close") {
+    const card = await request(origin, `${path}/cards/${args[0]}/close`, "POST", {});
     print(card, opts.json, [cardLine(card)]);
   } else if (command === "archive" || command === "restore") {
     const cards = await request(origin, `${path}/cards/${command === "archive" ? "archive" : "unarchive"}`, "POST", { cardIds: args });

@@ -497,3 +497,19 @@ test("older transcripts yield the text after the last turn summary as the report
   assert.equal(reportFromOutput("No tools were used."), null);
   assert.equal(reportFromOutput("Turn 1: bash ×1\n"), null);
 });
+
+test("a Review card closes to Done without merging and Reopen brings it back", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const card = board.createCard({ title: "Drop me", body: "", repo: dir });
+    assert.throws(() => board.closeReview(card.id), /Only Review/);
+    board.setStatus(card.id, "ready");
+    board.finish(board.claim(card.id).id, "review");
+    assert.equal(board.getCard(card.id)?.status, "review");
+    assert.equal(board.closeReview(card.id).status, "done");
+    assert.throws(() => board.closeReview(card.id), /Only Review/);
+    assert.equal(board.setStatus(card.id, "ready").status, "review");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

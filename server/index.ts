@@ -393,6 +393,7 @@ const server = createServer(async (req, res) => {
           if ((await body(req)).acknowledged !== true) throw new Error("Confirm that you inspected the interrupted worktree");
           send(res, 200, board.resolveInterrupted(id)); return;
         }
+        if (req.method === "POST" && action === "close") { send(res, 200, board.closeReview(id)); return; }
         if (req.method === "POST" && action === "status") {
           const { status } = await body(req);
           if (status !== "triage" && status !== "ready" && status !== "done") throw new Error("Status must be triage, ready, or done");

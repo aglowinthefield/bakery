@@ -90,11 +90,13 @@ stateDiagram-v2
   Failed --> Running: run again
   Review --> Running: request changes
   Review --> Done: approve and merge
+  Review --> Done: close without merging
   Done --> Archived: archive
 ```
 
 - **A finished run only reaches Review.** Only your approval, or unattended review, moves a card to Done.
 - **Stop** and the 30-minute timeout both end a run as Failed.
+- **Close without merging** moves a Review card to Done after a confirmation, or from the CLI with `bakery-cli close CARD_ID`. The worktree and branch stay, and **Reopen** returns it to Review. It never touches Linear or GitHub.
 - **Mark done** closes a Triage or Ready card that never ran. An unrun Ready card can also go back to Triage.
 - **Retries reuse the card's worktree and Pi session**, so Pi continues where it left off.
 - **Interrupted** cards can't be retried until you check the worktree and release the card. Bakery first confirms that the recorded PID is no longer running. A PID reused by an unrelated process also blocks release.

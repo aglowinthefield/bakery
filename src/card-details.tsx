@@ -426,7 +426,9 @@ export function CardDetails({
         )}
         {card && integration === "github-pr" && (
           <PullRequestLink
-            onOpenPullRequest={card.prState === "OPEN" ? onOpenPullRequest : undefined}
+            onOpenPullRequest={
+              card.prState === "OPEN" ? onOpenPullRequest : undefined
+            }
             card={card}
             busy={busy}
             onSave={(url) =>
@@ -916,6 +918,28 @@ export function CardDetails({
               }
             >
               Reopen
+            </Button>
+          )}
+          {card?.status === "review" && (
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "Close this card without merging? Its worktree and branch stay, and Reopen brings it back.",
+                  )
+                )
+                  return;
+                void action(() =>
+                  api(`/boards/${boardId}/cards/${card.id}/close`, {
+                    method: "POST",
+                    body: "{}",
+                  }),
+                );
+              }}
+            >
+              Close without merging
             </Button>
           )}
           {card?.status === "done" && (

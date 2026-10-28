@@ -758,6 +758,15 @@ export class Board {
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
     return this.getCard(id)!;
   }
+  // Drops a Review card without merging. The run, worktree and branch stay, so Reopen can bring it back.
+  closeReview(id: string): Card {
+    const card = this.getCard(id);
+    if (!card) throw new Error("Card not found");
+    if (card.status !== "review") throw new Error("Only Review cards can be closed without merging");
+    if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge into local main");
+    this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), id);
+    return this.getCard(id)!;
+  }
   // Archiving only hides Done cards in a separate lane. It never touches runs, worktrees, or Git.
   setArchived(repo: string, ids: string[], archived: boolean): Card[] {
     const unique = [...new Set(ids)];
