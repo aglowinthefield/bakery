@@ -213,7 +213,10 @@ test("a rolling six-start limit prevents unbounded model spend and persists afte
     assert.equal(second.autoStartsToday(item.repo), 6);
     assert.equal(second.listAutoPickupCandidates().length, 0);
     assert.equal(second.getBoard(item.repoBoard.id)?.autoPickupNextAt, capped.autoPickupNextAt);
-    assert.throws(() => second.setAutoPickup(item.repoBoard.id, true, 2, 0), /daily.*limit/i);
+    assert.throws(() => second.setAutoPickup(item.repoBoard.id, true, 2, -1), /daily.*limit/i);
+    second.setAutoPickup(item.repoBoard.id, true, 2, 0);
+    assert.equal(second.getBoard(item.repoBoard.id)?.autoPickupNextAt, null);
+    assert.equal(second.listAutoPickupCandidates().length > 0, true);
     second.setAutoPickup(item.repoBoard.id, true, 2, 99);
     assert.equal(second.getBoard(item.repoBoard.id)?.pickupDailyLimit, 99);
     assert.equal(second.listAutoPickupCandidates().length, 1);
