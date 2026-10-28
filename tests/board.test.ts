@@ -531,3 +531,22 @@ test("a general review comment needs no line and alone is enough to request chan
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a card whose latest report ends with a bakery-plan block is plan-only", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-plan-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const card = board.createCard({ title: "Plan it", body: "", repo: dir });
+    assert.equal(board.getCard(card.id)!.planOnly, false);
+    board.setStatus(card.id, "ready");
+    const run = board.claim(card.id);
+    board.recordReport(run.id, "Summary\n\n```bakery-plan\n[]\n```");
+    board.finish(run.id, "review");
+    assert.equal(board.getCard(card.id)!.planOnly, true);
+    board.setStatus(card.id, "ready");
+    const next = board.claim(card.id);
+    board.recordReport(next.id, "Implemented it.");
+    assert.equal(board.getCard(card.id)!.planOnly, false);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
