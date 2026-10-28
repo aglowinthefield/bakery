@@ -1,9 +1,10 @@
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
+import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join, extname, isAbsolute, resolve } from "node:path";
+import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, parsePriority } from "./board.js";
 import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
@@ -47,7 +48,7 @@ let modelCache: { models: string[]; at: number } | undefined, modelRequest: Prom
 function listModels(): Promise<{ models: string[]; error?: string }> {
   if (modelCache && Date.now() - modelCache.at < 10 * 60_000) return Promise.resolve({ models: modelCache.models });
   return modelRequest ??= new Promise<{ models: string[]; error?: string }>(resolve => {
-    execFile(piBin, ["--list-models"], { timeout: 20_000, maxBuffer: 4_000_000, encoding: "utf8" }, (error, stdout) => {
+    execFile(...command(piBin, ["--list-models"]), { timeout: 20_000, maxBuffer: 4_000_000, encoding: "utf8" }, (error, stdout) => {
       modelRequest = undefined;
       if (error) { resolve({ models: [], error: `Could not list Pi models: ${error.killed ? "timed out" : error.message.split("\n")[0].slice(0, 300)}` }); return; }
       modelCache = { models: parseModelList(stdout), at: Date.now() };
@@ -84,7 +85,7 @@ function dependencyIds(value: unknown) {
 function repoRoot(value: unknown) {
   if (typeof value !== "string" || !value.trim()) throw new Error("Repository path is required");
   const input = value.trim();
-  const path = input === "~" ? homedir() : input.startsWith("~/") ? join(homedir(), input.slice(2)) : input;
+  const path = input === "~" ? homedir() : /^~[\\/]/.test(input) ? join(homedir(), input.slice(2)) : input;
   if (!isAbsolute(path)) throw new Error("Repository path must be absolute or start with ~/");
   let root: string;
   try {
@@ -126,11 +127,12 @@ const server = createServer(async (req, res) => {
     if (path === "/api/path-suggestions" && req.method === "GET") {
       const input = new URL(req.url ?? "/", "http://localhost").searchParams.get("path") ?? "";
       if (input.length > 1024) throw new Error("Path is too long");
-      if (!input.startsWith("/") && !input.startsWith("~/")) { send(res, 200, []); return; }
-      const slash = input.lastIndexOf("/");
+      if (!/^(\/|~[\\/]|[A-Za-z]:[\\/])/.test(input)) { send(res, 200, []); return; }
+      const slash = Math.max(input.lastIndexOf("/"), process.platform === "win32" ? input.lastIndexOf("\\") : -1);
+      const separator = input[slash];
       const parent = input.slice(0, slash + 1);
       const prefix = input.slice(slash + 1);
-      const directory = parent.startsWith("~/") ? join(homedir(), parent.slice(2)) : parent;
+      const directory = /^~[\\/]/.test(parent) ? join(homedir(), parent.slice(2)) : parent;
       let suggestions: string[] = [];
       try {
         suggestions = readdirSync(directory, { withFileTypes: true })
@@ -140,7 +142,7 @@ const server = createServer(async (req, res) => {
             try { return entry.isSymbolicLink() && statSync(join(directory, entry.name)).isDirectory(); }
             catch { return false; }
           })
-          .map(entry => parent + entry.name + "/")
+          .map(entry => parent + entry.name + separator)
           .sort((a, b) => a.localeCompare(b))
           .slice(0, 20);
       } catch { /* Missing or unreadable directories have no suggestions. */ }
@@ -394,7 +396,7 @@ const server = createServer(async (req, res) => {
     if (req.method !== "GET") { send(res, 405, { error: "Method not allowed" }); return; }
     const dist = resolve("dist");
     const file = resolve(dist, `.${path === "/" ? "/index.html" : path}`);
-    const target = file.startsWith(dist + "/") && existsSync(file) ? file : join(dist, "index.html");
+    const target = file.startsWith(dist + sep) && existsSync(file) ? file : join(dist, "index.html");
     if (!existsSync(target)) { send(res, 404, { error: "Run npm run dev or npm run build" }); return; }
     const mime: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
     res.writeHead(200, { "Content-Type": mime[extname(target)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff" });

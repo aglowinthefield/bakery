@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 
 const usage = `bakery-cli — local Bakery API client
 
@@ -98,11 +98,11 @@ async function request(origin, path, method = "GET", input) {
 function selectBoard(boards, selector) {
   // The innermost repository containing the current directory wins, so nested repositories pick themselves.
   const cwd = process.cwd();
-  const here = boards.filter(item => cwd === item.repo || cwd.startsWith(`${item.repo}/`)).sort((a, b) => b.repo.length - a.repo.length)[0];
+  const here = boards.filter(item => cwd === item.repo || cwd.startsWith(item.repo + sep)).sort((a, b) => b.repo.length - a.repo.length)[0];
   if (!selector && here) return here;
   if (!selector && boards.length === 1) return boards[0];
   if (!selector) throw new Error(boards.length ? "More than one board; choose one with --board ID|PATH" : "No boards yet. Add a repository in Bakery first.");
-  const path = selector.startsWith("~/") ? resolve(homedir(), selector.slice(2)) : resolve(selector);
+  const path = /^~[\\/]/.test(selector) ? resolve(homedir(), selector.slice(2)) : resolve(selector);
   const matches = boards.filter(item => item.id === selector || item.repo === path);
   if (matches.length !== 1) throw new Error(`Board not found: ${selector}`);
   return matches[0];

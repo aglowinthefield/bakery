@@ -1,4 +1,5 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, execSync, spawn, type ChildProcess } from "node:child_process";
+import { command } from "./platform.js";
 import { Board, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, settledReply, usageInStream } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
@@ -96,7 +97,7 @@ export class AutoReview {
       if (!currentCard || currentCard.title !== card.title || currentCard.body !== card.body) throw new Error("Card changed during agent review");
       if (this.integration.review(currentCard).fingerprint !== fingerprint) throw new Error("Work changed during agent review");
       const result = this.integration.approve(currentCard, fingerprint, "auto", scratch => {
-        try { execFileSync("/bin/sh", ["-c", current.verificationCommand], { cwd: scratch, timeout: 5 * 60_000, stdio: "ignore" }); }
+        try { execSync(current.verificationCommand, { cwd: scratch, timeout: 5 * 60_000, stdio: "ignore" }); }
         catch { throw new Error("Verification failed on the merged result; main was not updated"); }
         const latestCard = this.board.getCard(card.id), latestBoard = this.board.getBoard(repoBoard.id);
         if (!latestCard || latestCard.title !== card.title || latestCard.body !== card.body ||
@@ -115,7 +116,7 @@ export class AutoReview {
   private async review(prompt: string, cwd: string, runId: string, models: string[]): Promise<string> {
     // Same capabilities as a card run (tools, extensions, MCP, skills, context files), without a saved session.
     const args = ["--print", "--mode", "json", "--no-session", ...models, "--", prompt];
-    const child = spawn(this.piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(...command(this.piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
     this.reviewer = child;
     try { return await new Promise<string>((resolve, reject) => {
       let stdout = "", stderr = "", exceeded = false;
