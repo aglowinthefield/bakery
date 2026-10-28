@@ -27,6 +27,7 @@ test("repository icon and color picker updates navigation and heading after save
       else if (path === "/api/settings") await route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
       else if (path.endsWith("/cards") || path.endsWith("/conflicts")) await route.fulfill({ json: [] });
       else if (path.endsWith("/local-merges")) await route.fulfill({ json: { cards: [], main: null } });
+      else if (path === "/api/status") await route.fulfill({ json: { draining: false, activeRuns: 0 } });
       else throw new Error(`Unexpected API request: ${path}`);
     });
     const badges = page.locator("aside button[title='/tmp/example'] svg, header h1 .repo-badge svg");

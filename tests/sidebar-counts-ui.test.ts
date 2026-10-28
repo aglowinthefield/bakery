@@ -25,6 +25,7 @@ test("every repo in the sidebar shows one condensed row of backlog, in progress 
         "/api/boards/board/cards": cards,
         "/api/boards/board/conflicts": [],
       };
+      if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });

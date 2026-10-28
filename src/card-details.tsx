@@ -74,6 +74,10 @@ export function CardDetails({
   const [autoJobs, setAutoJobs] = useState<AutoReviewJob[]>([]);
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
   const [expandedDetails, setExpandedDetails] = useState(false);
+  const [tab, setTab] = useState<
+    "overview" | "reviews" | "attempts" | "details"
+  >("overview");
+  useEffect(() => setTab("overview"), [cardId]);
   const [sideWidth, setSideWidth] = useState(
     () => Number(localStorage.getItem("bakery-side-width")) || 900,
   );
@@ -199,6 +203,16 @@ export function CardDetails({
   }, [boardId, cardId, loadedFingerprint]);
   const currentReview = review?.cardId === cardId ? review : null;
   const currentComments = comments.filter((item) => item.cardId === cardId);
+  const reviewEntries = [...runs]
+    .sort((a, b) => b.attempt - a.attempt)
+    .map((run) => ({
+      attempt: run.attempt,
+      job: autoJobs.find((job) => job.runId === run.id),
+      requested: currentComments.filter(
+        (item) => item.runId === run.id && item.state === "requested",
+      ),
+    }))
+    .filter((item) => item.job || item.requested.length);
   const changesRequested =
     card?.status === "review" &&
     currentComments.some(
@@ -321,7 +335,9 @@ export function CardDetails({
           <span className="rounded bg-primary/10 px-2 py-1 uppercase tracking-wider text-primary">
             {card?.status}
           </span>{" "}
-          Manual card · {card && card.repo}
+          <span title={card?.repo}>
+            {card?.repo.split("/").filter(Boolean).pop()}
+          </span>
         </DialogDescription>
         {queue && (
           <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-accent/30 px-3 py-2 text-xs">
@@ -346,39 +362,87 @@ export function CardDetails({
           </div>
         )}
         {card && (
-          <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-            Priority
-            <select
-              aria-label="Card priority"
-              value={card.priority ?? 0}
-              disabled={busy || card.status === "running"}
-              title={
-                card.status === "running"
-                  ? "Priority cannot change while a run is active"
-                  : "Higher priority Ready cards are picked up first"
-              }
-              onChange={(event) => {
-                const priority = Number(event.target.value) as Priority;
-                void action(() =>
-                  api<Card>(`/boards/${boardId}/cards/${card.id}`, {
-                    method: "PATCH",
-                    body: JSON.stringify({
-                      title: card.title,
-                      body: card.body,
-                      priority,
-                    }),
-                  }),
-                );
-              }}
-              className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {card && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                Priority
+                <select
+                  aria-label="Card priority"
+                  value={card.priority ?? 0}
+                  disabled={busy || card.status === "running"}
+                  title={
+                    card.status === "running"
+                      ? "Priority cannot change while a run is active"
+                      : "Higher priority Ready cards are picked up first"
+                  }
+                  onChange={(event) => {
+                    const priority = Number(event.target.value) as Priority;
+                    void action(() =>
+                      api<Card>(`/boards/${boardId}/cards/${card.id}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          title: card.title,
+                          body: card.body,
+                          priority,
+                        }),
+                      }),
+                    );
+                  }}
+                  className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+                >
+                  {priorities.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto"
+              onClick={() => setExpandedDetails((value) => !value)}
             >
-              {priorities.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              {expandedDetails ? (
+                <>
+                  <Minimize2 size={13} /> Exit full screen
+                </>
+              ) : (
+                <>
+                  <Maximize2 size={13} /> Expand
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+        {mergeConflict && card?.id === mergeConflict.cardId && (
+          <MergeConflictPanel
+            conflict={mergeConflict}
+            onDismiss={() =>
+              void action(async () => {
+                await api(
+                  `/boards/${boardId}/cards/${mergeConflict.cardId}/conflict`,
+                  { method: "DELETE" },
+                );
+                onConflict(null);
+              })
+            }
+          />
+        )}
+        {card && mainRecovery && (
+          <MainReset
+            boardId={boardId}
+            main={mainRecovery}
+            onError={(message) => {
+              setError(message);
+              onError(message);
+            }}
+            onReset={(main) => {
+              setMainRecovery(main);
+              refresh();
+            }}
+          />
         )}
         {card &&
           integration === "github-pr" &&
@@ -410,207 +474,186 @@ export function CardDetails({
               </Button>
             </div>
           )}
-        {card && mainRecovery && (
-          <MainReset
-            boardId={boardId}
-            main={mainRecovery}
-            onError={(message) => {
-              setError(message);
-              onError(message);
-            }}
-            onReset={(main) => {
-              setMainRecovery(main);
-              refresh();
-            }}
-          />
-        )}
-        {card && integration === "github-pr" && (
-          <PullRequestLink
-            onOpenPullRequest={
-              card.prState === "OPEN" ? onOpenPullRequest : undefined
-            }
-            card={card}
-            busy={busy}
-            onSave={(url) =>
-              action(() =>
-                api<Card>(`/boards/${boardId}/cards/${card.id}/pull-request`, {
-                  method: "PUT",
-                  body: JSON.stringify({ url }),
-                }),
-              )
-            }
-          />
-        )}
         {card && (
-          <Dependencies
-            card={card}
-            boardCards={boardCards}
-            busy={busy}
-            onOpenCard={onOpenCard}
-            onChange={(path, method, input) =>
-              void action(() =>
-                api<Card>(`/boards/${boardId}/cards/${card.id}/${path}`, {
-                  method,
-                  body: input && JSON.stringify(input),
-                }),
-              )
-            }
-          />
-        )}
-        {card && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>Card ID</span>
-            <code className="select-all font-mono text-foreground">
-              {card.id}
-            </code>
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-label="Copy card ID"
-              onClick={() => {
-                void navigator.clipboard
-                  .writeText(card.id)
-                  .then(() => setCopiedCardId(card.id))
-                  .catch(() =>
-                    setError(
-                      "Could not copy the card ID. Select the ID above to copy it manually.",
-                    ),
-                  );
-              }}
-            >
-              {copiedCardId === card.id ? (
-                <>
-                  <Check size={13} /> Copied
-                </>
-              ) : (
-                <>
-                  <Copy size={13} /> Copy ID
-                </>
-              )}
-            </Button>
-          </div>
-        )}
-        {card?.idempotencyKey && (
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>Idempotency key</span>
-            <code className="select-all break-all font-mono text-foreground">
-              {card.idempotencyKey}
-            </code>
-          </div>
-        )}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="mt-3"
-          onClick={() => setExpandedDetails((value) => !value)}
-        >
-          {expandedDetails ? (
-            <>
-              <Minimize2 size={13} /> Exit full screen
-            </>
-          ) : (
-            <>
-              <Maximize2 size={13} /> Expand review
-            </>
-          )}
-        </Button>
-        {card?.body?.trim() ? (
-          <details open className="group mt-6">
-            <summary className="cursor-pointer text-sm font-semibold">
-              Description
-            </summary>
-            <Markdown
-              source={card.body}
-              className="mt-2 text-sm leading-6 text-foreground/80"
-            />
-          </details>
-        ) : (
-          <p className="mt-6 text-sm leading-6 text-foreground/80">
-            No description.
-          </p>
-        )}
-        {card &&
-          ["review", "done", "archived"].includes(card.status) &&
-          runs[0]?.status === "review" &&
-          runs[0].report && (
-            <RunReport
-              report={runs[0].report}
-              findingsOnly={
-                card.status === "review" && currentReview?.files.length === 0
-              }
-              exchanges={[...runs]
-                .reverse()
-                .map((run) => ({
-                  attempt: run.attempt,
-                  review: autoJobs.find(
-                    (job) =>
-                      job.runId === run.id && job.state !== "running",
-                  ),
-                  requested: currentComments.filter(
-                    (item) =>
-                      item.runId === run.id && item.state === "requested",
-                  ),
-                }))
-                .filter((item) => item.review?.details || item.requested.length)}
-              onCopyError={() =>
-                setError(
-                  "Could not copy the report. Select its text to copy it manually.",
-                )
-              }
-            />
-          )}
-        {card?.status === "failed" && runs[0]?.error && (
           <div
-            role="alert"
-            className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm"
+            role="tablist"
+            aria-label="Card sections"
+            className="mt-5 flex gap-1 border-b border-border"
           >
-            <strong>Run failed</strong>
-            <p className="mt-1 text-destructive">{runs[0].error}</p>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Inspect the latest attempt and its worktree below before retrying.
-              No changes were merged from this run.
-            </p>
+            {(
+              [
+                ["overview", "Overview"],
+                [
+                  "reviews",
+                  `Reviews${reviewEntries.length ? ` (${reviewEntries.length})` : ""}`,
+                ],
+                [
+                  "attempts",
+                  `Attempts${runs.length ? ` (${runs.length})` : ""}`,
+                ],
+                ["details", "Details"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                id={`card-tab-${id}`}
+                aria-selected={tab === id}
+                aria-controls="card-tabpanel"
+                onClick={() => setTab(id)}
+                className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === id ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         )}
-        {autoJobs[0] && autoJobs[0].cardId === card?.id && (
-          <div className="mt-4 rounded-md border border-border bg-accent/20 p-3 text-xs">
-            <strong>
-              Agent review:{" "}
-              {autoJobs[0].state === "running"
-                ? "checking"
-                : autoJobs[0].state === "merged"
-                  ? "merged locally"
-                  : autoJobs[0].requeued
-                    ? "interrupted by a restart, queued again"
-                    : "needs human review"}
-            </strong>{" "}
-            <AgentBadge
-              phase="Review"
-              agent={autoJobs[0].agent}
-              pending={autoJobs[0].state === "running"}
-            />{" "}
-            <CostBadge usage={autoJobs[0]} label="Review cost" />
-            {autoJobs[0].details && (
-              <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
-                {autoJobs[0].details}
+        <div
+          role="tabpanel"
+          id="card-tabpanel"
+          aria-labelledby={`card-tab-${tab}`}
+        >
+          {tab === "overview" && (
+            <>
+              {card?.body?.trim() ? (
+                <details open className="group mt-6">
+                  <summary className="cursor-pointer text-sm font-semibold">
+                    Description
+                  </summary>
+                  <Markdown
+                    source={card.body}
+                    className="mt-2 text-sm leading-6 text-foreground/80"
+                  />
+                </details>
+              ) : (
+                <p className="mt-6 text-sm leading-6 text-foreground/80">
+                  No description.
+                </p>
+              )}
+              {card &&
+                ["review", "done", "archived"].includes(card.status) &&
+                runs[0]?.status === "review" &&
+                runs[0].report && (
+                  <RunReport
+                    report={runs[0].report}
+                    findingsOnly={
+                      card.status === "review" &&
+                      currentReview?.files.length === 0
+                    }
+                    onCopyError={() =>
+                      setError(
+                        "Could not copy the report. Select its text to copy it manually.",
+                      )
+                    }
+                  />
+                )}
+              {card?.status === "failed" && runs[0]?.error && (
+                <div
+                  role="alert"
+                  className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm"
+                >
+                  <strong>Run failed</strong>
+                  <p className="mt-1 text-destructive">{runs[0].error}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Inspect the latest attempt and its worktree below before
+                    retrying. No changes were merged from this run.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+          {tab === "reviews" && <ReviewHistory entries={reviewEntries} />}
+          {tab === "attempts" &&
+            (runs.length > 0 ? (
+              <AttemptList key={card?.id} runs={runs} card={card} />
+            ) : (
+              <p className="mt-4 text-sm text-muted-foreground">
+                No attempts yet.
               </p>
-            )}
-          </div>
-        )}
-        {mergeConflict && card?.id === mergeConflict.cardId && (
-          <MergeConflictPanel
-            conflict={mergeConflict}
-            onDismiss={() =>
-              void action(async () => {
-                await api(
-                  `/boards/${boardId}/cards/${mergeConflict.cardId}/conflict`,
-                  { method: "DELETE" },
-                );
-                onConflict(null);
-              })
-            }
-          />
-        )}
+            ))}
+          {tab === "details" && (
+            <>
+              {card && integration === "github-pr" && (
+                <PullRequestLink
+                  onOpenPullRequest={
+                    card.prState === "OPEN" ? onOpenPullRequest : undefined
+                  }
+                  card={card}
+                  busy={busy}
+                  onSave={(url) =>
+                    action(() =>
+                      api<Card>(
+                        `/boards/${boardId}/cards/${card.id}/pull-request`,
+                        {
+                          method: "PUT",
+                          body: JSON.stringify({ url }),
+                        },
+                      ),
+                    )
+                  }
+                />
+              )}
+              {card && (
+                <Dependencies
+                  card={card}
+                  boardCards={boardCards}
+                  busy={busy}
+                  onOpenCard={onOpenCard}
+                  onChange={(path, method, input) =>
+                    void action(() =>
+                      api<Card>(`/boards/${boardId}/cards/${card.id}/${path}`, {
+                        method,
+                        body: input && JSON.stringify(input),
+                      }),
+                    )
+                  }
+                />
+              )}
+              {card && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>Card ID</span>
+                  <code className="select-all font-mono text-foreground">
+                    {card.id}
+                  </code>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label="Copy card ID"
+                    onClick={() => {
+                      void navigator.clipboard
+                        .writeText(card.id)
+                        .then(() => setCopiedCardId(card.id))
+                        .catch(() =>
+                          setError(
+                            "Could not copy the card ID. Select the ID above to copy it manually.",
+                          ),
+                        );
+                    }}
+                  >
+                    {copiedCardId === card.id ? (
+                      <>
+                        <Check size={13} /> Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={13} /> Copy ID
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+              {card?.idempotencyKey && (
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>Idempotency key</span>
+                  <code className="select-all break-all font-mono text-foreground">
+                    {card.idempotencyKey}
+                  </code>
+                </div>
+              )}
+            </>
+          )}
+        </div>
         <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-5">
           {card && card.status !== "running" && (
             <Button
@@ -1071,9 +1114,6 @@ export function CardDetails({
             }
           />
         )}
-        {runs.length > 0 && (
-          <AttemptList key={card?.id} runs={runs} card={card} />
-        )}
       </DialogContent>
     </Dialog>
   );
@@ -1285,16 +1325,10 @@ function Dependencies({
 function RunReport({
   report,
   findingsOnly,
-  exchanges,
   onCopyError,
 }: {
   report: string;
   findingsOnly: boolean;
-  exchanges: {
-    attempt: number;
-    review?: AutoReviewJob;
-    requested: ReviewComment[];
-  }[];
   onCopyError: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1343,41 +1377,67 @@ function RunReport({
         source={report}
         className="mt-3 text-sm leading-6 text-foreground/80"
       />
-      {exchanges.length > 0 && (
-        <div className="mt-4 border-t border-border pt-3">
-          <h4 className="text-xs font-semibold">Review back and forth</h4>
-          <ol className="mt-2 space-y-3 text-xs">
-            {exchanges.map((item) => (
-              <li key={item.attempt}>
-                <div className="font-medium">Attempt {item.attempt}</div>
-                {item.review?.details && (
-                  <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
-                    <span className="font-medium text-foreground/80">
-                      Agent review (
-                      {item.review.state === "merged"
-                        ? "merged"
-                        : "needs human review"}
-                      ):
-                    </span>{" "}
-                    {item.review.details}
-                  </p>
-                )}
-                {item.requested.map((comment) => (
-                  <p
-                    key={comment.id}
-                    className="mt-1 whitespace-pre-wrap text-muted-foreground"
-                  >
-                    <span className="font-medium text-foreground/80">
-                      Requested change on {comment.path}:{comment.line}:
-                    </span>{" "}
-                    {comment.body}
-                  </p>
-                ))}
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
     </section>
+  );
+}
+
+/** Each attempt's agent review and the changes a person requested, newest attempt first. */
+function ReviewHistory({
+  entries,
+}: {
+  entries: {
+    attempt: number;
+    job?: AutoReviewJob;
+    requested: ReviewComment[];
+  }[];
+}) {
+  if (!entries.length)
+    return (
+      <p className="mt-4 text-sm text-muted-foreground">No reviews yet.</p>
+    );
+  return (
+    <ol className="mt-4 space-y-4 text-xs">
+      {entries.map(({ attempt, job, requested }) => (
+        <li key={attempt} className="rounded-md border border-border p-3">
+          <div className="font-semibold">Attempt {attempt}</div>
+          {job && (
+            <div className="mt-2">
+              <strong>
+                Agent review:{" "}
+                {job.state === "running"
+                  ? "checking"
+                  : job.state === "merged"
+                    ? "merged locally"
+                    : job.requeued
+                      ? "interrupted by a restart, queued again"
+                      : "needs human review"}
+              </strong>{" "}
+              <AgentBadge
+                phase="Review"
+                agent={job.agent}
+                pending={job.state === "running"}
+              />{" "}
+              <CostBadge usage={job} label="Review cost" />
+              {job.details && (
+                <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+                  {job.details}
+                </p>
+              )}
+            </div>
+          )}
+          {requested.map((comment) => (
+            <p
+              key={comment.id}
+              className="mt-2 whitespace-pre-wrap text-muted-foreground"
+            >
+              <span className="font-medium text-foreground/80">
+                Requested change on {comment.path}:{comment.line}:
+              </span>{" "}
+              {comment.body}
+            </p>
+          ))}
+        </li>
+      ))}
+    </ol>
   );
 }

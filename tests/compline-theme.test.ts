@@ -36,6 +36,8 @@ test("Settings switches between the preserved default and Compline after reload"
         await route.fulfill({ json: { pending: false } });
       } else if (path.endsWith("/review")) {
         await route.fulfill({ json: { fingerprint: "a".repeat(64), files: [{ path: "src/example.ts", patch: "@@ -1 +1 @@\n-old\n+new\n" }] } });
+      } else if (path === "/api/status") {
+        await route.fulfill({ json: { draining: false, activeRuns: 0 } });
       } else {
         assert.fail(`Unexpected API request: ${path}`);
       }

@@ -26,6 +26,7 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
         createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: 1, ...fields })),
       "/api/boards/board/conflicts": [],
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });

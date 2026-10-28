@@ -55,6 +55,7 @@ test("database theme still loads when browser storage rejects writes", async () 
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "light" },
       "/api/boards": [],
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
@@ -100,6 +101,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
       "/api/boards/board/cards/card/auto-review": [],
       "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [{ path: "src/example.ts", patch: "@@ -1 +1 @@\n-const old = 1;\n+const next = 2;\n" }] },
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });

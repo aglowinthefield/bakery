@@ -46,6 +46,7 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
         "/api/boards/board/cards": cards,
         "/api/boards/board/conflicts": [],
       };
+      if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });

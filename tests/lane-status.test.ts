@@ -27,6 +27,7 @@ test("each lane keeps its label and a readable status dot in both palettes and w
       "/api/boards/board/cards": statuses.map(status => ({ id: status, title: `${status} card`, body: "", repo: "/tmp/repo", source: "manual", status, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 })),
       "/api/boards/board/conflicts": [],
     };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
