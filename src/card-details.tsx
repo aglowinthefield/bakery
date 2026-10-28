@@ -1084,7 +1084,7 @@ export function CardDetails({
             {error}
           </p>
         )}
-        {card?.status === "review" && (
+        {card?.status === "review" && tab === "reviews" && (
           <ReviewPanel
             review={currentReview}
             error={reviewError}

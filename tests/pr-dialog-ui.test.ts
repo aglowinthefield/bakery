@@ -35,6 +35,7 @@ test("github-pr Approve shows the drafted PR, flags a title the semantic check r
     });
     await page.goto(server.resolvedUrls!.local[0]);
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await page.getByText("Changed files (1)").waitFor();
     await page.getByRole("button", { name: "Approve and open PR" }).click();
     const dialog = page.getByRole("dialog", { name: "Open pull request" });

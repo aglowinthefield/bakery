@@ -74,6 +74,7 @@ test("Settings switches between the preserved default and Compline after reload"
     assert.equal(await dialog.getByRole("radio", { name: "Compline" }).evaluate((el) => getComputedStyle(el).outlineColor), "rgb(180, 188, 196)");
     await dialog.getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(180, 196, 188)");
     const added = page.locator('[data-line][data-line-type="change-addition"]');
     const removed = page.locator('[data-line][data-line-type="change-deletion"]');

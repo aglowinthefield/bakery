@@ -117,6 +117,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
   try {
     await page.goto(url);
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await diffRendered();
     const dark = await palette();
     assert.equal(dark.background, "rgb(26, 29, 33)");
@@ -128,6 +129,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await diffRendered();
     const light = await palette();
     assert.equal(light.background, "rgb(245, 243, 238)");
@@ -140,6 +142,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.waitForFunction(() => localStorage.getItem("bakery-theme") === "light");
     // The reload reopens the card this tab had open.
     await page.reload();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), light);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
@@ -149,6 +152,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), dark);
     failPatch = true;
@@ -158,6 +162,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.getByRole("alert").filter({ hasText: "Save rejected" }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), dark);
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
