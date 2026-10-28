@@ -5,6 +5,7 @@ import { parseAgentModels, resolveAgentModel, validateAgentModels, type AgentMod
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import type { ThemeName } from "../src/themes.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
+import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string };
@@ -588,6 +589,14 @@ export class Board {
   }
   getAutoReviewJob(runId: string): AutoReviewJob | undefined {
     return this.db.prepare("SELECT * FROM auto_review_jobs WHERE runId=?").get(runId) as AutoReviewJob | undefined;
+  }
+  /** Every run, agent review and card, for the Statistics page to aggregate; see server/stats.ts. */
+  statsInput(): StatsInput {
+    return {
+      runs: this.db.prepare("SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL").all() as StatsInput["runs"],
+      reviews: this.db.prepare("SELECT cards.repo AS repo, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId").all() as StatsInput["reviews"],
+      cards: this.db.prepare("SELECT repo, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards)").all() as StatsInput["cards"],
+    };
   }
   listAutoReviewJobs(cardId: string): AutoReviewJob[] {
     return this.db.prepare("SELECT * FROM auto_review_jobs WHERE cardId=? ORDER BY startedAt DESC").all(cardId) as AutoReviewJob[];

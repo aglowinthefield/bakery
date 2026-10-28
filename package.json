@@ -12,8 +12,8 @@
     "start": "tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "bakery": "node scripts/bakery-cli.mjs",
-    "format": "prettier --write src/entry.tsx src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts",
-    "format:check": "prettier --check src/entry.tsx src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts"
+    "format": "prettier --write src/entry.tsx src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/components/ui/chart.tsx src/components/ui/card.tsx",
+    "format:check": "prettier --check src/entry.tsx src/main.tsx src/card-details.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/components/ui/chart.tsx src/components/ui/card.tsx"
   },
   "dependencies": {
     "@pierre/diffs": "^1.6.2",
@@ -27,6 +27,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
+    "recharts": "^3.10.1",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",

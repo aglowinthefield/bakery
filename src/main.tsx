@@ -28,6 +28,7 @@ import {
   Search,
   Settings2,
   Sun,
+  BarChart3,
   Globe2,
   ExternalLink,
   Github,
@@ -61,6 +62,7 @@ import { AgentBadge, reworkSummary } from "./attempts.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
+import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { appearanceIcons, RepoBadge } from "./repo-badge.js";
 import { needsYouStatuses, reviewOrder, Today } from "./today.js";
@@ -508,10 +510,15 @@ export function App() {
   }, [repoPath, addingRepo, editingBoard]);
   const [cards, setCards] = useState<Card[]>([]);
   // Today is the landing page until you pick a board; the last choice persists.
-  const [view, setView] = useState<"today" | "board" | "pulls">(() => {
-    const saved = readTab("bakery-view") ?? localStorage.getItem("bakery-view");
-    return saved === "board" || saved === "pulls" ? saved : "today";
-  });
+  const [view, setView] = useState<"today" | "board" | "pulls" | "stats">(
+    () => {
+      const saved =
+        readTab("bakery-view") ?? localStorage.getItem("bakery-view");
+      return saved === "board" || saved === "pulls" || saved === "stats"
+        ? saved
+        : "today";
+    },
+  );
   const [reposCollapsed, setReposCollapsed] = useState(
     () => localStorage.getItem("bakery-repos-collapsed") === "true",
   );
@@ -713,6 +720,12 @@ export function App() {
     openBoard(id);
     setView("pulls");
     localStorage.setItem("bakery-view", "pulls");
+  };
+  const openStats = () => {
+    setView("stats");
+    localStorage.setItem("bakery-view", "stats");
+    restoreCard.current = null;
+    setSelected(null);
   };
   const openToday = () => {
     setView("today");
@@ -1212,6 +1225,14 @@ export function App() {
               <Plus size={15} /> Add repository
             </Button>
           </div>
+          <button
+            onClick={openStats}
+            aria-current={view === "stats" ? "page" : undefined}
+            className={`mt-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+          >
+            <BarChart3 size={16} aria-hidden="true" className="text-primary" />
+            Statistics
+          </button>
           <Button
             variant="ghost"
             className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
@@ -1253,6 +1274,11 @@ export function App() {
           />
         </main>
       )}
+      {view === "stats" && (
+        <main className="min-w-0 flex-1">
+          <Statistics boards={boards} />
+        </main>
+      )}
       {view === "pulls" &&
         boardId &&
         currentBoard &&
@@ -1280,6 +1306,7 @@ export function App() {
         className="min-w-0 flex-1"
         hidden={
           view === "today" ||
+          view === "stats" ||
           (view === "pulls" &&
             !!currentBoard &&
             supportsPullRequests(currentBoard))
