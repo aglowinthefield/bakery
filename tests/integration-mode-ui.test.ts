@@ -25,7 +25,7 @@ async function open(integration: "local" | "github-pr") {
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", icon: "layout-grid", color: "violet", remoteUrl: "https://github.com/acme/widgets", integration, autoCollapseEmptySwimlanes: false, verificationCommand: "" }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", icon: "sprinkle_donut", color: "violet", remoteUrl: "https://github.com/acme/widgets", integration, autoCollapseEmptySwimlanes: false, verificationCommand: "" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [
         card("review", "Review card", "review"),

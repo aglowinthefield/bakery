@@ -1,60 +1,7 @@
 import type { CSSProperties } from "react";
-import {
-  Blocks,
-  Bot,
-  Bug,
-  Coffee,
-  Compass,
-  FlaskConical,
-  Gem,
-  Ghost,
-  Globe2,
-  LayoutGrid,
-  Mountain,
-  Orbit,
-  Origami,
-  Palette,
-  Puzzle,
-  Rocket,
-  Shapes,
-  Sparkles,
-  Telescope,
-  Terminal,
-  Trees,
-  Waves,
-  Zap,
-  Flower2,
-  type LucideIcon,
-} from "lucide-react";
 import type { Board } from "./model.js";
-import { repoColors, type RepoIcon } from "./repo-appearance.js";
+import { repoColors, repoIcons } from "./repo-appearance.js";
 
-export const appearanceIcons: Record<RepoIcon, LucideIcon> = {
-  "layout-grid": LayoutGrid,
-  rocket: Rocket,
-  orbit: Orbit,
-  "flask-conical": FlaskConical,
-  bot: Bot,
-  terminal: Terminal,
-  blocks: Blocks,
-  mountain: Mountain,
-  waves: Waves,
-  "flower-2": Flower2,
-  sparkles: Sparkles,
-  zap: Zap,
-  puzzle: Puzzle,
-  compass: Compass,
-  gem: Gem,
-  ghost: Ghost,
-  coffee: Coffee,
-  trees: Trees,
-  telescope: Telescope,
-  shapes: Shapes,
-  bug: Bug,
-  palette: Palette,
-  origami: Origami,
-  "globe-2": Globe2,
-};
 export function RepoBadge({
   board,
   size = 16,
@@ -62,7 +9,9 @@ export function RepoBadge({
   board: Board;
   size?: number;
 }) {
-  const Icon = appearanceIcons[board.icon] ?? LayoutGrid;
+  const icon = repoIcons.some((name) => name === board.icon)
+    ? board.icon
+    : repoIcons[0];
   const name = board.color in repoColors ? board.color : "violet";
   const color = `var(--repo-${name}, ${repoColors[name]})`;
   return (
@@ -75,7 +24,13 @@ export function RepoBadge({
         } as CSSProperties
       }
     >
-      <Icon size={size} aria-hidden="true" />
+      <img
+        src={`/icons/${icon}.png`}
+        width={size}
+        height={size}
+        alt=""
+        className="object-contain"
+      />
     </span>
   );
 }

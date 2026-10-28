@@ -12,7 +12,7 @@ test("remote repository link is saved in repository settings and listed below th
     const page = await browser.newPage();
     // These tests cover the board, not the Today landing page.
     await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
-    let board = { id: "board", repo: "/tmp/example", icon: "layout-grid", color: "violet", remoteUrl: "", autoCollapseEmptySwimlanes: false, verificationCommand: "" };
+    let board = { id: "board", repo: "/tmp/example", icon: "sprinkle_donut", color: "violet", remoteUrl: "", autoCollapseEmptySwimlanes: false, verificationCommand: "" };
     const patches: unknown[] = [];
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;

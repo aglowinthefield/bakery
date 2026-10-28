@@ -73,7 +73,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
-    assert.deepEqual([first.icon, first.color], ["layout-grid", "violet"]);
+    assert.deepEqual([first.icon, first.color], ["sprinkle_donut", "violet"]);
     assert.equal(first.autoCollapseEmptySwimlanes, false);
     assert.equal(first.autoReviewEnabled, false);
     assert.equal(first.verificationCommand, "");

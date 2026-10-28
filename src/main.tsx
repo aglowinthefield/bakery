@@ -65,7 +65,7 @@ import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
-import { appearanceIcons, RepoBadge } from "./repo-badge.js";
+import { RepoBadge } from "./repo-badge.js";
 import { needsYouStatuses, reviewOrder, Today } from "./today.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
@@ -486,7 +486,7 @@ export function App() {
   const [addingRepo, setAddingRepo] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [repoPath, setRepoPath] = useState("");
-  const [iconDraft, setIconDraft] = useState<RepoIcon>("layout-grid");
+  const [iconDraft, setIconDraft] = useState<RepoIcon>("sprinkle_donut");
   const [colorDraft, setColorDraft] = useState<RepoColor>("violet");
   const [repoCheck, setRepoCheck] = useState<{
     path: string;
@@ -1476,7 +1476,7 @@ export function App() {
               Workspace / Board
             </div>
             <h1 className="flex items-center gap-3 text-[27px] font-semibold tracking-[-.05em]">
-              {currentBoard && <RepoBadge board={currentBoard} size={19} />}
+              {currentBoard && <RepoBadge board={currentBoard} />}
               {currentBoard
                 ? repoName(currentBoard.repo)
                 : "Choose a repository"}
@@ -2438,18 +2438,17 @@ export function App() {
                 aria-label="Repository icon"
               >
                 {repoIcons.map((name) => {
-                  const Icon = appearanceIcons[name];
                   return (
                     <button
                       key={name}
                       type="button"
-                      title={name.replaceAll("-", " ")}
-                      aria-label={`Icon: ${name.replaceAll("-", " ")}`}
+                      title={name.replaceAll("_", " ")}
+                      aria-label={`Icon: ${name.replaceAll("_", " ")}`}
                       aria-pressed={iconDraft === name}
                       onClick={() => setIconDraft(name)}
                       className={`grid size-9 place-items-center rounded-md border cursor-pointer ${iconDraft === name ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
                     >
-                      <Icon size={18} />
+                      <img src={`/icons/${name}.png`} width={20} height={20} alt="" className="object-contain" />
                     </button>
                   );
                 })}

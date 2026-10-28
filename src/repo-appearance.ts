@@ -1,9 +1,9 @@
 // Keep the persisted choices in one place for the API and the picker.
 export const repoIcons = [
-  "layout-grid", "rocket", "orbit", "flask-conical", "bot", "terminal",
-  "blocks", "mountain", "waves", "flower-2", "sparkles", "zap",
-  "puzzle", "compass", "gem", "ghost", "coffee", "trees",
-  "telescope", "shapes", "bug", "palette", "origami", "globe-2",
+  "sprinkle_donut", "baguette", "bread_loaf", "cake_slice",
+  "cherry_pie", "choc_cookie", "cinnamon_roll", "croissant",
+  "cupcake", "fried_egg", "green_teapot", "hot_coffee",
+  "iced_latte", "jam_jar", "milk_bottle", "wheat_bundle",
 ] as const;
 export type RepoIcon = (typeof repoIcons)[number];
 
