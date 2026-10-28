@@ -32,6 +32,37 @@ export type ReviewerVerdict = { verdict: "approve" | "needs_human" | "request_ch
 /** A card goes back to its implementer at most this many times; after that a person decides. */
 export const maxReviewerSendBacks = 2;
 
+/**
+ * What the reviewer agent is doing, from its event stream: turns, tool counts by name, and its latest sentence of
+ * narration. Tool arguments and results are never read, so nothing sensitive reaches the card.
+ */
+export class ReviewProgress {
+  private turns = 0;
+  private tools = new Map<string, number>();
+  private narration = "";
+  constructor(private readonly startedAt: number) {}
+  feed(line: string): void {
+    let event: { type?: string; toolName?: unknown; message?: { role?: string; content?: unknown } };
+    try { event = JSON.parse(line); } catch { return; }
+    if (event.type === "turn_start") this.turns++;
+    if (event.type === "tool_execution_start" && typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName))
+      this.tools.set(event.toolName, (this.tools.get(event.toolName) ?? 0) + 1);
+    if (event.type === "message_end" && event.message?.role === "assistant" && Array.isArray(event.message.content)) {
+      const text = event.message.content.map((part: { type?: string; text?: unknown }) => part?.type === "text" && typeof part.text === "string" ? part.text : "").join("").trim();
+      // The final message is the JSON verdict; it is not progress.
+      const sentence = text.split(/\n+/).pop()?.split(/(?<=[.!?])\s+/).pop()?.replace(/[*_`#>]/g, "").trim() ?? "";
+      if (sentence && !text.startsWith("{")) this.narration = sentence.length > 160 ? `${sentence.slice(0, 157)}…` : sentence;
+    }
+  }
+  text(now: number): string {
+    const seconds = Math.max(0, Math.round((now - this.startedAt) / 1000));
+    const elapsed = seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+    const tools = [...this.tools].map(([name, count]) => `${name} ×${count}`).join(", ");
+    const head = `Reviewer agent working · ${elapsed}${this.turns ? ` · turn ${this.turns}` : ""}${tools ? ` · ${tools}` : ""}`;
+    return this.narration ? `${head}\n${this.narration}` : head;
+  }
+}
+
 export function reviewerVerdict(stream: string): ReviewerVerdict {
   let text: string;
   try { text = settledReply(stream, { toolUse: true }); }
@@ -152,9 +183,20 @@ export class AutoReview {
     const child = spawn(...command(this.piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
     this.reviewer = child;
     try { return await new Promise<string>((resolve, reject) => {
-      let stdout = "", stderr = "", exceeded = false;
+      let stdout = "", stderr = "", exceeded = false, pending = "";
+      const progress = new ReviewProgress(Date.now());
+      let reportedAt = 0;
       const timer = setTimeout(() => { exceeded = true; child.kill("SIGTERM"); }, 20 * 60_000);
-      child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (stdout.length > 20_000_000) { exceeded = true; child.kill("SIGTERM"); } });
+      child.stdout?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        stdout += text;
+        if (stdout.length > 20_000_000) { exceeded = true; child.kill("SIGTERM"); }
+        pending += text;
+        const lines = pending.split("\n"); pending = lines.pop() ?? "";
+        for (const line of lines) progress.feed(line);
+        // A status line every few seconds is enough for the card to show the reviewer is alive and what it is doing.
+        if (Date.now() - reportedAt >= 3000) { reportedAt = Date.now(); this.board.setAutoReviewProgress(runId, progress.text(Date.now())); }
+      });
       child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
       child.once("error", error => { clearTimeout(timer); reject(error); });
       child.once("close", code => {

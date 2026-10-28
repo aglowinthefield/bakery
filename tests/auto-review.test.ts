@@ -399,3 +399,21 @@ test("reviewer can request changes with concrete items, and malformed requests a
   assert.throws(() => reviewerVerdict(settle('{"verdict":"request_changes","reason":"x","changes":[]}')), /invalid or ambiguous/);
   assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"x","changes":[{"path":"a","comment":"b"}]}')), /invalid or ambiguous/);
 });
+
+test("reviewer progress reports elapsed time, turns, tool counts and narration without tool arguments", async () => {
+  const { ReviewProgress } = await import("../server/auto-review.js");
+  const progress = new ReviewProgress(0);
+  for (const event of [
+    { type: "turn_start" },
+    { type: "tool_execution_start", toolName: "read", args: { path: "SECRET" } },
+    { type: "tool_execution_start", toolName: "bash" },
+    { type: "tool_execution_start", toolName: "read" },
+    { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Checking the migration. Now running the tests." }] } },
+  ]) progress.feed(JSON.stringify(event));
+  progress.feed("not json");
+  const text = progress.text(95_000);
+  assert.equal(text, "Reviewer agent working · 1m 35s · turn 1 · read ×2, bash ×1\nNow running the tests.");
+  progress.feed(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: '{"verdict":"approve","reason":"ok"}' }] } }));
+  assert.match(progress.text(95_000), /Now running the tests\.$/);
+  assert.doesNotMatch(text, /SECRET/);
+});
