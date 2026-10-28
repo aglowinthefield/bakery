@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { command } from "./platform.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Card, Run } from "./board.js";
@@ -128,7 +129,7 @@ function runPi(piBin: string, prompt: string, cwd: string, models: string[]): Pr
   // the drafter can open a skill file but cannot edit, run commands, or reach MCP servers.
   const args = ["--print", "--mode", "json", "--no-session", "--tools", "read", "--no-mcp", ...models, "--", prompt];
   return new Promise((resolve, reject) => {
-    const child = spawn(piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", exceeded = false;
     const timer = setTimeout(() => { exceeded = true; child.kill("SIGTERM"); }, 3 * 60_000);
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (stdout.length > 1_000_000) { exceeded = true; child.kill("SIGTERM"); } });

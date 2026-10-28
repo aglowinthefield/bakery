@@ -1,4 +1,5 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { command } from "./platform.js";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
@@ -107,7 +108,7 @@ export class Worker {
     if (isAncestor(worktree, "origin/main", "HEAD")) return;
     this.board.append(run.id, "Rebasing the card branch onto origin/main…\n");
     try {
-      if (this.hasWorktrunk()) execFileSync(this.wtBin!, ["-C", worktree, "step", "rebase", "origin/main", "--yes"], { cwd: worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
+      if (this.hasWorktrunk()) execFileSync(...command(this.wtBin!, ["-C", worktree, "step", "rebase", "origin/main", "--yes"]), { cwd: worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
       else git(worktree, "rebase", "origin/main");
     } catch (error) {
       let files = "";
@@ -120,7 +121,7 @@ export class Worker {
   /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name (wiredtiger ships one). */
   private hasWorktrunk() {
     if (!this.wtBin) return false;
-    try { return /^wt v\d/.test(execFileSync(this.wtBin, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
+    try { return /^wt v\d/.test(execFileSync(...command(this.wtBin, ["--version"]), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
     catch { return false; }
   }
   private release(id: string) {
@@ -135,7 +136,7 @@ export class Worker {
    */
   private runWorktrunkHooks(run: Run, root: string, worktree: string, branch: string, launch: () => Run) {
     this.board.append(run.id, "Running Worktrunk pre-start hooks…\n");
-    const child = spawn(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(...command(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
     let output = "", done = false;
@@ -149,7 +150,7 @@ export class Worker {
       const reason = this.terminationReasons.get(run.id);
       this.terminationReasons.delete(run.id);
       if (!failure && !reason) {
-        try { execFileSync(this.wtBin!, ["-C", worktree, "hook", "post-start", "--yes"], { cwd: worktree, stdio: "ignore", timeout: 30_000 }); }
+        try { execFileSync(...command(this.wtBin!, ["-C", worktree, "hook", "post-start", "--yes"]), { cwd: worktree, stdio: "ignore", timeout: 30_000 }); }
         catch { this.board.append(run.id, "Worktrunk post-start hooks could not start; continuing without them.\n"); }
         this.board.append(run.id, "Worktrunk hooks done. Starting Pi.\n");
         launch();
@@ -169,7 +170,7 @@ export class Worker {
     let child: ChildProcess;
     try {
       const models = piModelArgs(this.board.agentModelFor(card.repo, phase));
-      child = spawn(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);

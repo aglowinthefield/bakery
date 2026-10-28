@@ -20,3 +20,6 @@ export const repoColors = {
   slate: "#94a3b8",
 } as const;
 export type RepoColor = keyof typeof repoColors;
+
+/** Last folder of a repository path, whether the server is on POSIX or Windows. */
+export const repoName = (repo: string) => repo.split(/[\\/]/).filter(Boolean).at(-1) ?? repo;

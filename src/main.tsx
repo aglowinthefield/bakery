@@ -68,10 +68,15 @@ import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
   repoIcons,
+  repoName,
   type RepoColor,
   type RepoIcon,
 } from "./repo-appearance.js";
-import { describeRemote, supportsPullRequests, type RemoteHost } from "./remote-link.js";
+import {
+  describeRemote,
+  supportsPullRequests,
+  type RemoteHost,
+} from "./remote-link.js";
 import {
   byPriority,
   priorities,
@@ -240,7 +245,7 @@ function RepositoryPathInput({
   const [dismissed, setDismissed] = useState(false);
   const [active, setActive] = useState(-1);
   useEffect(() => {
-    if (!focused || (!value.startsWith("/") && !value.startsWith("~/"))) {
+    if (!focused || !/^(\/|~[\\/]|[A-Za-z]:[\\/])/.test(value)) {
       setSuggestions([]);
       return;
     }
@@ -1132,9 +1137,7 @@ export function App() {
                       title={item.repo}
                     >
                       <RepoBadge board={item} />
-                      <span className="truncate">
-                        {item.repo.split("/").at(-1)}
-                      </span>
+                      <span className="truncate">{repoName(item.repo)}</span>
                     </button>
                     <ul
                       aria-label="Card counts"
@@ -1191,7 +1194,8 @@ export function App() {
                       aria-current={pullsActive ? "page" : undefined}
                       className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${pullsActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
-                      <GitPullRequest size={13} aria-hidden="true" /> Pull requests
+                      <GitPullRequest size={13} aria-hidden="true" /> Pull
+                      requests
                     </button>
                   )}
                 </div>
@@ -1249,31 +1253,36 @@ export function App() {
           />
         </main>
       )}
-      {view === "pulls" && boardId && currentBoard && supportsPullRequests(currentBoard) && (
-        <main className="min-w-0 flex-1">
-          <header className="border-b border-border px-6 py-6 lg:px-10">
-            <h1 className="text-[27px] font-semibold tracking-[-.05em]">
-              Pull requests
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {currentBoard?.repo}
-            </p>
-          </header>
-          <PullRequests
-            boardId={boardId}
-            highlight={pullHighlight}
-            onOpenCard={(id) => {
-              openBoard(boardId);
-              setSelected(id);
-            }}
-          />
-        </main>
-      )}
+      {view === "pulls" &&
+        boardId &&
+        currentBoard &&
+        supportsPullRequests(currentBoard) && (
+          <main className="min-w-0 flex-1">
+            <header className="border-b border-border px-6 py-6 lg:px-10">
+              <h1 className="text-[27px] font-semibold tracking-[-.05em]">
+                Pull requests
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {currentBoard?.repo}
+              </p>
+            </header>
+            <PullRequests
+              boardId={boardId}
+              highlight={pullHighlight}
+              onOpenCard={(id) => {
+                openBoard(boardId);
+                setSelected(id);
+              }}
+            />
+          </main>
+        )}
       <main
         className="min-w-0 flex-1"
         hidden={
           view === "today" ||
-          (view === "pulls" && !!currentBoard && supportsPullRequests(currentBoard))
+          (view === "pulls" &&
+            !!currentBoard &&
+            supportsPullRequests(currentBoard))
         }
       >
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-6 lg:px-10">
@@ -1284,7 +1293,7 @@ export function App() {
             <h1 className="flex items-center gap-3 text-[27px] font-semibold tracking-[-.05em]">
               {currentBoard && <RepoBadge board={currentBoard} size={19} />}
               {currentBoard
-                ? currentBoard.repo.split("/").at(-1)
+                ? repoName(currentBoard.repo)
                 : "Choose a repository"}
               {currentBoard && (
                 <button
@@ -1816,7 +1825,7 @@ export function App() {
                               <div className="mt-5 flex items-center justify-between border-t border-border/70 pt-3 font-mono text-[10px] text-muted-foreground">
                                 <span className="flex min-w-0 items-center gap-1 truncate">
                                   <GitBranch size={11} className="shrink-0" />{" "}
-                                  {item.repo.split("/").at(-1)}
+                                  {repoName(item.repo)}
                                 </span>
                                 <span
                                   className="flex items-center gap-1"

@@ -4,6 +4,7 @@ import { Button } from "./components/ui/button";
 import { date } from "./api.js";
 import { formatCost } from "./usage.js";
 import { RepoBadge } from "./repo-badge.js";
+import { repoName } from "./repo-appearance.js";
 import {
   needsYourReview,
   reviewWaitLabels,
@@ -175,8 +176,7 @@ function CardList({
                   {card.title}
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
-                  {card.repo.split("/").at(-1)} · {label(card)}{" "}
-                  {date(card.updatedAt)}
+                  {repoName(card.repo)} · {label(card)} {date(card.updatedAt)}
                 </span>
               </span>
             </button>
@@ -209,7 +209,7 @@ function Capture({
     if (!title.trim()) return;
     if (!(await onCapture(board, title.trim()))) return;
     setTitle("");
-    setAdded(`Added to ${board.repo.split("/").at(-1)} Triage`);
+    setAdded(`Added to ${repoName(board.repo)} Triage`);
   };
   return (
     <form onSubmit={submit} className="mt-8">
@@ -235,7 +235,7 @@ function Capture({
         >
           {boards.map((item) => (
             <option key={item.id} value={item.id}>
-              {item.repo.split("/").at(-1)}
+              {repoName(item.repo)}
             </option>
           ))}
         </select>

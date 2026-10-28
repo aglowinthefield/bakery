@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
+import { command } from "./platform.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Board, Card, RepoBoard } from "./board.js";
@@ -32,7 +33,7 @@ const listFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid
 type Exec = { stdout: string; stderr: string };
 function run(bin: string, args: string[], cwd?: string, timeout = 60_000): Promise<Exec> {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, { cwd, timeout, maxBuffer: 16 * 1024 * 1024, encoding: "utf8", env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" } }, (error, stdout, stderr) => {
+    execFile(...command(bin, args), { cwd, timeout, maxBuffer: 16 * 1024 * 1024, encoding: "utf8", env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" } }, (error, stdout, stderr) => {
       if (error) {
         const code = (error as NodeJS.ErrnoException).code;
         const detail = code === "ENOENT" ? `${bin} is not installed or not on PATH` : (stderr || stdout || error.message).trim();
@@ -447,6 +448,6 @@ export class GitHubSync {
 
 /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name. */
 export function hasWorktrunk(wtBin: string): boolean {
-  try { return /^wt v\d/.test(execFileSync(wtBin, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
+  try { return /^wt v\d/.test(execFileSync(...command(wtBin, ["--version"]), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
   catch { return false; }
 }
