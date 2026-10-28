@@ -6,6 +6,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, parsePriority } from "./board.js";
+import { buildStats } from "./stats.js";
 import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
@@ -156,6 +157,18 @@ const server = createServer(async (req, res) => {
       // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
       send(res, 200, board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived")); return;
+    }
+    if (path === "/api/stats" && req.method === "GET") {
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const range = params.get("days") ?? "30";
+      const days = range === "all" ? null : Number(range);
+      if (days !== null && (!Number.isInteger(days) || days < 1 || days > 3650)) throw new Error("days must be a whole number from 1 to 3650, or all");
+      const repo = params.get("repo");
+      const visible = new Set(board.listBoards().map(item => item.repo));
+      if (repo && !visible.has(repo)) { send(res, 404, { error: "Board not found" }); return; }
+      const input = board.statsInput();
+      // Removed boards stay out, like the Today view.
+      send(res, 200, buildStats({ runs: input.runs.filter(item => visible.has(item.repo)), reviews: input.reviews.filter(item => visible.has(item.repo)), cards: input.cards.filter(item => visible.has(item.repo)) }, { days, repo })); return;
     }
     if (path === "/api/boards" && req.method === "POST") {
       const root = repoRoot((await body(req)).repo);
