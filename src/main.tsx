@@ -1,3 +1,4 @@
+import { BrandIcon } from "./brand-icon";
 import {
   Fragment,
   useEffect,
@@ -1250,9 +1251,7 @@ export function App() {
           className="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize hover:bg-primary/30 lg:block"
         />
         <div className="flex items-center gap-3 px-6 py-7">
-          <div className="grid size-9 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
-            <span className="text-xl leading-none">✳</span>
-          </div>
+          <BrandIcon />
           <span className="text-[18px] font-semibold tracking-[-.04em]">
             bakery<span className="text-primary">.</span>
           </span>
