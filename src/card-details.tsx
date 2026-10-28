@@ -213,6 +213,15 @@ export function CardDetails({
       ),
     }))
     .filter((item) => item.job || item.requested.length);
+  const hasReviews = reviewEntries.length > 0;
+  const hasAttempts = runs.length > 0;
+  useEffect(() => {
+    if (
+      (tab === "reviews" && !hasReviews) ||
+      (tab === "attempts" && !hasAttempts)
+    )
+      setTab("overview");
+  }, [tab, hasReviews, hasAttempts]);
   const changesRequested =
     card?.status === "review" &&
     currentComments.some(
@@ -483,16 +492,14 @@ export function CardDetails({
             {(
               [
                 ["overview", "Overview"],
-                [
-                  "reviews",
-                  `Reviews${reviewEntries.length ? ` (${reviewEntries.length})` : ""}`,
-                ],
-                [
-                  "attempts",
-                  `Attempts${runs.length ? ` (${runs.length})` : ""}`,
-                ],
+                ...(reviewEntries.length
+                  ? [["reviews", `Reviews (${reviewEntries.length})`]]
+                  : []),
+                ...(runs.length
+                  ? [["attempts", `Attempts (${runs.length})`]]
+                  : []),
                 ["details", "Details"],
-              ] as const
+              ] as [typeof tab, string][]
             ).map(([id, label]) => (
               <button
                 key={id}
@@ -563,7 +570,9 @@ export function CardDetails({
               )}
             </>
           )}
-          {tab === "reviews" && <ReviewHistory entries={reviewEntries} />}
+          {tab === "reviews" && reviewEntries.length > 0 && (
+            <ReviewHistory entries={reviewEntries} />
+          )}
           {tab === "attempts" &&
             (runs.length > 0 ? (
               <AttemptList key={card?.id} runs={runs} card={card} />
