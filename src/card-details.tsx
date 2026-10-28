@@ -3,7 +3,7 @@ import { Check, Copy, Maximize2, Minimize2, Square } from "lucide-react";
 import { api } from "./api.js";
 import { AgentBadge, AttemptList, CostBadge } from "./attempts.js";
 import { DiscussionPanel } from "./discussion.js";
-import { Markdown } from "./markdown-view.js";
+import { CardLinks, Markdown } from "./markdown-view.js";
 import { Button } from "./components/ui/button";
 import {
   Dialog,
@@ -81,7 +81,10 @@ export function CardDetails({
     "overview" | "reviews" | "attempts" | "discuss" | "details"
   >("overview");
   const [reply, setReply] = useState("");
-  useEffect(() => { setTab("overview"); setReply(""); }, [cardId]);
+  useEffect(() => {
+    setTab("overview");
+    setReply("");
+  }, [cardId]);
   const [sideWidth, setSideWidth] = useState(
     () => Number(localStorage.getItem("bakery-side-width")) || 900,
   );
@@ -276,811 +279,564 @@ export function CardDetails({
     }
   };
   return (
-    <Dialog
-      open={true}
-      modal={!side || expandedDetails || smallScreen}
-      onOpenChange={(open) => {
-        if (!open) {
-          onClose();
-          setExpandedDetails(false);
-        }
+    <CardLinks.Provider
+      value={{
+        open: onOpenCard,
+        title: (id) => boardCards.find((item) => item.id === id)?.title,
       }}
     >
-      <DialogContent
-        showOverlay={!side || expandedDetails || smallScreen}
-        overlayClassName={side ? "bg-black/25 backdrop-blur-none" : undefined}
-        style={
-          side && !expandedDetails
-            ? ({ "--card-width": `${sideWidth}px` } as CSSProperties)
-            : undefined
-        }
-        className={
-          expandedDetails
-            ? "left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none"
-            : side
-              ? "right-0 left-auto top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)]"
-              : "w-[min(94vw,750px)]"
-        }
+      <Dialog
+        open={true}
+        modal={!side || expandedDetails || smallScreen}
+        onOpenChange={(open) => {
+          if (!open) {
+            onClose();
+            setExpandedDetails(false);
+          }
+        }}
       >
-        {side && !expandedDetails && (
-          <div
-            role="separator"
-            aria-label="Resize card panel"
-            aria-orientation="vertical"
-            aria-valuenow={sideWidth}
-            tabIndex={0}
-            onPointerDown={(event) =>
-              event.currentTarget.setPointerCapture(event.pointerId)
-            }
-            onPointerMove={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                const width = Math.min(
-                  window.innerWidth - 80,
-                  Math.max(520, window.innerWidth - event.clientX),
-                );
-                setSideWidth(width);
-                localStorage.setItem("bakery-side-width", String(width));
+        <DialogContent
+          showOverlay={!side || expandedDetails || smallScreen}
+          overlayClassName={side ? "bg-black/25 backdrop-blur-none" : undefined}
+          style={
+            side && !expandedDetails
+              ? ({ "--card-width": `${sideWidth}px` } as CSSProperties)
+              : undefined
+          }
+          className={
+            expandedDetails
+              ? "left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none"
+              : side
+                ? "right-0 left-auto top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)]"
+                : "w-[min(94vw,750px)]"
+          }
+        >
+          {side && !expandedDetails && (
+            <div
+              role="separator"
+              aria-label="Resize card panel"
+              aria-orientation="vertical"
+              aria-valuenow={sideWidth}
+              tabIndex={0}
+              onPointerDown={(event) =>
+                event.currentTarget.setPointerCapture(event.pointerId)
               }
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
-                return;
-              event.preventDefault();
-              setSideWidth((previous) => {
-                const width = Math.min(
-                  window.innerWidth - 80,
-                  Math.max(
-                    520,
-                    previous + (event.key === "ArrowLeft" ? 32 : -32),
-                  ),
-                );
-                localStorage.setItem("bakery-side-width", String(width));
-                return width;
-              });
-            }}
-            className="absolute inset-y-0 left-0 hidden w-2 cursor-ew-resize bg-transparent hover:bg-primary/30 focus-visible:bg-primary/40 lg:block"
-          />
-        )}
-        <DialogTitle className="pr-7 text-xl font-semibold tracking-tight">
-          {card?.title}
-        </DialogTitle>
-        <DialogDescription className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="rounded bg-primary/10 px-2 py-1 uppercase tracking-wider text-primary">
-            {card?.status}
-          </span>{" "}
-          <span title={card?.repo}>
-            {card?.repo.split("/").filter(Boolean).pop()}
-          </span>
-        </DialogDescription>
-        {queue && (
-          <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-accent/30 px-3 py-2 text-xs">
-            <span
-              role="status"
-              aria-label="Review queue"
-              className="text-muted-foreground"
-            >
-              Reviewing{" "}
-              <strong className="font-mono text-foreground">
-                {queue.position} of {queue.total}
-              </strong>
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto"
-              onClick={queue.onNext}
-            >
-              {queue.position < queue.total ? "Next card" : "Finish"}
-            </Button>
-          </div>
-        )}
-        {card && (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {card && (
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                Priority
-                <select
-                  aria-label="Card priority"
-                  value={card.priority ?? 0}
-                  disabled={busy || card.status === "running"}
-                  title={
-                    card.status === "running"
-                      ? "Priority cannot change while a run is active"
-                      : "Higher priority Ready cards are picked up first"
-                  }
-                  onChange={(event) => {
-                    const priority = Number(event.target.value) as Priority;
-                    void action(() =>
-                      api<Card>(`/boards/${boardId}/cards/${card.id}`, {
-                        method: "PATCH",
-                        body: JSON.stringify({
-                          title: card.title,
-                          body: card.body,
-                          priority,
-                        }),
-                      }),
-                    );
-                  }}
-                  className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
-                >
-                  {priorities.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto"
-              onClick={() => setExpandedDetails((value) => !value)}
-            >
-              {expandedDetails ? (
-                <>
-                  <Minimize2 size={13} /> Exit full screen
-                </>
-              ) : (
-                <>
-                  <Maximize2 size={13} /> Expand
-                </>
-              )}
-            </Button>
-          </div>
-        )}
-        {mergeConflict && card?.id === mergeConflict.cardId && (
-          <MergeConflictPanel
-            conflict={mergeConflict}
-            onDismiss={() =>
-              void action(async () => {
-                await api(
-                  `/boards/${boardId}/cards/${mergeConflict.cardId}/conflict`,
-                  { method: "DELETE" },
-                );
-                onConflict(null);
-              })
-            }
-          />
-        )}
-        {card && mainRecovery && (
-          <MainReset
-            boardId={boardId}
-            main={mainRecovery}
-            onError={(message) => {
-              setError(message);
-              onError(message);
-            }}
-            onReset={(main) => {
-              setMainRecovery(main);
-              refresh();
-            }}
-          />
-        )}
-        {card &&
-          integration === "github-pr" &&
-          card.status === "done" &&
-          card.locallyMerged && (
-            <div className="mt-4 rounded-md border border-border p-3 text-xs">
-              <p>
-                Bakery merged this card into local main, not through a pull
-                request. Publish as PR pushes the approved work to bakery/
-                {card.id}, opens a pull request, and moves the card back to
-                Review until the PR merges.
-              </p>
-              <Button
-                className="mt-2"
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() =>
-                  action(async () => {
-                    const result = await api<{ main: MainRecovery | null }>(
-                      `/boards/${boardId}/cards/${card.id}/publish`,
-                      { method: "POST" },
-                    );
-                    setMainRecovery(result.main);
-                  })
+              onPointerMove={(event) => {
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  const width = Math.min(
+                    window.innerWidth - 80,
+                    Math.max(520, window.innerWidth - event.clientX),
+                  );
+                  setSideWidth(width);
+                  localStorage.setItem("bakery-side-width", String(width));
                 }
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                  return;
+                event.preventDefault();
+                setSideWidth((previous) => {
+                  const width = Math.min(
+                    window.innerWidth - 80,
+                    Math.max(
+                      520,
+                      previous + (event.key === "ArrowLeft" ? 32 : -32),
+                    ),
+                  );
+                  localStorage.setItem("bakery-side-width", String(width));
+                  return width;
+                });
+              }}
+              className="absolute inset-y-0 left-0 hidden w-2 cursor-ew-resize bg-transparent hover:bg-primary/30 focus-visible:bg-primary/40 lg:block"
+            />
+          )}
+          <DialogTitle className="pr-7 text-xl font-semibold tracking-tight">
+            {card?.title}
+          </DialogTitle>
+          <DialogDescription className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="rounded bg-primary/10 px-2 py-1 uppercase tracking-wider text-primary">
+              {card?.status}
+            </span>{" "}
+            <span title={card?.repo}>
+              {card?.repo.split("/").filter(Boolean).pop()}
+            </span>
+          </DialogDescription>
+          {queue && (
+            <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-accent/30 px-3 py-2 text-xs">
+              <span
+                role="status"
+                aria-label="Review queue"
+                className="text-muted-foreground"
               >
-                Publish as PR
+                Reviewing{" "}
+                <strong className="font-mono text-foreground">
+                  {queue.position} of {queue.total}
+                </strong>
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="ml-auto"
+                onClick={queue.onNext}
+              >
+                {queue.position < queue.total ? "Next card" : "Finish"}
               </Button>
             </div>
           )}
-        {card && (
-          <div
-            role="tablist"
-            aria-label="Card sections"
-            className="mt-5 flex gap-1 border-b border-border"
-          >
-            {(
-              [
-                ["overview", "Overview"],
-                ...(reviewEntries.length
-                  ? [["reviews", `Reviews (${reviewEntries.length})`]]
-                  : []),
-                ...(runs.length
-                  ? [["attempts", `Attempts (${runs.length})`]]
-                  : []),
-                ["discuss", "Discuss"],
-                ["details", "Details"],
-              ] as [typeof tab, string][]
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                id={`card-tab-${id}`}
-                aria-selected={tab === id}
-                aria-controls="card-tabpanel"
-                onClick={() => setTab(id)}
-                className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === id ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        <div
-          role="tabpanel"
-          id="card-tabpanel"
-          aria-labelledby={`card-tab-${tab}`}
-        >
-          {tab === "overview" && (
-            <>
-              {card?.body?.trim() ? (
-                <details open className="group mt-6">
-                  <summary className="cursor-pointer text-sm font-semibold">
-                    Description
-                  </summary>
-                  <Markdown
-                    source={card.body}
-                    className="mt-2 text-sm leading-6 text-foreground/80"
-                  />
-                </details>
-              ) : (
-                <p className="mt-6 text-sm leading-6 text-foreground/80">
-                  No description.
-                </p>
-              )}
-              {card &&
-                ["review", "done", "archived"].includes(card.status) &&
-                runs[0]?.status === "review" &&
-                runs[0].report && (
-                  <RunReport
-                    report={runs[0].report}
-                    runId={runs[0].id}
-                    planCreated={boardCards.some((item) =>
-                      item.body.includes(`Part of the plan from card ${card.id}:`),
-                    )}
-                    onCreatePlan={async (subtasks) => {
-                      const created = new Map<string, string>();
-                      try {
-                        for (const task of subtasks) {
-                          const made = await api<Card>(`/boards/${boardId}/cards`, {
-                            method: "POST",
-                            body: JSON.stringify({
-                              title: task.title,
-                              body: `${task.body}\n\nPart of the plan from card ${card.id}: ${card.title}`,
-                              idempotencyKey: `plan:${card.id}:${task.id}`,
-                              dependsOn: task.dependsOn.map((dep) => created.get(dep)),
-                            }),
-                          });
-                          created.set(task.id, made.id);
-                        }
-                        return true;
-                      } catch {
-                        return false;
-                      }
-                    }}
-                    onAddFollowUp={(index, title, body) =>
-                      api(`/boards/${boardId}/cards`, {
-                        method: "POST",
-                        body: JSON.stringify({
-                          title,
-                          body: `${body}\n\nFollow-up from card ${card.id}: ${card.title}`,
-                          idempotencyKey: `follow-up:${runs[0].id}:${index}`,
+          {card && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {card && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  Priority
+                  <select
+                    aria-label="Card priority"
+                    value={card.priority ?? 0}
+                    disabled={busy || card.status === "running"}
+                    title={
+                      card.status === "running"
+                        ? "Priority cannot change while a run is active"
+                        : "Higher priority Ready cards are picked up first"
+                    }
+                    onChange={(event) => {
+                      const priority = Number(event.target.value) as Priority;
+                      void action(() =>
+                        api<Card>(`/boards/${boardId}/cards/${card.id}`, {
+                          method: "PATCH",
+                          body: JSON.stringify({
+                            title: card.title,
+                            body: card.body,
+                            priority,
+                          }),
                         }),
-                      }).then(() => true, () => false)
-                    }
-                    findingsOnly={
-                      card.status === "review" &&
-                      currentReview?.files.length === 0
-                    }
-                    onCopyError={() =>
-                      setError(
-                        "Could not copy the report. Select its text to copy it manually.",
-                      )
-                    }
-                  />
-                )}
-              {card?.status === "review" &&
-                currentReview &&
-                runs[0]?.status === "review" &&
-                runs[0].report &&
-                !changesRequested &&
-                !approvalPending && (
-                  <form
-                    className="mt-4 space-y-2"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      const text = reply.trim();
-                      if (!text) return;
-                      void action(async () => {
-                        await api<ReviewComment>(
-                          `/boards/${boardId}/cards/${card.id}/comments`,
-                          {
-                            method: "POST",
-                            body: JSON.stringify({
-                              fingerprint: currentReview.fingerprint,
-                              path: "",
-                              line: 0,
-                              body: text,
-                            }),
-                          },
-                        );
-                        await api(
-                          `/boards/${boardId}/cards/${card.id}/request-changes`,
-                          {
-                            method: "POST",
-                            body: JSON.stringify({
-                              fingerprint: currentReview.fingerprint,
-                            }),
-                          },
-                        );
-                        await api(`/boards/${boardId}/cards/${card.id}/start`, {
-                          method: "POST",
-                        });
-                        setReply("");
-                      });
+                      );
                     }}
+                    className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
                   >
-                    <label className="block text-xs font-medium">
-                      Reply to the agent
-                      <textarea
-                        maxLength={1000}
-                        value={reply}
-                        onChange={(event) => setReply(event.target.value)}
-                        rows={3}
-                        placeholder="Answer its question or say what to change. Pi runs again with your reply."
-                        className="mt-2 w-full resize-y rounded-md border border-border bg-background p-2 text-sm"
-                      />
-                    </label>
-                    <Button
-                      size="sm"
-                      type="submit"
-                      disabled={
-                        busy ||
-                        !reply.trim() ||
-                        !settings ||
-                        currentComments.some(
-                          (item) =>
-                            item.runId === runs[0]?.id &&
-                            item.state === "draft",
-                        ) ||
-                        autoJobs.some((item) => item.state === "running")
-                      }
-                    >
-                      Send reply and run again
-                    </Button>
-                  </form>
-                )}
-              {card?.status === "failed" && runs[0]?.error && (
-                <div
-                  role="alert"
-                  className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm"
-                >
-                  <strong>Run failed</strong>
-                  <p className="mt-1 text-destructive">{runs[0].error}</p>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Inspect the latest attempt and its worktree below before
-                    retrying. No changes were merged from this run.
-                  </p>
-                </div>
+                    {priorities.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
-            </>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="ml-auto"
+                onClick={() => setExpandedDetails((value) => !value)}
+              >
+                {expandedDetails ? (
+                  <>
+                    <Minimize2 size={13} /> Exit full screen
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 size={13} /> Expand
+                  </>
+                )}
+              </Button>
+            </div>
           )}
-          {tab === "reviews" && reviewEntries.length > 0 && (
-            <ReviewHistory entries={reviewEntries} />
+          {mergeConflict && card?.id === mergeConflict.cardId && (
+            <MergeConflictPanel
+              conflict={mergeConflict}
+              onDismiss={() =>
+                void action(async () => {
+                  await api(
+                    `/boards/${boardId}/cards/${mergeConflict.cardId}/conflict`,
+                    { method: "DELETE" },
+                  );
+                  onConflict(null);
+                })
+              }
+            />
           )}
-          {tab === "attempts" &&
-            (runs.length > 0 ? (
-              <AttemptList key={card?.id} runs={runs} card={card} />
-            ) : (
-              <p className="mt-4 text-sm text-muted-foreground">
-                No attempts yet.
-              </p>
-            ))}
-          {tab === "discuss" && card && (
-            <DiscussionPanel
-              key={card.id}
+          {card && mainRecovery && (
+            <MainReset
               boardId={boardId}
-              cardId={card.id}
+              main={mainRecovery}
               onError={(message) => {
                 setError(message);
                 onError(message);
               }}
-            />
-          )}
-          {tab === "details" && (
-            <>
-              {card && integration === "github-pr" && (
-                <PullRequestLink
-                  onOpenPullRequest={
-                    card.prState === "OPEN" ? onOpenPullRequest : undefined
-                  }
-                  card={card}
-                  busy={busy}
-                  onSave={(url) =>
-                    action(() =>
-                      api<Card>(
-                        `/boards/${boardId}/cards/${card.id}/pull-request`,
-                        {
-                          method: "PUT",
-                          body: JSON.stringify({ url }),
-                        },
-                      ),
-                    )
-                  }
-                />
-              )}
-              {card && (
-                <Dependencies
-                  card={card}
-                  boardCards={boardCards}
-                  busy={busy}
-                  onOpenCard={onOpenCard}
-                  onChange={(path, method, input) =>
-                    void action(() =>
-                      api<Card>(`/boards/${boardId}/cards/${card.id}/${path}`, {
-                        method,
-                        body: input && JSON.stringify(input),
-                      }),
-                    )
-                  }
-                />
-              )}
-              {card && (
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>Card ID</span>
-                  <code className="select-all font-mono text-foreground">
-                    {card.id}
-                  </code>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label="Copy card ID"
-                    onClick={() => {
-                      void navigator.clipboard
-                        .writeText(card.id)
-                        .then(() => setCopiedCardId(card.id))
-                        .catch(() =>
-                          setError(
-                            "Could not copy the card ID. Select the ID above to copy it manually.",
-                          ),
-                        );
-                    }}
-                  >
-                    {copiedCardId === card.id ? (
-                      <>
-                        <Check size={13} /> Copied
-                      </>
-                    ) : (
-                      <>
-                        <Copy size={13} /> Copy ID
-                      </>
-                    )}
-                  </Button>
-                </div>
-              )}
-              {card?.idempotencyKey && (
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>Idempotency key</span>
-                  <code className="select-all break-all font-mono text-foreground">
-                    {card.idempotencyKey}
-                  </code>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-        <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-5">
-          {card && card.status !== "running" && (
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={() => {
-                onEdit(card);
-              }}
-            >
-              Edit card
-            </Button>
-          )}
-          {card?.status === "triage" && (
-            <Button
-              disabled={busy}
-              onClick={() =>
-                action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/status`, {
-                    method: "POST",
-                    body: JSON.stringify({ status: "ready" }),
-                  }),
-                )
-              }
-            >
-              Move to Ready
-            </Button>
-          )}
-          {card?.status === "ready" && runs.length === 0 && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() =>
-                action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/status`, {
-                    method: "POST",
-                    body: JSON.stringify({ status: "triage" }),
-                  }),
-                )
-              }
-            >
-              Move to Triage
-            </Button>
-          )}
-          {card && ["ready", "failed", "review"].includes(card.status) && (
-            <Button
-              disabled={
-                busy ||
-                !settings ||
-                (card.status === "review" &&
-                  (approvalPending ||
-                    autoJobs.some(
-                      (item) =>
-                        item.cardId === card.id && item.state === "running",
-                    ) ||
-                    currentComments.some(
-                      (item) =>
-                        item.runId === runs[0]?.id && item.state === "draft",
-                    )))
-              }
-              onClick={() => {
-                if (
-                  settings?.confirmRunStart &&
-                  !window.confirm(
-                    "Start Pi on this card? This run may use paid model tokens and can edit its Git worktree.",
-                  )
-                )
-                  return;
-                void action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/start`, {
-                    method: "POST",
-                  }),
-                );
-              }}
-            >
-              <span className="text-base">✳</span>{" "}
-              {mergeConflict && ["review", "failed"].includes(card.status)
-                ? "Fix conflict with Pi"
-                : runs.length
-                  ? "Run again"
-                  : "Start Pi run"}
-            </Button>
-          )}
-          {card?.status === "running" && runs[0] && (
-            <Button
-              variant="destructive"
-              disabled={busy}
-              onClick={() =>
-                action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/stop`, {
-                    method: "POST",
-                  }),
-                )
-              }
-            >
-              <Square size={13} /> Stop run
-            </Button>
-          )}
-          {card?.status === "review" && currentReview?.files.length === 0 && (
-            <Button
-              variant="outline"
-              disabled={
-                busy ||
-                approvalPending ||
-                autoJobs.some(
-                  (item) =>
-                    item.runId === runs[0]?.id && item.state === "running",
-                )
-              }
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "Accept this run's report and move the card to Done? The run changed no files, so nothing is merged or pushed.",
-                  )
-                )
-                  return;
-                void action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/accept-findings`, {
-                    method: "POST",
-                    body: JSON.stringify({
-                      fingerprint: currentReview.fingerprint,
-                    }),
-                  }),
-                );
-              }}
-            >
-              <Check size={13} /> Accept findings
-            </Button>
-          )}
-          {card?.status === "review" && currentReview?.files.length !== 0 && (
-            <Button
-              variant="outline"
-              disabled={
-                busy ||
-                !currentReview ||
-                changesRequested ||
-                // The open PR already holds this run's work; Approve returns once a newer run exists.
-                (integration === "github-pr" &&
-                  card.prState === "OPEN" &&
-                  !card.prOverrideUrl &&
-                  !!card.reviewWait) ||
-                autoJobs.some(
-                  (item) =>
-                    item.runId === runs[0]?.id && item.state === "running",
-                ) ||
-                currentComments.some(
-                  (item) =>
-                    item.runId === runs[0]?.id && item.state === "draft",
-                )
-              }
-              onClick={() => {
-                // A new PR's title and body are drafted from the repository's rules and edited in a dialog.
-                if (
-                  currentReview &&
-                  integration === "github-pr" &&
-                  card.prState !== "OPEN"
-                ) {
-                  setError("");
-                  setPrDialog(true);
-                  return;
-                }
-                if (
-                  !currentReview ||
-                  !window.confirm(
-                    integration === "github-pr" && card.prState === "OPEN"
-                      ? `Approve the reviewed diff and push it to pull request #${card.prNumber}? Bakery commits unignored files on bakery/${card.id} and pushes that branch to origin, which updates the open PR. The card is Done once the PR merges on GitHub.`
-                      : integration === "github-pr"
-                        ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
-                        : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
-                  )
-                )
-                  return;
-                onConflict(null);
-                void action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/approve`, {
-                    method: "POST",
-                    body: JSON.stringify({
-                      fingerprint: currentReview.fingerprint,
-                    }),
-                  }),
-                );
-              }}
-            >
-              {integration === "github-pr" && card.prState === "OPEN"
-                ? `Approve and update PR #${card.prNumber}`
-                : integration === "github-pr"
-                  ? "Approve and open PR"
-                  : "Approve and merge into local main"}
-            </Button>
-          )}
-          {card?.status === "review" && currentReview && (
-            <PullRequestDialog
-              boardId={boardId}
-              card={card}
-              fingerprint={currentReview.fingerprint}
-              open={prDialog}
-              busy={busy}
-              submitError={error}
-              onOpenChange={setPrDialog}
-              onSubmit={(title, body) => {
-                onConflict(null);
-                void action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/approve`, {
-                    method: "POST",
-                    body: JSON.stringify({
-                      fingerprint: currentReview.fingerprint,
-                      title,
-                      body,
-                    }),
-                  }),
-                ).then((ok) => {
-                  if (ok) setPrDialog(false);
-                });
+              onReset={(main) => {
+                setMainRecovery(main);
+                refresh();
               }}
             />
-          )}
-          {card?.status === "review" && !changesRequested && (
-            <Button
-              variant="outline"
-              disabled={
-                busy ||
-                !currentReview ||
-                approvalPending ||
-                currentComments.some(
-                  (item) =>
-                    item.state === "draft" &&
-                    item.runId === runs[0]?.id &&
-                    item.fingerprint !== currentReview?.fingerprint,
-                ) ||
-                !currentComments.some(
-                  (item) =>
-                    item.state === "draft" &&
-                    item.runId === runs[0]?.id &&
-                    item.fingerprint === currentReview?.fingerprint,
-                )
-              }
-              onClick={() => {
-                if (!currentReview) return;
-                void action(async () => {
-                  setComments(
-                    await api<ReviewComment[]>(
-                      `/boards/${boardId}/cards/${card.id}/request-changes`,
-                      {
-                        method: "POST",
-                        body: JSON.stringify({
-                          fingerprint: currentReview.fingerprint,
-                        }),
-                      },
-                    ),
-                  );
-                });
-              }}
-            >
-              Request changes
-            </Button>
-          )}
-          {changesRequested && (
-            <span className="self-center text-xs text-muted-foreground">
-              Changes requested. Run again when ready; Pi will receive your
-              feedback.
-            </span>
-          )}
-          {card?.status === "review" &&
-            currentReview &&
-            currentComments.some(
-              (item) =>
-                item.runId === runs[0]?.id &&
-                item.state === "draft" &&
-                item.fingerprint !== currentReview.fingerprint,
-            ) && (
-              <span className="self-center text-xs text-muted-foreground">
-                Remove draft comments on older diffs before submitting feedback.
-              </span>
-            )}
-          {card?.status === "review" && approvalPending && (
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "Withdraw the pending approval? The card's Git commits and worktree remain. You can revise the card and try again.",
-                  )
-                )
-                  return;
-                void action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/withdraw`, {
-                    method: "POST",
-                  }),
-                );
-              }}
-            >
-              Withdraw approval
-            </Button>
           )}
           {card &&
-            ["triage", "ready"].includes(card.status) &&
-            runs.length === 0 && (
+            integration === "github-pr" &&
+            card.status === "done" &&
+            card.locallyMerged && (
+              <div className="mt-4 rounded-md border border-border p-3 text-xs">
+                <p>
+                  Bakery merged this card into local main, not through a pull
+                  request. Publish as PR pushes the approved work to bakery/
+                  {card.id}, opens a pull request, and moves the card back to
+                  Review until the PR merges.
+                </p>
+                <Button
+                  className="mt-2"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() =>
+                    action(async () => {
+                      const result = await api<{ main: MainRecovery | null }>(
+                        `/boards/${boardId}/cards/${card.id}/publish`,
+                        { method: "POST" },
+                      );
+                      setMainRecovery(result.main);
+                    })
+                  }
+                >
+                  Publish as PR
+                </Button>
+              </div>
+            )}
+          {card && (
+            <div
+              role="tablist"
+              aria-label="Card sections"
+              className="mt-5 flex gap-1 border-b border-border"
+            >
+              {(
+                [
+                  ["overview", "Overview"],
+                  ...(reviewEntries.length
+                    ? [["reviews", `Reviews (${reviewEntries.length})`]]
+                    : []),
+                  ...(runs.length
+                    ? [["attempts", `Attempts (${runs.length})`]]
+                    : []),
+                  ["discuss", "Discuss"],
+                  ["details", "Details"],
+                ] as [typeof tab, string][]
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  id={`card-tab-${id}`}
+                  aria-selected={tab === id}
+                  aria-controls="card-tabpanel"
+                  onClick={() => setTab(id)}
+                  className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === id ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div
+            role="tabpanel"
+            id="card-tabpanel"
+            aria-labelledby={`card-tab-${tab}`}
+          >
+            {tab === "overview" && (
+              <>
+                {card?.body?.trim() ? (
+                  <details open className="group mt-6">
+                    <summary className="cursor-pointer text-sm font-semibold">
+                      Description
+                    </summary>
+                    <Markdown
+                      source={card.body}
+                      className="mt-2 text-sm leading-6 text-foreground/80"
+                    />
+                  </details>
+                ) : (
+                  <p className="mt-6 text-sm leading-6 text-foreground/80">
+                    No description.
+                  </p>
+                )}
+                {card &&
+                  ["review", "done", "archived"].includes(card.status) &&
+                  runs[0]?.status === "review" &&
+                  runs[0].report && (
+                    <RunReport
+                      report={runs[0].report}
+                      runId={runs[0].id}
+                      planCreated={boardCards.some((item) =>
+                        item.body.includes(
+                          `Part of the plan from card ${card.id}:`,
+                        ),
+                      )}
+                      onCreatePlan={async (subtasks) => {
+                        const created = new Map<string, string>();
+                        try {
+                          for (const task of subtasks) {
+                            const made = await api<Card>(
+                              `/boards/${boardId}/cards`,
+                              {
+                                method: "POST",
+                                body: JSON.stringify({
+                                  title: task.title,
+                                  body: `${task.body}\n\nPart of the plan from card ${card.id}: ${card.title}`,
+                                  idempotencyKey: `plan:${card.id}:${task.id}`,
+                                  dependsOn: task.dependsOn.map((dep) =>
+                                    created.get(dep),
+                                  ),
+                                }),
+                              },
+                            );
+                            created.set(task.id, made.id);
+                          }
+                          return true;
+                        } catch {
+                          return false;
+                        }
+                      }}
+                      onAddFollowUp={(index, title, body) =>
+                        api(`/boards/${boardId}/cards`, {
+                          method: "POST",
+                          body: JSON.stringify({
+                            title,
+                            body: `${body}\n\nFollow-up from card ${card.id}: ${card.title}`,
+                            idempotencyKey: `follow-up:${runs[0].id}:${index}`,
+                          }),
+                        }).then(
+                          () => true,
+                          () => false,
+                        )
+                      }
+                      findingsOnly={
+                        card.status === "review" &&
+                        currentReview?.files.length === 0
+                      }
+                      onCopyError={() =>
+                        setError(
+                          "Could not copy the report. Select its text to copy it manually.",
+                        )
+                      }
+                    />
+                  )}
+                {card?.status === "review" &&
+                  currentReview &&
+                  runs[0]?.status === "review" &&
+                  runs[0].report &&
+                  !changesRequested &&
+                  !approvalPending && (
+                    <form
+                      className="mt-4 space-y-2"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        const text = reply.trim();
+                        if (!text) return;
+                        void action(async () => {
+                          await api<ReviewComment>(
+                            `/boards/${boardId}/cards/${card.id}/comments`,
+                            {
+                              method: "POST",
+                              body: JSON.stringify({
+                                fingerprint: currentReview.fingerprint,
+                                path: "",
+                                line: 0,
+                                body: text,
+                              }),
+                            },
+                          );
+                          await api(
+                            `/boards/${boardId}/cards/${card.id}/request-changes`,
+                            {
+                              method: "POST",
+                              body: JSON.stringify({
+                                fingerprint: currentReview.fingerprint,
+                              }),
+                            },
+                          );
+                          await api(
+                            `/boards/${boardId}/cards/${card.id}/start`,
+                            {
+                              method: "POST",
+                            },
+                          );
+                          setReply("");
+                        });
+                      }}
+                    >
+                      <label className="block text-xs font-medium">
+                        Reply to the agent
+                        <textarea
+                          maxLength={1000}
+                          value={reply}
+                          onChange={(event) => setReply(event.target.value)}
+                          rows={3}
+                          placeholder="Answer its question or say what to change. Pi runs again with your reply."
+                          className="mt-2 w-full resize-y rounded-md border border-border bg-background p-2 text-sm"
+                        />
+                      </label>
+                      <Button
+                        size="sm"
+                        type="submit"
+                        disabled={
+                          busy ||
+                          !reply.trim() ||
+                          !settings ||
+                          currentComments.some(
+                            (item) =>
+                              item.runId === runs[0]?.id &&
+                              item.state === "draft",
+                          ) ||
+                          autoJobs.some((item) => item.state === "running")
+                        }
+                      >
+                        Send reply and run again
+                      </Button>
+                    </form>
+                  )}
+                {card?.status === "failed" && runs[0]?.error && (
+                  <div
+                    role="alert"
+                    className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm"
+                  >
+                    <strong>Run failed</strong>
+                    <p className="mt-1 text-destructive">{runs[0].error}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Inspect the latest attempt and its worktree below before
+                      retrying. No changes were merged from this run.
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+            {tab === "reviews" && reviewEntries.length > 0 && (
+              <ReviewHistory entries={reviewEntries} />
+            )}
+            {tab === "attempts" &&
+              (runs.length > 0 ? (
+                <AttemptList key={card?.id} runs={runs} card={card} />
+              ) : (
+                <p className="mt-4 text-sm text-muted-foreground">
+                  No attempts yet.
+                </p>
+              ))}
+            {tab === "discuss" && card && (
+              <DiscussionPanel
+                key={card.id}
+                boardId={boardId}
+                cardId={card.id}
+                onError={(message) => {
+                  setError(message);
+                  onError(message);
+                }}
+              />
+            )}
+            {tab === "details" && (
+              <>
+                {card && integration === "github-pr" && (
+                  <PullRequestLink
+                    onOpenPullRequest={
+                      card.prState === "OPEN" ? onOpenPullRequest : undefined
+                    }
+                    card={card}
+                    busy={busy}
+                    onSave={(url) =>
+                      action(() =>
+                        api<Card>(
+                          `/boards/${boardId}/cards/${card.id}/pull-request`,
+                          {
+                            method: "PUT",
+                            body: JSON.stringify({ url }),
+                          },
+                        ),
+                      )
+                    }
+                  />
+                )}
+                {card && (
+                  <Dependencies
+                    card={card}
+                    boardCards={boardCards}
+                    busy={busy}
+                    onOpenCard={onOpenCard}
+                    onChange={(path, method, input) =>
+                      void action(() =>
+                        api<Card>(
+                          `/boards/${boardId}/cards/${card.id}/${path}`,
+                          {
+                            method,
+                            body: input && JSON.stringify(input),
+                          },
+                        ),
+                      )
+                    }
+                  />
+                )}
+                {card && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>Card ID</span>
+                    <code className="select-all font-mono text-foreground">
+                      {card.id}
+                    </code>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label="Copy card ID"
+                      onClick={() => {
+                        void navigator.clipboard
+                          .writeText(card.id)
+                          .then(() => setCopiedCardId(card.id))
+                          .catch(() =>
+                            setError(
+                              "Could not copy the card ID. Select the ID above to copy it manually.",
+                            ),
+                          );
+                      }}
+                    >
+                      {copiedCardId === card.id ? (
+                        <>
+                          <Check size={13} /> Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={13} /> Copy ID
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )}
+                {card?.idempotencyKey && (
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>Idempotency key</span>
+                    <code className="select-all break-all font-mono text-foreground">
+                      {card.idempotencyKey}
+                    </code>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-5">
+            {card && card.status !== "running" && (
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  onEdit(card);
+                }}
+              >
+                Edit card
+              </Button>
+            )}
+            {card?.status === "triage" && (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  action(() =>
+                    api(`/boards/${boardId}/cards/${card.id}/status`, {
+                      method: "POST",
+                      body: JSON.stringify({ status: "ready" }),
+                    }),
+                  )
+                }
+              >
+                Move to Ready
+              </Button>
+            )}
+            {card?.status === "ready" && runs.length === 0 && (
               <Button
                 variant="outline"
                 disabled={busy}
@@ -1088,164 +844,435 @@ export function CardDetails({
                   action(() =>
                     api(`/boards/${boardId}/cards/${card.id}/status`, {
                       method: "POST",
-                      body: JSON.stringify({ status: "done" }),
+                      body: JSON.stringify({ status: "triage" }),
                     }),
                   )
                 }
               >
-                Mark done
+                Move to Triage
               </Button>
             )}
-          {card?.status === "done" && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() =>
-                action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/status`, {
-                    method: "POST",
-                    body: JSON.stringify({ status: "ready" }),
-                  }),
-                )
-              }
-            >
-              Reopen
-            </Button>
-          )}
-          {card?.status === "review" && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "Close this card without merging? Its worktree and branch stay, and Reopen brings it back.",
+            {card && ["ready", "failed", "review"].includes(card.status) && (
+              <Button
+                disabled={
+                  busy ||
+                  !settings ||
+                  (card.status === "review" &&
+                    (approvalPending ||
+                      autoJobs.some(
+                        (item) =>
+                          item.cardId === card.id && item.state === "running",
+                      ) ||
+                      currentComments.some(
+                        (item) =>
+                          item.runId === runs[0]?.id && item.state === "draft",
+                      )))
+                }
+                onClick={() => {
+                  if (
+                    settings?.confirmRunStart &&
+                    !window.confirm(
+                      "Start Pi on this card? This run may use paid model tokens and can edit its Git worktree.",
+                    )
                   )
-                )
-                  return;
-                void action(() =>
-                  api(`/boards/${boardId}/cards/${card.id}/close`, {
-                    method: "POST",
-                    body: "{}",
-                  }),
-                );
-              }}
-            >
-              Close without merging
-            </Button>
-          )}
-          {card?.status === "done" && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() =>
-                action(() =>
-                  api(`/boards/${boardId}/cards/archive`, {
-                    method: "POST",
-                    body: JSON.stringify({ cardIds: [card.id] }),
-                  }),
-                )
-              }
-            >
-              Archive
-            </Button>
-          )}
-          {card?.status === "archived" && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() =>
-                action(() =>
-                  api(`/boards/${boardId}/cards/unarchive`, {
-                    method: "POST",
-                    body: JSON.stringify({ cardIds: [card.id] }),
-                  }),
-                )
-              }
-            >
-              Restore to Done
-            </Button>
-          )}
-        </div>
-        {card?.status === "interrupted" && (
-          <div className="mt-4 rounded-lg border border-primary/30 bg-primary/10 p-3 text-xs text-primary">
-            <p>
-              The server restarted during this run. Inspect its worktree and
-              confirm the Pi process has stopped before releasing the card.
-            </p>
-            <Button
-              className="mt-3"
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "I inspected the worktree and confirmed the old Pi process has stopped. Release this card for retry?",
-                  )
-                )
+                    return;
                   void action(() =>
-                    api(`/boards/${boardId}/cards/${card.id}/resolve`, {
+                    api(`/boards/${boardId}/cards/${card.id}/start`, {
                       method: "POST",
-                      body: JSON.stringify({ acknowledged: true }),
                     }),
                   );
-              }}
-            >
-              Release for retry
-            </Button>
-          </div>
-        )}
-        {pushProgress &&
-          (pushing || (pushProgress.error && card?.status === "review")) && (
-            <PushProgressPanel progress={pushProgress} />
-          )}
-        {error && (
-          <p role="alert" className="mt-4 text-sm text-destructive">
-            {error}
-          </p>
-        )}
-        {card?.status === "review" && tab === "reviews" && (
-          <ReviewPanel
-            review={currentReview}
-            error={reviewError}
-            comments={currentComments}
-            runId={runs[0]?.id}
-            busy={busy}
-            stale={reviewStale}
-            onRefresh={() => setReviewRefresh((value) => value + 1)}
-            onAdd={(path, line, body) =>
-              action(async () => {
-                const saved = await api<ReviewComment>(
-                  `/boards/${boardId}/cards/${card.id}/comments`,
-                  {
-                    method: "POST",
-                    body: JSON.stringify({
-                      fingerprint: currentReview?.fingerprint,
-                      path,
-                      line,
-                      body,
+                }}
+              >
+                <span className="text-base">✳</span>{" "}
+                {mergeConflict && ["review", "failed"].includes(card.status)
+                  ? "Fix conflict with Pi"
+                  : runs.length
+                    ? "Run again"
+                    : "Start Pi run"}
+              </Button>
+            )}
+            {card?.status === "running" && runs[0] && (
+              <Button
+                variant="destructive"
+                disabled={busy}
+                onClick={() =>
+                  action(() =>
+                    api(`/boards/${boardId}/cards/${card.id}/stop`, {
+                      method: "POST",
                     }),
-                  },
-                );
-                setComments((previous) => [...previous, saved]);
-              })
-            }
-            onDelete={(id) =>
-              action(async () => {
-                await api(
-                  `/boards/${boardId}/cards/${card.id}/comments/${id}`,
-                  { method: "DELETE" },
-                );
-                setComments((previous) =>
-                  previous.filter((item) => item.id !== id),
-                );
-              })
-            }
-          />
-        )}
-      </DialogContent>
-    </Dialog>
+                  )
+                }
+              >
+                <Square size={13} /> Stop run
+              </Button>
+            )}
+            {card?.status === "review" && currentReview?.files.length === 0 && (
+              <Button
+                variant="outline"
+                disabled={
+                  busy ||
+                  approvalPending ||
+                  autoJobs.some(
+                    (item) =>
+                      item.runId === runs[0]?.id && item.state === "running",
+                  )
+                }
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "Accept this run's report and move the card to Done? The run changed no files, so nothing is merged or pushed.",
+                    )
+                  )
+                    return;
+                  void action(() =>
+                    api(`/boards/${boardId}/cards/${card.id}/accept-findings`, {
+                      method: "POST",
+                      body: JSON.stringify({
+                        fingerprint: currentReview.fingerprint,
+                      }),
+                    }),
+                  );
+                }}
+              >
+                <Check size={13} /> Accept findings
+              </Button>
+            )}
+            {card?.status === "review" && currentReview?.files.length !== 0 && (
+              <Button
+                variant="outline"
+                disabled={
+                  busy ||
+                  !currentReview ||
+                  changesRequested ||
+                  // The open PR already holds this run's work; Approve returns once a newer run exists.
+                  (integration === "github-pr" &&
+                    card.prState === "OPEN" &&
+                    !card.prOverrideUrl &&
+                    !!card.reviewWait) ||
+                  autoJobs.some(
+                    (item) =>
+                      item.runId === runs[0]?.id && item.state === "running",
+                  ) ||
+                  currentComments.some(
+                    (item) =>
+                      item.runId === runs[0]?.id && item.state === "draft",
+                  )
+                }
+                onClick={() => {
+                  // A new PR's title and body are drafted from the repository's rules and edited in a dialog.
+                  if (
+                    currentReview &&
+                    integration === "github-pr" &&
+                    card.prState !== "OPEN"
+                  ) {
+                    setError("");
+                    setPrDialog(true);
+                    return;
+                  }
+                  if (
+                    !currentReview ||
+                    !window.confirm(
+                      integration === "github-pr" && card.prState === "OPEN"
+                        ? `Approve the reviewed diff and push it to pull request #${card.prNumber}? Bakery commits unignored files on bakery/${card.id} and pushes that branch to origin, which updates the open PR. The card is Done once the PR merges on GitHub.`
+                        : integration === "github-pr"
+                          ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
+                          : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
+                    )
+                  )
+                    return;
+                  onConflict(null);
+                  void action(() =>
+                    api(`/boards/${boardId}/cards/${card.id}/approve`, {
+                      method: "POST",
+                      body: JSON.stringify({
+                        fingerprint: currentReview.fingerprint,
+                      }),
+                    }),
+                  );
+                }}
+              >
+                {integration === "github-pr" && card.prState === "OPEN"
+                  ? `Approve and update PR #${card.prNumber}`
+                  : integration === "github-pr"
+                    ? "Approve and open PR"
+                    : "Approve and merge into local main"}
+              </Button>
+            )}
+            {card?.status === "review" && currentReview && (
+              <PullRequestDialog
+                boardId={boardId}
+                card={card}
+                fingerprint={currentReview.fingerprint}
+                open={prDialog}
+                busy={busy}
+                submitError={error}
+                onOpenChange={setPrDialog}
+                onSubmit={(title, body) => {
+                  onConflict(null);
+                  void action(() =>
+                    api(`/boards/${boardId}/cards/${card.id}/approve`, {
+                      method: "POST",
+                      body: JSON.stringify({
+                        fingerprint: currentReview.fingerprint,
+                        title,
+                        body,
+                      }),
+                    }),
+                  ).then((ok) => {
+                    if (ok) setPrDialog(false);
+                  });
+                }}
+              />
+            )}
+            {card?.status === "review" && !changesRequested && (
+              <Button
+                variant="outline"
+                disabled={
+                  busy ||
+                  !currentReview ||
+                  approvalPending ||
+                  currentComments.some(
+                    (item) =>
+                      item.state === "draft" &&
+                      item.runId === runs[0]?.id &&
+                      item.fingerprint !== currentReview?.fingerprint,
+                  ) ||
+                  !currentComments.some(
+                    (item) =>
+                      item.state === "draft" &&
+                      item.runId === runs[0]?.id &&
+                      item.fingerprint === currentReview?.fingerprint,
+                  )
+                }
+                onClick={() => {
+                  if (!currentReview) return;
+                  void action(async () => {
+                    setComments(
+                      await api<ReviewComment[]>(
+                        `/boards/${boardId}/cards/${card.id}/request-changes`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({
+                            fingerprint: currentReview.fingerprint,
+                          }),
+                        },
+                      ),
+                    );
+                  });
+                }}
+              >
+                Request changes
+              </Button>
+            )}
+            {changesRequested && (
+              <span className="self-center text-xs text-muted-foreground">
+                Changes requested. Run again when ready; Pi will receive your
+                feedback.
+              </span>
+            )}
+            {card?.status === "review" &&
+              currentReview &&
+              currentComments.some(
+                (item) =>
+                  item.runId === runs[0]?.id &&
+                  item.state === "draft" &&
+                  item.fingerprint !== currentReview.fingerprint,
+              ) && (
+                <span className="self-center text-xs text-muted-foreground">
+                  Remove draft comments on older diffs before submitting
+                  feedback.
+                </span>
+              )}
+            {card?.status === "review" && approvalPending && (
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "Withdraw the pending approval? The card's Git commits and worktree remain. You can revise the card and try again.",
+                    )
+                  )
+                    return;
+                  void action(() =>
+                    api(`/boards/${boardId}/cards/${card.id}/withdraw`, {
+                      method: "POST",
+                    }),
+                  );
+                }}
+              >
+                Withdraw approval
+              </Button>
+            )}
+            {card &&
+              ["triage", "ready"].includes(card.status) &&
+              runs.length === 0 && (
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() =>
+                    action(() =>
+                      api(`/boards/${boardId}/cards/${card.id}/status`, {
+                        method: "POST",
+                        body: JSON.stringify({ status: "done" }),
+                      }),
+                    )
+                  }
+                >
+                  Mark done
+                </Button>
+              )}
+            {card?.status === "done" && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() =>
+                  action(() =>
+                    api(`/boards/${boardId}/cards/${card.id}/status`, {
+                      method: "POST",
+                      body: JSON.stringify({ status: "ready" }),
+                    }),
+                  )
+                }
+              >
+                Reopen
+              </Button>
+            )}
+            {card?.status === "review" && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "Close this card without merging? Its worktree and branch stay, and Reopen brings it back.",
+                    )
+                  )
+                    return;
+                  void action(() =>
+                    api(`/boards/${boardId}/cards/${card.id}/close`, {
+                      method: "POST",
+                      body: "{}",
+                    }),
+                  );
+                }}
+              >
+                Close without merging
+              </Button>
+            )}
+            {card?.status === "done" && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() =>
+                  action(() =>
+                    api(`/boards/${boardId}/cards/archive`, {
+                      method: "POST",
+                      body: JSON.stringify({ cardIds: [card.id] }),
+                    }),
+                  )
+                }
+              >
+                Archive
+              </Button>
+            )}
+            {card?.status === "archived" && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() =>
+                  action(() =>
+                    api(`/boards/${boardId}/cards/unarchive`, {
+                      method: "POST",
+                      body: JSON.stringify({ cardIds: [card.id] }),
+                    }),
+                  )
+                }
+              >
+                Restore to Done
+              </Button>
+            )}
+          </div>
+          {card?.status === "interrupted" && (
+            <div className="mt-4 rounded-lg border border-primary/30 bg-primary/10 p-3 text-xs text-primary">
+              <p>
+                The server restarted during this run. Inspect its worktree and
+                confirm the Pi process has stopped before releasing the card.
+              </p>
+              <Button
+                className="mt-3"
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "I inspected the worktree and confirmed the old Pi process has stopped. Release this card for retry?",
+                    )
+                  )
+                    void action(() =>
+                      api(`/boards/${boardId}/cards/${card.id}/resolve`, {
+                        method: "POST",
+                        body: JSON.stringify({ acknowledged: true }),
+                      }),
+                    );
+                }}
+              >
+                Release for retry
+              </Button>
+            </div>
+          )}
+          {pushProgress &&
+            (pushing || (pushProgress.error && card?.status === "review")) && (
+              <PushProgressPanel progress={pushProgress} />
+            )}
+          {error && (
+            <p role="alert" className="mt-4 text-sm text-destructive">
+              {error}
+            </p>
+          )}
+          {card?.status === "review" && tab === "reviews" && (
+            <ReviewPanel
+              review={currentReview}
+              error={reviewError}
+              comments={currentComments}
+              runId={runs[0]?.id}
+              busy={busy}
+              stale={reviewStale}
+              onRefresh={() => setReviewRefresh((value) => value + 1)}
+              onAdd={(path, line, body) =>
+                action(async () => {
+                  const saved = await api<ReviewComment>(
+                    `/boards/${boardId}/cards/${card.id}/comments`,
+                    {
+                      method: "POST",
+                      body: JSON.stringify({
+                        fingerprint: currentReview?.fingerprint,
+                        path,
+                        line,
+                        body,
+                      }),
+                    },
+                  );
+                  setComments((previous) => [...previous, saved]);
+                })
+              }
+              onDelete={(id) =>
+                action(async () => {
+                  await api(
+                    `/boards/${boardId}/cards/${card.id}/comments/${id}`,
+                    { method: "DELETE" },
+                  );
+                  setComments((previous) =>
+                    previous.filter((item) => item.id !== id),
+                  );
+                })
+              }
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+    </CardLinks.Provider>
   );
 }
 
@@ -1468,7 +1495,11 @@ function RunReport({
   /** Creates one Triage card per subtask, dependencies wired, in order; resolves false when any failed (a retry skips cards already made). */
   onCreatePlan: (subtasks: Subtask[]) => Promise<boolean>;
   /** Creates a Triage card for follow-up `index`; resolves false when it could not. */
-  onAddFollowUp: (index: number, title: string, body: string) => Promise<boolean>;
+  onAddFollowUp: (
+    index: number,
+    title: string,
+    body: string,
+  ) => Promise<boolean>;
   findingsOnly: boolean;
   onCopyError: () => void;
 }) {
@@ -1476,7 +1507,11 @@ function RunReport({
   const [added, setAdded] = useState<number[]>([]);
   const [planMade, setPlanMade] = useState(false);
   const [planFailed, setPlanFailed] = useState(false);
-  useEffect(() => { setAdded([]); setPlanMade(false); setPlanFailed(false); }, [runId]);
+  useEffect(() => {
+    setAdded([]);
+    setPlanMade(false);
+    setPlanFailed(false);
+  }, [runId]);
   const plan = parsePlan(report);
   const items = followUps(report);
   useEffect(() => {
@@ -1486,12 +1521,18 @@ function RunReport({
   }, [copied]);
   return (
     <section
-      aria-label={plan ? "Plan report" : findingsOnly ? "Findings" : "Agent report"}
+      aria-label={
+        plan ? "Plan report" : findingsOnly ? "Findings" : "Agent report"
+      }
       className="mt-6 rounded-md border border-border bg-accent/10 p-4"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">
-          {plan ? "Plan (no code changes)" : findingsOnly ? "Findings" : "Agent report"}
+          {plan
+            ? "Plan (no code changes)"
+            : findingsOnly
+              ? "Findings"
+              : "Agent report"}
         </h3>
         <Button
           size="sm"
@@ -1558,11 +1599,14 @@ function RunReport({
                   })
                 }
               >
-                {planMade || planCreated ? "Cards already created from this card" : `Create ${plan.subtasks.length} Triage cards`}
+                {planMade || planCreated
+                  ? "Cards already created from this card"
+                  : `Create ${plan.subtasks.length} Triage cards`}
               </Button>
               {planFailed && (
                 <p className="mt-2 text-xs text-destructive">
-                  Could not create every card. Try again; cards already made are kept.
+                  Could not create every card. Try again; cards already made are
+                  kept.
                 </p>
               )}
             </>
@@ -1576,16 +1620,21 @@ function RunReport({
           </h4>
           <ul className="mt-2 space-y-2">
             {items.map((item, index) => (
-              <li key={index} className="flex items-start justify-between gap-3 text-sm">
+              <li
+                key={index}
+                className="flex items-start justify-between gap-3 text-sm"
+              >
                 <span className="break-words">{item.title}</span>
                 <Button
                   size="sm"
                   variant="outline"
                   disabled={added.includes(index)}
                   onClick={() =>
-                    void onAddFollowUp(index, item.title, item.body).then((ok) => {
-                      if (ok) setAdded((previous) => [...previous, index]);
-                    })
+                    void onAddFollowUp(index, item.title, item.body).then(
+                      (ok) => {
+                        if (ok) setAdded((previous) => [...previous, index]);
+                      },
+                    )
                   }
                 >
                   {added.includes(index) ? "In Triage" : "Add to Triage"}
@@ -1600,8 +1649,14 @@ function RunReport({
 }
 
 /** Each attempt's agent review and the changes a person requested, newest attempt first. */
-function requestedChanges(job: AutoReviewJob): { path: string; line?: number; comment: string }[] {
-  try { return job.changes ? JSON.parse(job.changes) : []; } catch { return []; }
+function requestedChanges(
+  job: AutoReviewJob,
+): { path: string; line?: number; comment: string }[] {
+  try {
+    return job.changes ? JSON.parse(job.changes) : [];
+  } catch {
+    return [];
+  }
 }
 
 function ReviewHistory({
