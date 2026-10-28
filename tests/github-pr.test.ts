@@ -425,6 +425,14 @@ test("github-pr: with a PR template and a semantic-PR check, Approve drafts from
     assert.match(broken.problem, /ENOENT[\s\S]*Title must look like/);
     const fenced = await draftFor(f, card.id, fakeDrafter(f, "not json").path);
     assert.match(fenced.problem, /reply was not JSON/);
+    // A drafter that reads a skill file first sends a tool-call message before its reply; only the last one is the draft.
+    const reading = join(f.dir, "pi-reading"), line = (value: unknown) => JSON.stringify(value).replace(/'/g, "'\\''");
+    const reply = JSON.stringify({ title: "feat(web): add feature file", body: "Summary\n\n- Adds feature.txt." });
+    writeFileSync(reading, `#!/bin/sh\nprintf '%s\\n' '${line({ type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] } })}' '${line({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: reply }] } })}' '${line({ type: "agent_settled", aborted: false })}'\n`);
+    chmodSync(reading, 0o755);
+    const afterRead = await draftFor(f, card.id, reading);
+    assert.doesNotMatch(afterRead.problem, /did not finish/);
+    assert.equal(afterRead.title, "feat(web): add feature file");
   } finally { f.cleanup(); }
 });
 

@@ -112,7 +112,7 @@ export function draftPrompt(card: Card, run: Run, rules: PullRequestRules, patch
 /** The agent's {title, body}. Tolerates a ```json fence, since the draft is shown for editing, not trusted. */
 export function parseDraftReply(stream: string): { title: string; body: string } {
   let text: string;
-  try { text = settledReply(stream); }
+  try { text = settledReply(stream, { toolUse: true }); }
   catch (error) { throw new Error(`The drafting agent did not finish: ${(error as Error).message}`); }
   const json = text.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/, "$1");
   let answer: unknown;
