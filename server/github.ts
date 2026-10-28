@@ -210,7 +210,7 @@ const bakeryIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/b
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${body}\n\n<sub><img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery</sub>`); }
+  try { await github.comment(repo, number, `${body}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
