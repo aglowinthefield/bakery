@@ -628,8 +628,16 @@ export function App() {
     open: (_view: "today" | "board" | "pulls" | "stats") => {},
     create: () => {},
   });
+  const [leaderPending, setLeaderPending] = useState(false);
   useEffect(() => {
     let pendingG = 0;
+    let leaderTimer: ReturnType<typeof setTimeout> | undefined;
+    const setPendingG = (on: boolean) => {
+      clearTimeout(leaderTimer);
+      pendingG = on ? Date.now() : 0;
+      setLeaderPending(on);
+      if (on) leaderTimer = setTimeout(() => setPendingG(false), 1200);
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
@@ -654,7 +662,7 @@ export function App() {
       if (target?.closest("[role='dialog']")) return;
       const state = shortcutState.current;
       if (pendingG && Date.now() - pendingG < 1200) {
-        pendingG = 0;
+        setPendingG(false);
         const views = {
           t: "today",
           b: "board",
@@ -667,9 +675,9 @@ export function App() {
           return;
         }
       }
-      pendingG = 0;
+      setPendingG(false);
       if (key === "g") {
-        pendingG = Date.now();
+        setPendingG(true);
       } else if (key === "n") {
         if (!state.canCreate) return;
         event.preventDefault();
@@ -710,7 +718,10 @@ export function App() {
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      clearTimeout(leaderTimer);
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, []);
   const seenStatuses = useRef(new Map<string, Map<string, CountKey>>());
   const [selected, setSelected] = useState<string | null>(null);
@@ -2962,7 +2973,35 @@ export function App() {
           />
         </DialogContent>
       </Dialog>
-      {!showShortcuts && (
+      {!showShortcuts && leaderPending && (
+        <div
+          role="status"
+          aria-label="Go to"
+          className="fixed right-3 bottom-3 z-40 rounded-md border bg-card/60 px-3 py-2 text-xs backdrop-blur-md"
+        >
+          <div className="mb-1 text-muted-foreground">
+            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+              g
+            </kbd>{" "}
+            then…
+          </div>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            {shortcutList
+              .filter(([keys]) => keys.startsWith("g "))
+              .map(([keys, label]) => (
+                <Fragment key={keys}>
+                  <dt>
+                    <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+                      {keys.slice(2)}
+                    </kbd>
+                  </dt>
+                  <dd>{label.replace(/^Go to /, "")}</dd>
+                </Fragment>
+              ))}
+          </dl>
+        </div>
+      )}
+      {!showShortcuts && !leaderPending && (
         <button
           type="button"
           onClick={() => setShowShortcuts(true)}
