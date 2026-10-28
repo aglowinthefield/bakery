@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "./components/ui/dialog";
 import { followUps } from "./follow-ups.js";
+import { parsePlan, type Subtask } from "./plan.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
 import { PullRequestDialog } from "./pr-dialog.js";
 import {
@@ -549,6 +550,26 @@ export function CardDetails({
                   <RunReport
                     report={runs[0].report}
                     runId={runs[0].id}
+                    onCreatePlan={async (subtasks) => {
+                      const created = new Map<string, string>();
+                      try {
+                        for (const task of subtasks) {
+                          const made = await api<Card>(`/boards/${boardId}/cards`, {
+                            method: "POST",
+                            body: JSON.stringify({
+                              title: task.title,
+                              body: `${task.body}\n\nPart of the plan from card ${card.id}: ${card.title}`,
+                              idempotencyKey: `plan:${runs[0].id}:${task.id}`,
+                              dependsOn: task.dependsOn.map((dep) => created.get(dep)),
+                            }),
+                          });
+                          created.set(task.id, made.id);
+                        }
+                        return true;
+                      } catch {
+                        return false;
+                      }
+                    }}
                     onAddFollowUp={(index, title, body) =>
                       api(`/boards/${boardId}/cards`, {
                         method: "POST",
@@ -1432,11 +1453,14 @@ function RunReport({
   report,
   runId,
   onAddFollowUp,
+  onCreatePlan,
   findingsOnly,
   onCopyError,
 }: {
   report: string;
   runId: string;
+  /** Creates one Triage card per subtask, dependencies wired, in order; resolves false when any failed (a retry skips cards already made). */
+  onCreatePlan: (subtasks: Subtask[]) => Promise<boolean>;
   /** Creates a Triage card for follow-up `index`; resolves false when it could not. */
   onAddFollowUp: (index: number, title: string, body: string) => Promise<boolean>;
   findingsOnly: boolean;
@@ -1444,7 +1468,10 @@ function RunReport({
 }) {
   const [copied, setCopied] = useState(false);
   const [added, setAdded] = useState<number[]>([]);
-  useEffect(() => setAdded([]), [runId]);
+  const [planMade, setPlanMade] = useState(false);
+  const [planFailed, setPlanFailed] = useState(false);
+  useEffect(() => { setAdded([]); setPlanMade(false); setPlanFailed(false); }, [runId]);
+  const plan = parsePlan(report);
   const items = followUps(report);
   useEffect(() => {
     if (!copied) return;
@@ -1491,6 +1518,51 @@ function RunReport({
         source={report}
         className="mt-3 text-sm leading-6 text-foreground/80"
       />
+      {plan && (
+        <div className="mt-4 border-t border-border pt-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Plan
+          </h4>
+          {"error" in plan ? (
+            <p className="mt-2 text-sm text-destructive">{plan.error}</p>
+          ) : (
+            <>
+              <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm">
+                {plan.subtasks.map((task) => (
+                  <li key={task.id}>
+                    {task.title}
+                    {task.dependsOn.length > 0 && (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        (after {task.dependsOn.join(", ")})
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              <Button
+                className="mt-3"
+                size="sm"
+                variant="outline"
+                disabled={planMade}
+                onClick={() =>
+                  void onCreatePlan(plan.subtasks).then((ok) => {
+                    setPlanMade(ok);
+                    setPlanFailed(!ok);
+                  })
+                }
+              >
+                {planMade ? "Cards in Triage" : `Create ${plan.subtasks.length} Triage cards`}
+              </Button>
+              {planFailed && (
+                <p className="mt-2 text-xs text-destructive">
+                  Could not create every card. Try again; cards already made are kept.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
       {items.length > 0 && (
         <div className="mt-4 border-t border-border pt-3">
           <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
