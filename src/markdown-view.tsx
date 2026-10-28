@@ -1,13 +1,54 @@
-import { useMemo, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { parseMarkdown, type Block, type Inline } from "./markdown.js";
 import { highlightDiffCode, languageForPath } from "./review-diff.js";
 import { cn } from "./lib/utils";
+
+/** Lets a card id in rendered text become a chip that opens that card. */
+export const CardLinks = createContext<{
+  open: (id: string) => void;
+  title: (id: string) => string | undefined;
+} | null>(null);
+
+const cardId = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
+
+/** A short, clickable stand-in for a card's full id. */
+export function CardChip({ id }: { id: string }) {
+  const links = useContext(CardLinks);
+  const short = id.slice(0, 8);
+  const title = links?.title(id);
+  const className =
+    "mx-0.5 inline-flex items-center rounded border border-border bg-muted px-1.5 py-px align-baseline font-mono text-[0.85em] text-foreground/80";
+  if (!links) return <code className={className} title={id}>{short}</code>;
+  return (
+    <button
+      type="button"
+      title={title ? `${title} (${id})` : id}
+      className={`${className} hover:border-primary hover:text-primary`}
+      onClick={() => links.open(id)}
+    >
+      {short}
+    </button>
+  );
+}
+
+function withCardChips(text: string, key: number): ReactNode {
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(cardId)) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    parts.push(<CardChip key={`${key}-${match.index}`} id={match[0]} />);
+    last = match.index + match[0].length;
+  }
+  if (!parts.length) return text;
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
 
 function renderInline(nodes: Inline[]): ReactNode[] {
   return nodes.map((node, index) => {
     switch (node.type) {
       case "text":
-        return node.text;
+        return withCardChips(node.text, index);
       case "break":
         return <br key={index} />;
       case "code":
