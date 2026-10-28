@@ -30,7 +30,7 @@ export function UpdateNotice() {
   return (
     <div
       role="status"
-      className="fixed bottom-3 left-3 z-50 max-w-64 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground shadow-md"
+      className="fixed bottom-3 left-3 z-50 lg:bottom-20 max-w-64 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground shadow-md"
     >
       <span className="mr-2 inline-block size-1.5 animate-pulse rounded-full bg-status-review align-middle" />
       {text}
