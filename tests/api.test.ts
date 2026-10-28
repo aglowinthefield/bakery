@@ -133,8 +133,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 0 })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 5 })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 0 })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: -1 })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 100 })).status, 400);
+    const unlimited = await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: false, pickupConcurrency: 2, pickupDailyLimit: 0 });
+    assert.equal(unlimited.status, 200);
+    assert.equal(unlimited.data.pickupDailyLimit, 0);
+    assert.equal(unlimited.data.autoPickupNextAt, null);
     const pickup = await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 99 });
     assert.equal(pickup.data.autoPickupEnabled, true);
     assert.equal(pickup.data.pickupDailyLimit, 99);
