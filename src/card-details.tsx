@@ -515,10 +515,15 @@ export function CardDetails({
           )}
         </Button>
         {card?.body?.trim() ? (
-          <Markdown
-            source={card.body}
-            className="mt-6 text-sm leading-6 text-foreground/80"
-          />
+          <details open className="group mt-6">
+            <summary className="cursor-pointer text-sm font-semibold">
+              Description
+            </summary>
+            <Markdown
+              source={card.body}
+              className="mt-2 text-sm leading-6 text-foreground/80"
+            />
+          </details>
         ) : (
           <p className="mt-6 text-sm leading-6 text-foreground/80">
             No description.
@@ -533,6 +538,20 @@ export function CardDetails({
               findingsOnly={
                 card.status === "review" && currentReview?.files.length === 0
               }
+              exchanges={[...runs]
+                .reverse()
+                .map((run) => ({
+                  attempt: run.attempt,
+                  review: autoJobs.find(
+                    (job) =>
+                      job.runId === run.id && job.state !== "running",
+                  ),
+                  requested: currentComments.filter(
+                    (item) =>
+                      item.runId === run.id && item.state === "requested",
+                  ),
+                }))
+                .filter((item) => item.review?.details || item.requested.length)}
               onCopyError={() =>
                 setError(
                   "Could not copy the report. Select its text to copy it manually.",
@@ -1266,10 +1285,16 @@ function Dependencies({
 function RunReport({
   report,
   findingsOnly,
+  exchanges,
   onCopyError,
 }: {
   report: string;
   findingsOnly: boolean;
+  exchanges: {
+    attempt: number;
+    review?: AutoReviewJob;
+    requested: ReviewComment[];
+  }[];
   onCopyError: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1318,6 +1343,41 @@ function RunReport({
         source={report}
         className="mt-3 text-sm leading-6 text-foreground/80"
       />
+      {exchanges.length > 0 && (
+        <div className="mt-4 border-t border-border pt-3">
+          <h4 className="text-xs font-semibold">Review back and forth</h4>
+          <ol className="mt-2 space-y-3 text-xs">
+            {exchanges.map((item) => (
+              <li key={item.attempt}>
+                <div className="font-medium">Attempt {item.attempt}</div>
+                {item.review?.details && (
+                  <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+                    <span className="font-medium text-foreground/80">
+                      Agent review (
+                      {item.review.state === "merged"
+                        ? "merged"
+                        : "needs human review"}
+                      ):
+                    </span>{" "}
+                    {item.review.details}
+                  </p>
+                )}
+                {item.requested.map((comment) => (
+                  <p
+                    key={comment.id}
+                    className="mt-1 whitespace-pre-wrap text-muted-foreground"
+                  >
+                    <span className="font-medium text-foreground/80">
+                      Requested change on {comment.path}:{comment.line}:
+                    </span>{" "}
+                    {comment.body}
+                  </p>
+                ))}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </section>
   );
 }

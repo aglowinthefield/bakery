@@ -509,6 +509,8 @@ export function App() {
     };
   }, [repoPath, addingRepo, editingBoard]);
   const [cards, setCards] = useState<Card[]>([]);
+  /** The board whose cards `cards` holds; null until its first fetch lands, so an unloaded board is not shown as empty. */
+  const [loadedBoard, setLoadedBoard] = useState<string | null>(null);
   // Today is the landing page until you pick a board; the last choice persists.
   const [view, setView] = useState<"today" | "board" | "pulls" | "stats">(
     () => {
@@ -803,6 +805,7 @@ export function App() {
         if (!current) return;
         notifyNewReviews(boardId, next);
         setCards(next);
+        setLoadedBoard(boardId);
         setMergeConflicts(conflicts);
         setBoards(nextBoards);
         reopenCard(next);
@@ -1408,7 +1411,9 @@ export function App() {
         <div className="flex flex-wrap gap-x-7 gap-y-2 border-b border-border px-6 py-4 text-xs text-muted-foreground lg:px-10">
           <span>
             <strong className="mr-1 font-mono text-foreground">
-              {cards.filter((c) => c.status !== "archived").length}
+              {loadedBoard === boardId
+                ? cards.filter((c) => c.status !== "archived").length
+                : "…"}
             </strong>{" "}
             cards
           </span>
@@ -1585,7 +1590,14 @@ export function App() {
             </Button>
           </div>
         )}
-        <div className="overflow-x-auto p-6 lg:p-10">
+        {boardId && loadedBoard !== boardId && (
+          <p role="status" className="px-6 pt-6 text-sm text-muted-foreground lg:px-10">
+            Loading cards…
+          </p>
+        )}
+        <div
+          className={`overflow-x-auto p-6 lg:p-10 ${boardId && loadedBoard !== boardId ? "hidden" : ""}`}
+        >
           <div className="flex min-h-[500px] min-w-max gap-4">
             {columns.map((column) => {
               const sorted = byPriority(
