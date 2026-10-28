@@ -1147,7 +1147,10 @@ export function App() {
                 <div key={item.id} className="rounded-lg">
                   <div className="flex items-center rounded-lg hover:bg-accent/30">
                     <button
-                      onClick={() => toggleRepoOpen(item.id, open)}
+                      onClick={() => {
+                        toggleRepoOpen(item.id, open);
+                        if (!open) openBoard(item.id);
+                      }}
                       aria-expanded={open}
                       className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-[length:var(--text-sidebar)]"
                       title={item.repo}
