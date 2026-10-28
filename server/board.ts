@@ -67,6 +67,7 @@ const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
 type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "locallyMerged"> & { dependsOn: string; blocked: number; locallyMerged: number };
+export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number } & UsageFields;
@@ -112,6 +113,8 @@ export class Board {
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
+      CREATE TABLE IF NOT EXISTS discussion_messages (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, createdAt TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS discussion_messages_card ON discussion_messages(cardId, createdAt);
       CREATE TABLE IF NOT EXISTS card_dependencies (cardId TEXT NOT NULL REFERENCES cards(id), dependsOn TEXT NOT NULL REFERENCES cards(id), PRIMARY KEY (cardId, dependsOn));
       CREATE INDEX IF NOT EXISTS card_dependencies_parent ON card_dependencies(dependsOn);
       DELETE FROM card_dependencies WHERE cardId NOT IN (SELECT id FROM cards) OR dependsOn NOT IN (SELECT id FROM cards);
@@ -784,6 +787,14 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return unique.map(id => this.getCard(id)!);
+  }
+  listDiscussion(cardId: string): DiscussionMessage[] {
+    return this.db.prepare("SELECT * FROM discussion_messages WHERE cardId=? ORDER BY rowid").all(cardId) as DiscussionMessage[];
+  }
+  addDiscussionMessage(cardId: string, role: DiscussionMessage["role"], body: string): DiscussionMessage {
+    const message = { id: randomUUID(), cardId, role, body, createdAt: now() };
+    this.db.prepare("INSERT INTO discussion_messages(id, cardId, role, body, createdAt) VALUES (?, ?, ?, ?, ?)").run(message.id, cardId, role, body, message.createdAt);
+    return message;
   }
   listReviewComments(cardId: string): ReviewComment[] {
     return this.db.prepare("SELECT * FROM review_comments WHERE cardId=? ORDER BY createdAt, id").all(cardId) as ReviewComment[];
