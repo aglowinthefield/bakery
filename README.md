@@ -44,7 +44,7 @@ npm run dev
 
 Open http://127.0.0.1:5173.
 
-To run a single production server instead, run `npm run build && npm start` and open http://127.0.0.1:4317.
+To run a single production server instead, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317.
 
 Then:
 
