@@ -515,10 +515,15 @@ export function CardDetails({
           )}
         </Button>
         {card?.body?.trim() ? (
-          <Markdown
-            source={card.body}
-            className="mt-6 text-sm leading-6 text-foreground/80"
-          />
+          <details open className="group mt-6">
+            <summary className="cursor-pointer text-sm font-semibold">
+              Description
+            </summary>
+            <Markdown
+              source={card.body}
+              className="mt-2 text-sm leading-6 text-foreground/80"
+            />
+          </details>
         ) : (
           <p className="mt-6 text-sm leading-6 text-foreground/80">
             No description.
