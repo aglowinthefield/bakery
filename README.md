@@ -44,6 +44,8 @@ npm run dev
 
 Open http://127.0.0.1:5173.
 
+`npm run dev` runs the server under a supervisor that owns port 4317 (the server itself listens on 14317) and reloads it when code changes. While the server restarts, page loads on 4317 get a static status page with elapsed and typical restart time, which reloads when the server is back.
+
 To run a single production server instead, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317.
 
 Then:

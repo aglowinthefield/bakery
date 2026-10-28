@@ -427,7 +427,7 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
+server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
   // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
   // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
   for (const item of board.listBoards().filter(item => item.githubMainProtected === null && item.remoteUrl))
