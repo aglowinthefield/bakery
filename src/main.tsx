@@ -1650,6 +1650,7 @@ export function App() {
           </span>
         </div>
         {currentBoard?.autoPickupEnabled &&
+          currentBoard.pickupDailyLimit > 0 &&
           currentBoard.autoPickupStarts >= currentBoard.pickupDailyLimit && (
             <div
               role="alert"
@@ -1692,9 +1693,29 @@ export function App() {
         {currentBoard?.autoPickupError && (
           <div
             role="alert"
-            className="mx-6 mt-5 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive lg:mx-10"
+            className="mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive lg:mx-10"
           >
-            Auto pickup paused: {currentBoard.autoPickupError}.
+            <span>Auto pickup paused: {currentBoard.autoPickupError}.</span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                const target = currentBoard;
+                void action(async () => {
+                  const updated = await api<Board>(`/boards/${target.id}/settings`, {
+                    method: "PATCH",
+                    body: JSON.stringify({
+                      autoPickupEnabled: true,
+                      pickupConcurrency: target.pickupConcurrency,
+                    }),
+                  });
+                  updateBoard(updated);
+                });
+              }}
+            >
+              Resume auto pickup
+            </Button>
           </div>
         )}
         {currentBoard?.integration === "github-pr" &&
@@ -2686,10 +2707,10 @@ export function App() {
                   onChange={(event) => {
                     const limit = Number(event.target.value);
                     if (
-                      limit > pickupBoard.pickupDailyLimit &&
+                      (limit === 0 || limit > pickupBoard.pickupDailyLimit) &&
                       pickupBoard.autoPickupEnabled &&
                       !window.confirm(
-                        `Raise automatic starts to ${limit} per 24 hours for ${pickupBoard.repo}? Ready cards may start immediately and spend model tokens.`,
+                        `Raise automatic starts to ${limit === 0 ? "no limit" : `${limit} per 24 hours`} for ${pickupBoard.repo}? Ready cards may start immediately and spend model tokens.`,
                       )
                     )
                       return;
@@ -2710,6 +2731,7 @@ export function App() {
                   }}
                   className="rounded-md border border-border bg-background px-2 py-1"
                 >
+                  <option value={0}>No limit</option>
                   {Array.from({ length: 99 }, (_, index) => index + 1).map(
                     (limit) => (
                       <option key={limit} value={limit}>
@@ -2720,8 +2742,9 @@ export function App() {
                 </select>
               </label>
               <p className="mt-2 text-xs text-muted-foreground">
-                {pickupBoard.autoPickupStarts} / {pickupBoard.pickupDailyLimit}{" "}
-                starts in the rolling day.
+                {pickupBoard.pickupDailyLimit === 0
+                  ? `${pickupBoard.autoPickupStarts} starts in the rolling day (no limit).`
+                  : `${pickupBoard.autoPickupStarts} / ${pickupBoard.pickupDailyLimit} starts in the rolling day.`}
                 {pickupBoard.autoPickupNextAt &&
                   ` Next slot around ${date(pickupBoard.autoPickupNextAt)}.`}
               </p>
@@ -2764,6 +2787,7 @@ export function App() {
                 waits; running work and manual starts continue.
               </p>
               {pickupBoard.autoPickupEnabled &&
+                pickupBoard.pickupDailyLimit > 0 &&
                 pickupBoard.autoPickupStarts >=
                   pickupBoard.pickupDailyLimit && (
                   <Button
@@ -2784,7 +2808,7 @@ export function App() {
                   if (
                     enable &&
                     !window.confirm(
-                      `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours. Ready cards may start immediately.`,
+                      `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
                     )
                   )
                     return;

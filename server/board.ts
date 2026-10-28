@@ -20,7 +20,7 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoar
   autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
   autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels),
-  autoPickupNextAt: starts.length >= row.pickupDailyLimit
+  autoPickupNextAt: row.pickupDailyLimit > 0 && starts.length >= row.pickupDailyLimit
     ? new Date(Date.parse(starts[starts.length - row.pickupDailyLimit]) + 86_400_000).toISOString() : null,
   pickupCostBudget: row.pickupCostBudget, cost24h, integration: row.integration, integrationError: row.integrationError,
   integrationChosen: row.integrationChosen !== 0, githubMainProtected: row.githubMainProtected === null ? null : row.githubMainProtected !== 0, integrationNote: row.integrationNote,
@@ -473,7 +473,7 @@ export class Board {
     if (!current) throw new Error("Board not found");
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Auto-pickup concurrency must be between 1 and 4");
     const limit = dailyLimit ?? current.pickupDailyLimit;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 99) throw new Error("Auto-pickup daily start limit must be between 1 and 99");
+    if (!Number.isSafeInteger(limit) || limit < 0 || limit > 99) throw new Error("Auto-pickup daily start limit must be 0 (no limit) or between 1 and 99");
     const budget = costBudget === undefined ? current.pickupCostBudget : costBudget;
     if (budget !== null && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0.01 || budget > 10_000))
       throw new Error("Auto-pickup daily cost budget must be off or between $0.01 and $10,000");
@@ -486,7 +486,7 @@ export class Board {
     try {
       const board = this.getBoard(id);
       if (!board) throw new Error("Board not found");
-      if (!board.autoPickupEnabled || board.autoPickupStarts < board.pickupDailyLimit) throw new Error("Auto-pickup start limit is not currently reached on this enabled board");
+      if (!board.autoPickupEnabled || board.pickupDailyLimit === 0 || board.autoPickupStarts < board.pickupDailyLimit) throw new Error("Auto-pickup start limit is not currently reached on this enabled board");
       // A rowid boundary counts a claim even when it shares the reset's millisecond.
       const last = (this.db.prepare("SELECT COALESCE(MAX(rowid), 0) AS id FROM runs").get() as { id: number }).id;
       this.db.prepare("UPDATE boards SET autoPickupResetRunRowid=? WHERE id=?").run(last, id);
@@ -534,7 +534,7 @@ export class Board {
   listAutoPickupCandidates(): { card: Card; board: RepoBoard }[] {
     const result: { card: Card; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
-      if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached || repoBoard.integrationError) continue;
+      if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || (repoBoard.pickupDailyLimit > 0 && repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError) continue;
       const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY priority DESC, createdAt, rowid").all(repoBoard.repo) as { id: string }[];
       // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
       result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card)));
@@ -959,7 +959,7 @@ export class Board {
       if (repoBoard?.autoPickupEnabled && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
         throw new Error(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
-        this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
+        (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       const id = randomUUID(), sessionId = `bakery-${cardId}`;
