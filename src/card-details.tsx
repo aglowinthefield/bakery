@@ -537,6 +537,10 @@ export function CardDetails({
           >
             {tab === "overview" && (
               <>
+                {card?.status === "running" &&
+                  runs[0]?.status === "running" && (
+                    <LiveStatus run={runs[0]} turns={card.turns} />
+                  )}
                 {card?.body?.trim() ? (
                   <details open className="group mt-6">
                     <summary className="cursor-pointer text-sm font-semibold">
@@ -1358,6 +1362,53 @@ function PullRequestLink({
         </Button>
       </form>
     </div>
+  );
+}
+
+/** The agent's latest sentence of narration, trimmed for a one-line status. */
+export function latestNarration(report: string | null): string {
+  const lines = (report ?? "")
+    .split("\n")
+    .map((line) => line.replace(/^[\s>*#-]+|[*_`]/g, "").trim())
+    .filter(Boolean);
+  const last = lines.at(-1) ?? "";
+  const sentences = last.split(/(?<=[.!?])\s+/);
+  const text = sentences.filter(Boolean).at(-1) ?? last;
+  return text.length > 180 ? `${text.slice(0, 177)}…` : text;
+}
+
+function LiveStatus({ run, turns }: { run: Run; turns: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const seconds = Math.max(
+    0,
+    Math.round((now - Date.parse(run.startedAt)) / 1000),
+  );
+  const elapsed =
+    seconds >= 60
+      ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+      : `${seconds}s`;
+  const narration = latestNarration(run.report);
+  return (
+    <section
+      aria-label="Live status"
+      className="mt-6 rounded-md border border-border bg-accent/10 px-4 py-3 text-sm"
+    >
+      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span className="font-semibold uppercase tracking-wider">
+          Working now
+        </span>
+        <span>
+          {elapsed} · {turns} {turns === 1 ? "turn" : "turns"}
+        </span>
+      </div>
+      <p className="mt-1 leading-6 text-foreground/80">
+        {narration || "Starting up…"}
+      </p>
+    </section>
   );
 }
 
