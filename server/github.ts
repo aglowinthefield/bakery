@@ -200,13 +200,16 @@ export class GitHub {
   }
 }
 
+// Bakery's repo is public, so GitHub can render the icon from main.
+const bakeryIconUrl = "https://raw.githubusercontent.com/aglowinthefield/bakery/main/public/icons/sprinkle_donut.png";
+
 /**
  * Bakery comments on its PRs at each turning point (sent back for CI, fix pushed, gave up, update pushed) so
  * reviewers can see what the automation did. A comment that fails to post never blocks the work; it is logged.
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${body}\n\n<sub>Posted by Bakery.</sub>`); }
+  try { await github.comment(repo, number, `${body}\n\n<sub><img src="${bakeryIconUrl}" width="16" height="16" alt="" /> Posted by Bakery</sub>`); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
