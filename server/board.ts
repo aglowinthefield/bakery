@@ -617,6 +617,10 @@ export class Board {
     this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
       .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", runId);
   }
+  /** What a running review is doing now; shown in the Reviews tab until it finishes. */
+  setAutoReviewProgress(runId: string, details: string): void {
+    this.db.prepare("UPDATE auto_review_jobs SET details=? WHERE runId=? AND state='running'").run(details, runId);
+  }
   /** How many times the agent reviewer has sent this card back to its implementer. */
   reviewerSendBacks(cardId: string): number {
     return (this.db.prepare("SELECT COUNT(*) AS n FROM auto_review_jobs WHERE cardId=? AND changes<>''").get(cardId) as { n: number }).n;
