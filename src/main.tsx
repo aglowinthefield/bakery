@@ -619,6 +619,96 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const shortcutState = useRef({
+    canCreate: false,
+    open: (_view: "today" | "board" | "pulls" | "stats") => {},
+    create: () => {},
+  });
+  useEffect(() => {
+    let pendingG = 0;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey
+      )
+        return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "input, textarea, select, [contenteditable=''], [contenteditable='true']",
+        )
+      )
+        return;
+      const key = event.key;
+      if (key === "?") {
+        event.preventDefault();
+        setShowShortcuts((open) => !open);
+        return;
+      }
+      if (target?.closest("[role='dialog']")) return;
+      const state = shortcutState.current;
+      if (pendingG && Date.now() - pendingG < 1200) {
+        pendingG = 0;
+        const views = {
+          t: "today",
+          b: "board",
+          p: "pulls",
+          s: "stats",
+        } as const;
+        if (key in views) {
+          event.preventDefault();
+          state.open(views[key as keyof typeof views]);
+          return;
+        }
+      }
+      pendingG = 0;
+      if (key === "g") {
+        pendingG = Date.now();
+      } else if (key === "n") {
+        if (!state.canCreate) return;
+        event.preventDefault();
+        state.create();
+      } else if ("jkhl".includes(key) && key.length === 1) {
+        const tiles = Array.from(
+          document.querySelectorAll<HTMLElement>("[data-card-tile]"),
+        );
+        if (!tiles.length) return;
+        event.preventDefault();
+        const current = tiles.indexOf(document.activeElement as HTMLElement);
+        if (key === "j" || key === "k") {
+          const step = key === "j" ? 1 : -1;
+          const next =
+            current < 0
+              ? step > 0
+                ? 0
+                : tiles.length - 1
+              : Math.min(tiles.length - 1, Math.max(0, current + step));
+          tiles[next].focus();
+          return;
+        }
+        const lanes: HTMLElement[][] = [];
+        for (const tile of tiles) {
+          const last = lanes[lanes.length - 1];
+          if (last && last[0].dataset.cardTile === tile.dataset.cardTile)
+            last.push(tile);
+          else lanes.push([tile]);
+        }
+        if (current < 0) {
+          tiles[0].focus();
+          return;
+        }
+        const lane = lanes.findIndex((group) => group.includes(tiles[current]));
+        const row = lanes[lane].indexOf(tiles[current]);
+        const nextLane = lanes[lane + (key === "l" ? 1 : -1)];
+        if (nextLane) nextLane[Math.min(row, nextLane.length - 1)].focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const seenStatuses = useRef(new Map<string, Map<string, CountKey>>());
   const [selected, setSelected] = useState<string | null>(null);
   // The card this tab had open before a reload; reopened once the first poll finds it.
@@ -715,6 +805,16 @@ export function App() {
     setSelected(null);
     setCards([]);
     setMergeConflicts([]);
+  };
+  shortcutState.current = {
+    canCreate: !!boardId && view === "board",
+    open: (next) => {
+      if (next === "today") openToday();
+      else if (next === "stats") openStats();
+      else if (boardId)
+        next === "pulls" ? openPulls(boardId) : openBoard(boardId);
+    },
+    create: () => setCreating(true),
   };
   const [pullHighlight, setPullHighlight] = useState<number | null>(null);
   const openPulls = (id: string, highlight: number | null = null) => {
@@ -1928,6 +2028,7 @@ export function App() {
                                 setDragging({ card: item, targets });
                               }}
                               onDragEnd={endDrag}
+                              data-card-tile={item.status}
                               data-activity={activity ?? undefined}
                               data-turn={
                                 needsYourReview(item) ? "yours" : undefined
@@ -2819,6 +2920,37 @@ export function App() {
           />
         </DialogContent>
       </Dialog>
+      <Dialog open={showShortcuts} onOpenChange={setShowShortcuts}>
+        <DialogContent
+          className="bg-card/80 backdrop-blur-md"
+          overlayClassName="bg-black/40"
+          aria-label="Keyboard shortcuts"
+        >
+          <DialogTitle className="text-lg font-semibold tracking-tight">
+            Keyboard shortcuts
+          </DialogTitle>
+          <DialogDescription className="mt-1 text-sm text-muted-foreground">
+            Shortcuts are off while you type in a field.
+          </DialogDescription>
+          <dl className="mt-5 grid grid-cols-[auto_1fr] items-center gap-x-6 gap-y-2 text-sm">
+            {shortcutList.map(([keys, label]) => (
+              <Fragment key={label}>
+                <dt className="flex gap-1">
+                  {keys.split(" ").map((part, index) => (
+                    <kbd
+                      key={index}
+                      className="rounded border border-border bg-background/70 px-1.5 py-0.5 font-mono text-xs"
+                    >
+                      {part}
+                    </kbd>
+                  ))}
+                </dt>
+                <dd>{label}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </DialogContent>
+      </Dialog>
       {detailBoardId && selected && (
         <CardDetails
           key={selected}
@@ -3014,6 +3146,19 @@ function PriorityBadge({ priority }: { priority: Priority }) {
     </span>
   );
 }
+const shortcutList: [string, string][] = [
+  ["n", "New card"],
+  ["j k", "Next / previous card"],
+  ["h l", "Card in previous / next lane"],
+  ["Enter", "Open focused card"],
+  ["/", "Search cards"],
+  ["g t", "Go to Today"],
+  ["g b", "Go to Board"],
+  ["g p", "Go to Pull requests"],
+  ["g s", "Go to Statistics"],
+  ["⌘ Enter", "Create or save card in the form"],
+  ["?", "Show or hide this cheat sheet"],
+];
 function CardForm({
   onSubmit,
   busy,
@@ -3037,7 +3182,16 @@ function CardForm({
   const input =
     "w-full rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary";
   return (
-    <form onSubmit={submit} className="mt-6 space-y-5">
+    <form
+      onSubmit={submit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          event.currentTarget.requestSubmit();
+        }
+      }}
+      className="mt-6 space-y-5"
+    >
       <label className="block text-xs font-medium">
         Title
         <input
