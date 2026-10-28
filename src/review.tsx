@@ -40,6 +40,37 @@ function initialDiffStyle(): DiffStyle {
 import { themeType } from "./themes.js";
 import type { ReviewComment, ReviewDiff, MergeConflict } from "./model.js";
 
+/** A comment on the change as a whole, for feedback that does not belong to one line. */
+function GeneralCommentForm({ busy, onAdd }: { busy: boolean; onAdd: (body: string) => Promise<boolean> }) {
+  const [text, setText] = useState("");
+  return (
+    <form
+      className="mt-4 space-y-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onAdd(text.trim()).then((ok) => {
+          if (ok) setText("");
+        });
+      }}
+    >
+      <label className="block text-xs font-medium">
+        General comment
+        <textarea
+          maxLength={1000}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          rows={2}
+          placeholder="Feedback on the change as a whole"
+          className="mt-2 w-full resize-y rounded-md border border-border bg-background p-2 text-sm"
+        />
+      </label>
+      <Button size="sm" disabled={busy || !text.trim()} type="submit">
+        Add general comment
+      </Button>
+    </form>
+  );
+}
+
 export function ReviewPanel({
   review,
   error,
@@ -217,6 +248,9 @@ export function ReviewPanel({
             </div>
           </>
         ))}
+      {review && runId && (
+        <GeneralCommentForm busy={busy} onAdd={(body) => onAdd("", 0, body)} />
+      )}
       {comments.length > 0 && (
         <section
           aria-label="Review feedback"
@@ -237,18 +271,21 @@ export function ReviewPanel({
                 >
                   <div className="flex flex-wrap items-center gap-2 font-mono text-muted-foreground">
                     <span className="break-all">
-                      {comment.path}:
-                      {comment.fileLine ?? `diff row ${comment.line}`}
+                      {comment.path
+                        ? `${comment.path}:${comment.fileLine ?? `diff row ${comment.line}`}`
+                        : "General comment"}
                     </span>
                     <span>· {comment.state}</span>
                     {older && <span>· older diff (line may have moved)</span>}
                   </div>
-                  <code
-                    className="mt-2 block truncate text-muted-foreground"
-                    title={comment.code}
-                  >
-                    {comment.code}
-                  </code>
+                  {comment.path && (
+                    <code
+                      className="mt-2 block truncate text-muted-foreground"
+                      title={comment.code}
+                    >
+                      {comment.code}
+                    </code>
+                  )}
                   <p className="mt-2 whitespace-pre-wrap break-words text-sm">
                     {comment.body}
                   </p>

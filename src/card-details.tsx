@@ -78,7 +78,8 @@ export function CardDetails({
   const [tab, setTab] = useState<
     "overview" | "reviews" | "attempts" | "discuss" | "details"
   >("overview");
-  useEffect(() => setTab("overview"), [cardId]);
+  const [reply, setReply] = useState("");
+  useEffect(() => { setTab("overview"); setReply(""); }, [cardId]);
   const [sideWidth, setSideWidth] = useState(
     () => Number(localStorage.getItem("bakery-side-width")) || 900,
   );
@@ -556,6 +557,77 @@ export function CardDetails({
                       )
                     }
                   />
+                )}
+              {card?.status === "review" &&
+                currentReview &&
+                runs[0]?.status === "review" &&
+                runs[0].report &&
+                !changesRequested &&
+                !approvalPending && (
+                  <form
+                    className="mt-4 space-y-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const text = reply.trim();
+                      if (!text) return;
+                      void action(async () => {
+                        await api<ReviewComment>(
+                          `/boards/${boardId}/cards/${card.id}/comments`,
+                          {
+                            method: "POST",
+                            body: JSON.stringify({
+                              fingerprint: currentReview.fingerprint,
+                              path: "",
+                              line: 0,
+                              body: text,
+                            }),
+                          },
+                        );
+                        await api(
+                          `/boards/${boardId}/cards/${card.id}/request-changes`,
+                          {
+                            method: "POST",
+                            body: JSON.stringify({
+                              fingerprint: currentReview.fingerprint,
+                            }),
+                          },
+                        );
+                        await api(`/boards/${boardId}/cards/${card.id}/start`, {
+                          method: "POST",
+                        });
+                        setReply("");
+                      });
+                    }}
+                  >
+                    <label className="block text-xs font-medium">
+                      Reply to the agent
+                      <textarea
+                        maxLength={1000}
+                        value={reply}
+                        onChange={(event) => setReply(event.target.value)}
+                        rows={3}
+                        placeholder="Answer its question or say what to change. Pi runs again with your reply."
+                        className="mt-2 w-full resize-y rounded-md border border-border bg-background p-2 text-sm"
+                      />
+                    </label>
+                    <Button
+                      size="sm"
+                      type="submit"
+                      disabled={
+                        busy ||
+                        !reply.trim() ||
+                        !settings ||
+                        currentComments.some(
+                          (item) =>
+                            item.runId === runs[0]?.id &&
+                            item.state === "draft",
+                        ) ||
+                        autoJobs.some((item) => item.state === "running")
+                      }
+                    >
+                      Send reply and run again
+                    </Button>
+                  </form>
                 )}
               {card?.status === "failed" && runs[0]?.error && (
                 <div
@@ -1404,6 +1476,10 @@ function RunReport({
 }
 
 /** Each attempt's agent review and the changes a person requested, newest attempt first. */
+function requestedChanges(job: AutoReviewJob): { path: string; line?: number; comment: string }[] {
+  try { return job.changes ? JSON.parse(job.changes) : []; } catch { return []; }
+}
+
 function ReviewHistory({
   entries,
 }: {
@@ -1432,7 +1508,9 @@ function ReviewHistory({
                     ? "merged locally"
                     : job.requeued
                       ? "interrupted by a restart, queued again"
-                      : "needs human review"}
+                      : requestedChanges(job).length
+                        ? "sent back to the implementer"
+                        : "needs human review"}
               </strong>{" "}
               <AgentBadge
                 phase="Review"
@@ -1447,13 +1525,28 @@ function ReviewHistory({
               )}
             </div>
           )}
+          {job &&
+            requestedChanges(job).map((change, index) => (
+              <p
+                key={index}
+                className="mt-2 whitespace-pre-wrap text-muted-foreground"
+              >
+                <span className="font-medium text-foreground/80">
+                  Requested change on {change.path}
+                  {change.line ? `:${change.line}` : ""}:
+                </span>{" "}
+                {change.comment}
+              </p>
+            ))}
           {requested.map((comment) => (
             <p
               key={comment.id}
               className="mt-2 whitespace-pre-wrap text-muted-foreground"
             >
               <span className="font-medium text-foreground/80">
-                Requested change on {comment.path}:{comment.line}:
+                {comment.path
+                  ? `Requested change on ${comment.path}:${comment.fileLine ?? comment.line}:`
+                  : "Requested change:"}
               </span>{" "}
               {comment.body}
             </p>

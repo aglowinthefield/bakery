@@ -35,7 +35,7 @@ const discussing = new Set<string>();
 // Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
-const autoReview = new AutoReview(board, integration, piBin);
+const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card));
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
@@ -352,6 +352,7 @@ const server = createServer(async (req, res) => {
             !input.body.trim() || input.body.length > 1000) throw new Error("Invalid review comment");
           const diff = integration.review(item);
           if (diff.fingerprint !== input.fingerprint) throw new Error("Work changed since review; refresh the diff before commenting");
+          if (input.path === "") { send(res, 201, board.addReviewComment(id, board.listRuns(id)[0].id, diff.fingerprint, "", 0, "context", "", input.body)); return; }
           const line = parseDiff(diff.files.find(file => file.path === input.path)?.patch ?? "")[Number(input.line) - 1];
           if (!line || line.kind === "meta") throw new Error("Comment on a code line in the current diff");
           const run = board.listRuns(id)[0];

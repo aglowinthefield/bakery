@@ -391,3 +391,11 @@ test("the agent reviewer uses the repository's review model before the prompt", 
     assert.match(args[separator + 1], /verification command .*passed: "true"/);
   } finally { item.close(); }
 });
+
+test("reviewer can request changes with concrete items, and malformed requests are rejected", () => {
+  const ask = '{"verdict":"request_changes","reason":"Off by one","changes":[{"path":"src/a.ts","line":12,"comment":"Use < not <="}]}';
+  assert.deepEqual(reviewerVerdict(settle(ask)), { verdict: "request_changes", reason: "Off by one", changes: [{ path: "src/a.ts", line: 12, comment: "Use < not <=" }] });
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"request_changes","reason":"Off by one"}')), /invalid or ambiguous/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"request_changes","reason":"x","changes":[]}')), /invalid or ambiguous/);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"x","changes":[{"path":"a","comment":"b"}]}')), /invalid or ambiguous/);
+});

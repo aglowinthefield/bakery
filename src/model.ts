@@ -60,6 +60,8 @@ export type AutoReviewJob = {
   interruptions: number;
   /** 1 when a restart cut the review off and it is queued to run again. */
   requeued: number;
+  /** JSON list of `{ path, line?, comment }` the agent reviewer sent the card back with; empty when none. */
+  changes: string;
 } & UsageFields;
 export type BakerySettings = {
   confirmRunStart: boolean;
