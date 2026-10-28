@@ -513,3 +513,21 @@ test("a Review card closes to Done without merging and Reopen brings it back", (
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a general review comment needs no line and alone is enough to request changes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-general-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const card = board.createCard({ title: "Review", body: "", repo: dir });
+    board.setStatus(card.id, "ready");
+    const run = board.claim(card.id);
+    board.finish(run.id, "review");
+    const fingerprint = "a".repeat(64);
+    assert.throws(() => board.addReviewComment(card.id, run.id, fingerprint, "", 5, "context", "", "bad"), /Invalid review comment/);
+    const general = board.addReviewComment(card.id, run.id, fingerprint, "", 0, "context", "", "Split this into two cards");
+    assert.equal(general.path, "");
+    board.requestChanges(card.id, run.id, fingerprint);
+    assert.deepEqual(board.getFeedbackForRun(card.id).map(item => item.body), ["Split this into two cards"]);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

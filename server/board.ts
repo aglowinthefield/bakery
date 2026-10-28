@@ -798,8 +798,9 @@ export class Board {
   listReviewComments(cardId: string): ReviewComment[] {
     return this.db.prepare("SELECT * FROM review_comments WHERE cardId=? ORDER BY createdAt, id").all(cardId) as ReviewComment[];
   }
+  /** A comment with an empty `path` is general: it belongs to the review, not to a line (line 0, no code). */
   addReviewComment(cardId: string, runId: string, fingerprint: string, path: string, line: number, kind: ReviewComment["kind"], code: string, body: string, fileLine: number | null = null): ReviewComment {
-    if (!body.trim() || body.length > 1000 || path.length > 1000 || code.length > 10000 || !Number.isSafeInteger(line) || line < 1 || (fileLine !== null && (!Number.isSafeInteger(fileLine) || fileLine < 1))) throw new Error("Invalid review comment");
+    if (!body.trim() || body.length > 1000 || path.length > 1000 || code.length > 10000 || !Number.isSafeInteger(line) || line < (path ? 1 : 0) || (!path && (line !== 0 || code || fileLine !== null)) || (fileLine !== null && (!Number.isSafeInteger(fileLine) || fileLine < 1))) throw new Error("Invalid review comment");
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId), run = this.listRuns(cardId)[0];

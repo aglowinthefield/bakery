@@ -1450,7 +1450,9 @@ function ReviewHistory({
               className="mt-2 whitespace-pre-wrap text-muted-foreground"
             >
               <span className="font-medium text-foreground/80">
-                Requested change on {comment.path}:{comment.line}:
+                {comment.path
+                  ? `Requested change on ${comment.path}:${comment.fileLine ?? comment.line}:`
+                  : "Requested change:"}
               </span>{" "}
               {comment.body}
             </p>
