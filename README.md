@@ -351,6 +351,16 @@ If the server crashes, the supervisor restarts it after 1 second, backing off to
 
 The browser takes UI changes from a merge as hot updates, so the board and an open card stay where they were. When Vite has to reload the page instead, each tab reopens its own view, repository and open card.
 
+## Hosting on another machine
+
+By default the server binds to 127.0.0.1 and only accepts local `Host` and `Origin` headers. To run it on an always-on box, put it on a private network such as Tailscale (Bakery has no login of its own):
+
+```sh
+BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE_UI=1 npm start
+```
+
+`BAKERY_HOST` is the bind address (prefer the tailnet IP). `BAKERY_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `BAKERY_URL=http://mochi:4317 BAKERY_ALLOW_REMOTE=1 bakery-cli ...` reaches it. Repository paths and merges are on the server's disk.
+
 ## Safety
 
 - Pi is told not to commit, push, or publish during a run. **That instruction isn't a sandbox.** Only run agents on repositories you trust.

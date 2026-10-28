@@ -46,6 +46,9 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
   card => worker.start(card),
   card => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true));
 const port = Number(process.env.BAKERY_PORT ?? 4317);
+// Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
+const bindHost = process.env.BAKERY_HOST || "127.0.0.1";
+const extraHosts = (process.env.BAKERY_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
 let modelCache: { models: string[]; at: number } | undefined, modelRequest: Promise<{ models: string[]; error?: string }> | undefined;
@@ -99,14 +102,17 @@ function repoRoot(value: unknown) {
   } catch { throw new Error(`Repository path is not an existing Git repository root: ${input}`); }
   return root;
 }
+function extraOrigin(origin: string): boolean {
+  try { const u = new URL(origin); return (u.protocol === "http:" || u.protocol === "https:") && extraHosts.includes(u.hostname.toLowerCase()); } catch { return false; }
+}
 const server = createServer(async (req, res) => {
   try {
     const host = req.headers.host?.split(":")[0];
-    if (host !== "127.0.0.1" && host !== "localhost" && host !== "bakery.localhost") { send(res, 403, { error: "Local access only" }); return; }
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "bakery.localhost" && !extraHosts.includes(host?.toLowerCase() ?? "")) { send(res, 403, { error: "Local access only" }); return; }
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (req.method !== "GET") {
       const origin = req.headers.origin;
-      if (origin && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
+      if (origin && !extraOrigin(origin) && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
     if (path === "/api/status" && req.method === "GET") { send(res, 200, { draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0 }); return; }
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
@@ -444,7 +450,7 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
+server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
   // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
   // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
   for (const item of board.listBoards().filter(item => item.githubMainProtected === null && item.remoteUrl))
