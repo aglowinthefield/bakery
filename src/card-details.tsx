@@ -11,6 +11,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./components/ui/dialog";
+import { followUps } from "./follow-ups.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
 import { PullRequestDialog } from "./pr-dialog.js";
 import {
@@ -547,6 +548,17 @@ export function CardDetails({
                 runs[0].report && (
                   <RunReport
                     report={runs[0].report}
+                    runId={runs[0].id}
+                    onAddFollowUp={(index, title, body) =>
+                      api(`/boards/${boardId}/cards`, {
+                        method: "POST",
+                        body: JSON.stringify({
+                          title,
+                          body: `${body}\n\nFollow-up from card ${card.id}: ${card.title}`,
+                          idempotencyKey: `follow-up:${runs[0].id}:${index}`,
+                        }),
+                      }).then(() => true, () => false)
+                    }
                     findingsOnly={
                       card.status === "review" &&
                       currentReview?.files.length === 0
@@ -1418,14 +1430,22 @@ function Dependencies({
  */
 function RunReport({
   report,
+  runId,
+  onAddFollowUp,
   findingsOnly,
   onCopyError,
 }: {
   report: string;
+  runId: string;
+  /** Creates a Triage card for follow-up `index`; resolves false when it could not. */
+  onAddFollowUp: (index: number, title: string, body: string) => Promise<boolean>;
   findingsOnly: boolean;
   onCopyError: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [added, setAdded] = useState<number[]>([]);
+  useEffect(() => setAdded([]), [runId]);
+  const items = followUps(report);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 2000);
@@ -1471,6 +1491,32 @@ function RunReport({
         source={report}
         className="mt-3 text-sm leading-6 text-foreground/80"
       />
+      {items.length > 0 && (
+        <div className="mt-4 border-t border-border pt-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Follow-ups
+          </h4>
+          <ul className="mt-2 space-y-2">
+            {items.map((item, index) => (
+              <li key={index} className="flex items-start justify-between gap-3 text-sm">
+                <span className="break-words">{item.title}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={added.includes(index)}
+                  onClick={() =>
+                    void onAddFollowUp(index, item.title, item.body).then((ok) => {
+                      if (ok) setAdded((previous) => [...previous, index]);
+                    })
+                  }
+                >
+                  {added.includes(index) ? "In Triage" : "Add to Triage"}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </section>
   );
 }
