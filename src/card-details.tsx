@@ -537,6 +537,29 @@ export function CardDetails({
           >
             {tab === "overview" && (
               <>
+                {card?.status === "review" &&
+                  autoJobs.find(
+                    (item) =>
+                      item.runId === runs[0]?.id && item.state === "running",
+                  )?.details && (
+                    <section
+                      aria-label="Agent review progress"
+                      className="mt-6 rounded-md border border-border bg-accent/10 px-4 py-3 text-sm"
+                    >
+                      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Agent review
+                      </div>
+                      <p className="mt-1 whitespace-pre-line leading-6 text-foreground/80">
+                        {
+                          autoJobs.find(
+                            (item) =>
+                              item.runId === runs[0]?.id &&
+                              item.state === "running",
+                          )?.details
+                        }
+                      </p>
+                    </section>
+                  )}
                 {card?.status === "running" &&
                   runs[0]?.status === "running" && (
                     <LiveStatus run={runs[0]} turns={card.turns} />
