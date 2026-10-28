@@ -237,3 +237,12 @@ export type Run = {
   /** The agent's final message, in markdown. Null for runs that never replied. */
   report: string | null;
 } & UsageFields;
+
+/** One message in a card's Discuss chat; "error" is a failed agent reply. */
+export type DiscussionMessage = {
+  id: string;
+  cardId: string;
+  role: "user" | "agent" | "error";
+  body: string;
+  createdAt: string;
+};

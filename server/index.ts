@@ -12,6 +12,7 @@ import { Integration, IntegrationConflictError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
+import { discuss, discussionPrompt } from "./discuss.js";
 import { draftPullRequest } from "./pr-draft.js";
 import { PullRequestFeed } from "./pull-request-feed.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
@@ -29,6 +30,8 @@ let board: Board;
 try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const piBin = process.env.BAKERY_PI_BIN ?? "pi";
+/** Cards whose discussion reply is being written; one at a time per card. */
+const discussing = new Set<string>();
 // Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
@@ -298,7 +301,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|close))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|close|discussion))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -327,6 +330,19 @@ const server = createServer(async (req, res) => {
           const { dependsOn } = await body(req);
           if (typeof dependsOn !== "string" || !/^[\w-]+$/.test(dependsOn)) throw new Error("dependsOn must be a card ID");
           send(res, 200, board.addDependency(id, dependsOn)); return;
+        }
+        if (req.method === "GET" && action === "discussion") { send(res, 200, { messages: board.listDiscussion(id), pending: discussing.has(id) }); return; }
+        if (req.method === "POST" && action === "discussion") {
+          const { message } = await body(req);
+          if (typeof message !== "string" || !message.trim() || message.length > 4000) throw new Error("Write a message of up to 4000 characters");
+          if (discussing.has(id)) throw new Error("The agent is still answering the previous message");
+          const history = board.listDiscussion(id), run = board.listRuns(id)[0];
+          const saved = board.addDiscussionMessage(id, "user", message.trim());
+          discussing.add(id);
+          void discuss({ prompt: discussionPrompt(item, run, history, message.trim()), cwd: run?.worktree ?? item.repo, piBin, models: piModelArgs(board.agentModelFor(item.repo, "work")) })
+            .then(reply => board.addDiscussionMessage(id, "agent", reply), error => board.addDiscussionMessage(id, "error", error instanceof Error ? error.message : String(error)))
+            .finally(() => discussing.delete(id));
+          send(res, 202, saved); return;
         }
         if (req.method === "GET" && action === "comments") { send(res, 200, board.listReviewComments(id)); return; }
         if (req.method === "POST" && action === "comments") {

@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { Check, Copy, Maximize2, Minimize2, Square } from "lucide-react";
 import { api } from "./api.js";
 import { AgentBadge, AttemptList, CostBadge } from "./attempts.js";
+import { DiscussionPanel } from "./discussion.js";
 import { Markdown } from "./markdown-view.js";
 import { Button } from "./components/ui/button";
 import {
@@ -75,7 +76,7 @@ export function CardDetails({
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
   const [expandedDetails, setExpandedDetails] = useState(false);
   const [tab, setTab] = useState<
-    "overview" | "reviews" | "attempts" | "details"
+    "overview" | "reviews" | "attempts" | "discuss" | "details"
   >("overview");
   useEffect(() => setTab("overview"), [cardId]);
   const [sideWidth, setSideWidth] = useState(
@@ -498,6 +499,7 @@ export function CardDetails({
                 ...(runs.length
                   ? [["attempts", `Attempts (${runs.length})`]]
                   : []),
+                ["discuss", "Discuss"],
                 ["details", "Details"],
               ] as [typeof tab, string][]
             ).map(([id, label]) => (
@@ -581,6 +583,17 @@ export function CardDetails({
                 No attempts yet.
               </p>
             ))}
+          {tab === "discuss" && card && (
+            <DiscussionPanel
+              key={card.id}
+              boardId={boardId}
+              cardId={card.id}
+              onError={(message) => {
+                setError(message);
+                onError(message);
+              }}
+            />
+          )}
           {tab === "details" && (
             <>
               {card && integration === "github-pr" && (
