@@ -2004,8 +2004,16 @@ export function App() {
                                 {markdownToPlainText(item.body) ||
                                   "No description yet."}
                               </p>
-                              {(item.runAgent || item.reviewAgent) && (
+                              {(item.runAgent || item.reviewAgent || item.planOnly) && (
                                 <div className="mt-3 flex flex-wrap gap-1">
+                                  {item.planOnly && (
+                                    <span
+                                      className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+                                      title="This run produced a plan, not code"
+                                    >
+                                      Plan
+                                    </span>
+                                  )}
                                   {item.runAgent && (
                                     <AgentBadge
                                       phase="Run"

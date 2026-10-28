@@ -134,6 +134,8 @@ export type Card = {
   reviewRounds: number;
   runAgent: string;
   reviewAgent: string;
+  /** The latest run ended with a `bakery-plan` block: this card produced a plan, not code. */
+  planOnly?: boolean;
   usageIncomplete?: number;
   /** Cards on the same board that must be Done or archived before this one starts. */
   dependsOn?: string[];

@@ -1480,12 +1480,12 @@ function RunReport({
   }, [copied]);
   return (
     <section
-      aria-label={findingsOnly ? "Findings" : "Agent report"}
+      aria-label={plan ? "Plan report" : findingsOnly ? "Findings" : "Agent report"}
       className="mt-6 rounded-md border border-border bg-accent/10 p-4"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">
-          {findingsOnly ? "Findings" : "Agent report"}
+          {plan ? "Plan (no code changes)" : findingsOnly ? "Findings" : "Agent report"}
         </h3>
         <Button
           size="sm"
