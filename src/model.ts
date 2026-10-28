@@ -124,6 +124,8 @@ export type Card = {
   repo: string;
   source: "manual";
   idempotencyKey?: string | null;
+  /** Ids of the cards made from this card's plan; null until the plan is used. */
+  createdCardIds?: string[] | null;
   status: Status;
   priority: Priority;
   createdAt: string;

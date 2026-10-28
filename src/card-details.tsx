@@ -586,36 +586,22 @@ export function CardDetails({
                     <RunReport
                       report={runs[0].report}
                       runId={runs[0].id}
-                      planCreated={boardCards.some((item) =>
-                        item.body.includes(
-                          `Part of the plan from card ${card.id}:`,
-                        ),
-                      )}
-                      onCreatePlan={async (subtasks) => {
-                        const created = new Map<string, string>();
-                        try {
-                          for (const task of subtasks) {
-                            const made = await api<Card>(
-                              `/boards/${boardId}/cards`,
-                              {
-                                method: "POST",
-                                body: JSON.stringify({
-                                  title: task.title,
-                                  body: `${task.body}\n\nPart of the plan from card ${card.id}: ${card.title}`,
-                                  idempotencyKey: `plan:${card.id}:${task.id}`,
-                                  dependsOn: task.dependsOn.map((dep) =>
-                                    created.get(dep),
-                                  ),
-                                }),
-                              },
-                            );
-                            created.set(task.id, made.id);
-                          }
-                          return true;
-                        } catch {
-                          return false;
-                        }
-                      }}
+                      planCreated={
+                        !!card.createdCardIds ||
+                        boardCards.some((item) =>
+                          item.body.includes(
+                            `Part of the plan from card ${card.id}:`,
+                          ),
+                        )
+                      }
+                      onCreatePlan={() =>
+                        api(`/boards/${boardId}/cards/${card.id}/create-plan`, {
+                          method: "POST",
+                        }).then(
+                          () => true,
+                          () => false,
+                        )
+                      }
                       onAddFollowUp={(index, title, body) =>
                         api(`/boards/${boardId}/cards`, {
                           method: "POST",
@@ -1567,7 +1553,7 @@ function RunReport({
   /** A card made from this card's plan already exists; a plan is turned into cards once per card. */
   planCreated: boolean;
   /** Creates one Triage card per subtask, dependencies wired, in order; resolves false when any failed (a retry skips cards already made). */
-  onCreatePlan: (subtasks: Subtask[]) => Promise<boolean>;
+  onCreatePlan: () => Promise<boolean>;
   /** Creates a Triage card for follow-up `index`; resolves false when it could not. */
   onAddFollowUp: (
     index: number,
@@ -1667,7 +1653,7 @@ function RunReport({
                 variant="outline"
                 disabled={planMade || planCreated}
                 onClick={() =>
-                  void onCreatePlan(plan.subtasks).then((ok) => {
+                  void onCreatePlan().then((ok) => {
                     setPlanMade(ok);
                     setPlanFailed(!ok);
                   })
