@@ -21,6 +21,7 @@ import {
   CircleHelp,
   Clock3,
   GitBranch,
+  Bot,
   GitPullRequest,
   Hourglass,
   Pencil,
@@ -170,16 +171,51 @@ function cacheTheme(theme: BakerySettings["theme"]) {
   }
 }
 
-const columns: { id: Status; label: string; icon: LucideIcon }[] = [
-  { id: "triage", label: "Triage", icon: Inbox },
-  { id: "ready", label: "Ready", icon: ListTodo },
-  { id: "running", label: "Running", icon: LoaderCircle },
-  { id: "review", label: "Review", icon: Eye },
-  { id: "failed", label: "Failed", icon: CircleX },
-  { id: "interrupted", label: "Interrupted", icon: CirclePause },
-  { id: "done", label: "Done", icon: CircleCheck },
-  { id: "archived", label: "Archive", icon: Archive },
+type Lane = {
+  id: Status | "agent" | "waiting";
+  status: Status;
+  label: string;
+  icon: LucideIcon;
+};
+const columns: Lane[] = [
+  { id: "triage", status: "triage", label: "Triage", icon: Inbox },
+  { id: "ready", status: "ready", label: "Ready", icon: ListTodo },
+  { id: "running", status: "running", label: "Running", icon: LoaderCircle },
+  { id: "review", status: "review", label: "Review", icon: Eye },
+  { id: "failed", status: "failed", label: "Failed", icon: CircleX },
+  {
+    id: "interrupted",
+    status: "interrupted",
+    label: "Interrupted",
+    icon: CirclePause,
+  },
+  { id: "done", status: "done", label: "Done", icon: CircleCheck },
+  { id: "archived", status: "archived", label: "Archive", icon: Archive },
 ];
+/**
+ * On a pull request board the Review lane holds only cards that need you. Cards an agent still has (a review, a CI
+ * fix) and cards waiting on GitHub get lanes of their own, still Review underneath.
+ */
+const pullRequestLanes: Lane[] = columns.flatMap((lane) =>
+  lane.id === "review"
+    ? [
+        lane,
+        { id: "agent", status: "review", label: "Agent working", icon: Bot },
+        {
+          id: "waiting",
+          status: "review",
+          label: "Waiting on GitHub",
+          icon: GitPullRequest,
+        },
+      ]
+    : [lane],
+);
+const laneOf = (card: Card, split: boolean): Lane["id"] =>
+  split && card.status === "review" && card.reviewWait
+    ? card.reviewWait === "github"
+      ? "waiting"
+      : "agent"
+    : card.status;
 
 // The sidebar condenses the lanes into the stages you scan for. Done and Archive are left out;
 // Failed only appears when something failed or was interrupted.
@@ -1176,6 +1212,7 @@ export function App() {
     0,
   );
   const visibleCards = filterCards(cards, query);
+  const splitReview = currentBoard?.integration === "github-pr";
   // Bulk selection only covers cards the search leaves visible.
   const doneIds = visibleCards
     .filter((item) => item.status === "done")
@@ -1847,27 +1884,31 @@ export function App() {
           className={`overflow-x-auto p-6 lg:p-10 ${boardId && loadedBoard !== boardId ? "hidden" : ""}`}
         >
           <div className="flex min-h-[500px] min-w-max gap-4">
-            {columns.map((column) => {
+            {(splitReview ? pullRequestLanes : columns).map((column) => {
               const sorted = byPriority(
-                visibleCards.filter((c) => c.status === column.id),
+                visibleCards.filter(
+                  (c) => laneOf(c, splitReview) === column.id,
+                ),
               );
               // Review splits into cards that need you, then cards an agent, CI or GitHub still has.
               const waitingCards = sorted.filter((c) => c.reviewWait);
               const laneCards =
-                column.id === "review"
+                column.id === "review" && !splitReview
                   ? [...sorted.filter((c) => !c.reviewWait), ...waitingCards]
                   : sorted;
               const firstWaiting =
-                column.id === "review" ? waitingCards[0]?.id : undefined;
+                column.id === "review" && !splitReview
+                  ? waitingCards[0]?.id
+                  : undefined;
               const yourTurnCount = laneCards.filter(needsYourReview).length;
               const firstYourTurn = laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
               const collapsible = cards
-                .filter((c) => c.status === column.id)
+                .filter((c) => laneOf(c, splitReview) === column.id)
                 .every((c) => c.status === "done" || c.status === "archived");
               const override = boardId
-                ? manualCollapse[boardId]?.[column.id]
+                ? manualCollapse[boardId]?.[column.status]
                 : undefined;
               const collapsed =
                 collapsible &&
@@ -1876,12 +1917,14 @@ export function App() {
                     (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
               const selecting =
                 column.id === "done" && selectingDone && laneCards.length > 0;
-              const droppable = !!dragging?.targets.includes(column.id);
+              const droppable =
+                !!dragging?.targets.includes(column.status) &&
+                column.id === column.status;
               return (
                 <section
                   key={column.id}
                   aria-label={`${column.label} lane`}
-                  data-status={column.id}
+                  data-status={column.status}
                   data-drop={
                     dragging
                       ? droppable
@@ -1895,11 +1938,11 @@ export function App() {
                     if (!droppable) return;
                     event.preventDefault();
                     event.dataTransfer.dropEffect = "move";
-                    if (dropLane !== column.id) setDropLane(column.id);
+                    if (dropLane !== column.status) setDropLane(column.status);
                   }}
                   onDragLeave={(event) => {
                     if (
-                      dropLane === column.id &&
+                      dropLane === column.status &&
                       !event.currentTarget.contains(
                         event.relatedTarget as Node | null,
                       )
@@ -1911,7 +1954,7 @@ export function App() {
                     event.preventDefault();
                     const { card } = dragging;
                     endDrag();
-                    moveCard(card, column.id);
+                    moveCard(card, column.status);
                   }}
                   className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
@@ -1920,7 +1963,7 @@ export function App() {
                       type="button"
                       aria-label={`Expand ${column.label} lane`}
                       aria-expanded={false}
-                      onClick={() => toggleLane(column.id, true)}
+                      onClick={() => toggleLane(column.status, true)}
                       className="flex min-h-48 w-full flex-col items-center gap-3 rounded-lg border border-border bg-card px-2 py-3 text-sm hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <ChevronRight size={16} />
@@ -1944,7 +1987,7 @@ export function App() {
                             collapsible &&
                             !(event.target as HTMLElement).closest("button")
                           )
-                            toggleLane(column.id, false);
+                            toggleLane(column.status, false);
                         }}
                       >
                         <span
@@ -1976,7 +2019,7 @@ export function App() {
                             type="button"
                             aria-label={`Collapse ${column.label} lane`}
                             aria-expanded={true}
-                            onClick={() => toggleLane(column.id, false)}
+                            onClick={() => toggleLane(column.status, false)}
                             className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <ChevronDown size={16} />
