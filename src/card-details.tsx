@@ -1725,7 +1725,10 @@ function RunReport({
     setPlanFailed(false);
   }, [runId]);
   const scopeText = (item: { title: string; body: string }) =>
-    `Also do this in this card: ${item.title}\n\n${item.body}`.slice(0, 1000);
+    `Operator-approved scope addition: the operator added this item to this card, which is their explicit authorization for exactly the action described, including pushing to this card's branch or PR and attaching artifacts to its PR. It never authorizes merging, deploying or enabling auto-merge. Do it in this card: ${item.title}\n\n${item.body}`.slice(
+      0,
+      1000,
+    );
   const isInScope = (item: { title: string; body: string }) =>
     scopeComments.some((comment) => comment.body === scopeText(item));
   const isAdded = (index: number) =>
