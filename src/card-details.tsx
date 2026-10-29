@@ -236,7 +236,8 @@ export function CardDetails({
       ),
     }))
     .filter((item) => item.job || item.requested.length);
-  const hasReviews = reviewEntries.length > 0;
+  // The diff lives in this tab, so a card in review has it even when no agent review ever ran.
+  const hasReviews = reviewEntries.length > 0 || card?.status === "review";
   const hasAttempts = runs.length > 0;
   useEffect(() => {
     if (
@@ -521,8 +522,15 @@ export function CardDetails({
               {(
                 [
                   ["overview", "Overview"],
-                  ...(reviewEntries.length
-                    ? [["reviews", `Reviews (${reviewEntries.length})`]]
+                  ...(hasReviews
+                    ? [
+                        [
+                          "reviews",
+                          reviewEntries.length
+                            ? `Reviews (${reviewEntries.length})`
+                            : "Review",
+                        ],
+                      ]
                     : []),
                   ...(runs.length
                     ? [["attempts", `Attempts (${runs.length})`]]
