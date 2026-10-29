@@ -9,7 +9,8 @@ export const CardLinks = createContext<{
   title: (id: string) => string | undefined;
 } | null>(null);
 
-const cardId = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
+const cardId =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
 
 /** A short, clickable stand-in for a card's full id. */
 export function CardChip({ id }: { id: string }) {
@@ -18,7 +19,12 @@ export function CardChip({ id }: { id: string }) {
   const title = links?.title(id);
   const className =
     "mx-0.5 inline-flex items-center rounded border border-border bg-muted px-1.5 py-px align-baseline font-mono text-[0.85em] text-foreground/80";
-  if (!links) return <code className={className} title={id}>{short}</code>;
+  if (!links)
+    return (
+      <code className={className} title={id}>
+        {short}
+      </code>
+    );
   return (
     <button
       type="button"
@@ -106,7 +112,10 @@ function renderBlocks(blocks: Block[]): ReactNode[] {
         const cell = (children: Inline[], column: number, header: boolean) => {
           const Cell = header ? "th" : "td";
           return (
-            <Cell key={column} style={{ textAlign: block.align[column] ?? undefined }}>
+            <Cell
+              key={column}
+              style={{ textAlign: block.align[column] ?? undefined }}
+            >
               {renderInline(children)}
             </Cell>
           );

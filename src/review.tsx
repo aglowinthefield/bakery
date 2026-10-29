@@ -41,7 +41,13 @@ import { themeType } from "./themes.js";
 import type { ReviewComment, ReviewDiff, MergeConflict } from "./model.js";
 
 /** A comment on the change as a whole, for feedback that does not belong to one line. */
-function GeneralCommentForm({ busy, onAdd }: { busy: boolean; onAdd: (body: string) => Promise<boolean> }) {
+function GeneralCommentForm({
+  busy,
+  onAdd,
+}: {
+  busy: boolean;
+  onAdd: (body: string) => Promise<boolean>;
+}) {
   const [text, setText] = useState("");
   return (
     <form
