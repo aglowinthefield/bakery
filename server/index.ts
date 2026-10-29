@@ -14,6 +14,9 @@ import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { discuss, discussionPrompt } from "./discuss.js";
 import { draftPullRequest } from "./pr-draft.js";
+
+/** What the drafting agent is doing per card, for the Approve dialog to poll. */
+const draftProgress = new Map<string, { startedAt: number; steps: { at: number; text: string }[] }>();
 import { PullRequestFeed } from "./pull-request-feed.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
@@ -387,13 +390,17 @@ const server = createServer(async (req, res) => {
           if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
           send(res, 202, worker.start(item)); return;
         }
+        if (req.method === "GET" && action === "pr-draft") { send(res, 200, draftProgress.get(id) ?? { startedAt: 0, steps: [] }); return; }
         if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);
           if (repoBoard.integration !== "github-pr") throw new Error("This board merges locally; it opens no pull request");
           const diff = integration.review(item), run = board.listRuns(id)[0];
           if (typeof fingerprint !== "string" || diff.fingerprint !== fingerprint) throw new Error("Work changed since review; refresh the diff before approving");
           const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
-          send(res, 200, await draftPullRequest({ card: item, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(item.repo, "draft")) })); return;
+          const progress = { startedAt: Date.now(), steps: [] as { at: number; text: string }[] };
+          draftProgress.set(id, progress);
+          const onProgress = (text: string) => { progress.steps.push({ at: Date.now(), text }); if (progress.steps.length > 200) progress.steps.shift(); };
+          send(res, 200, await draftPullRequest({ card: item, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(item.repo, "draft")), onProgress })); return;
         }
         if (req.method === "POST" && action === "approve") {
           const { fingerprint, title, body: prBody } = await body(req);
