@@ -760,6 +760,8 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
     const prompt = readFileSync(promptFile, "utf8");
     assert.match(prompt, new RegExp(`failed CI at ${pushed}`));
     assert.match(prompt, /authorized to change that pull request \(#100, https:\/\/github.com\/acme\/widgets\/pull\/100\) with `gh pr edit`/);
+    assert.match(prompt, /gh run rerun <run-id> --failed/);
+    assert.match(prompt, /Do anything you can do in this worktree yourself/);
     assert.deepEqual(f.comments().map(c => c.number), [100]);
     assert.match(f.comments()[0].body, new RegExp(`^CI failed at ${pushed.slice(0, 12)}: \`CI / lint\`\\. Bakery sent this back .*automatic fix run 1 of 3`));
     assert.match(prompt, /### CI \/ lint: failure\nhttps:\/\/github.com\/acme\/widgets\/actions\/runs\/1\/job\/55\n\n```\nfeature.txt: missing newline\n```/);
