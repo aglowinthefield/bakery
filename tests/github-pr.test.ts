@@ -675,11 +675,17 @@ test("github-pr: a retry of an unpushed card whose base is behind is rebased ont
     const argsFile = join(f.dir, "args"), argsPi = join(f.dir, "pi-args");
     writeFileSync(argsPi, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
     chmodSync(argsPi, 0o755);
+    // A refused push is still waiting: the hook-fix run failed on the conflict before Pi saw it, so the repair gets it.
+    f.board.recordPushFailure(card.id, before, "Unused files (1)\nscripts/unused.ts");
     const repair = new Worker(f.board, f.data, argsPi).start(f.board.getCard(card.id)!);
     await waitFor(() => f.board.getRun(repair.id)?.status !== "running");
     assert.equal(f.board.getRun(repair.id)?.status, "review", f.board.getRun(repair.id)?.error ?? "");
     const prompt = readFileSync(argsFile, "utf8");
     assert.match(prompt, /merge-conflict repair attempt/);
+    assert.match(prompt, /pre-push hook refused it/);
+    assert.match(prompt, /scripts\/unused\.ts/);
+    assert.equal(f.board.getCiFeedback(card.id), undefined, "the hook output is handed over once");
+    assert.equal(f.board.getRun(repair.id)?.ciFix, 0, "the repair still waits for Approve");
     assert.match(prompt, /could not merge this card into origin\/main/);
     assert.ok(prompt.includes(git(f.repo, "rev-parse", "origin/main")), "prompt names the fetched origin/main tip");
     assert.equal(f.board.getMergeFailure(card.id), undefined, "cleared once the repair run reaches review");
