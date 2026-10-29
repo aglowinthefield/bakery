@@ -1,5 +1,12 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { Check, Copy, Maximize2, Minimize2, Pencil, Square } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Maximize2,
+  Minimize2,
+  Pencil,
+  Square,
+} from "lucide-react";
 import { api } from "./api.js";
 import { AgentBadge, AttemptList, CostBadge } from "./attempts.js";
 import { CardHistory, type CardHistoryEntry } from "./card-history.js";
@@ -946,56 +953,59 @@ export function CardDetails({
                 </Button>
               </>
             )}
-            {card && !card.startQueued && ["ready", "failed", "review"].includes(card.status) && (
-              <Button
-                // In review the next step is a decision. Rerunning is secondary unless changes were
-                // requested or a conflict needs Pi.
-                variant={reviewDecisionPending ? "outline" : "default"}
-                className={reviewDecisionPending ? "order-last" : undefined}
-                disabled={
-                  busy ||
-                  !settings ||
-                  (card.blocked && !card.attempts) ||
-                  (card.status === "review" &&
-                    (approvalPending ||
-                      card.reviewWait === "github" ||
-                      autoJobs.some(
-                        (item) =>
-                          item.cardId === card.id && item.state === "running",
-                      ) ||
-                      currentComments.some(
-                        (item) =>
-                          item.runId === runs[0]?.id && item.state === "draft",
-                      )))
-                }
-                title={
-                  card.blocked && !card.attempts
-                    ? "Waiting on unfinished cards. Start this card after they are Done."
-                    : undefined
-                }
-                onClick={() => {
-                  if (
-                    settings?.confirmRunStart &&
-                    !window.confirm(
-                      "Start Pi on this card? This run may use paid model tokens and can edit its Git worktree.",
+            {card &&
+              !card.startQueued &&
+              ["ready", "failed", "review"].includes(card.status) && (
+                <Button
+                  // In review the next step is a decision. Rerunning is secondary unless changes were
+                  // requested or a conflict needs Pi.
+                  variant={reviewDecisionPending ? "outline" : "default"}
+                  className={reviewDecisionPending ? "order-last" : undefined}
+                  disabled={
+                    busy ||
+                    !settings ||
+                    (card.blocked && !card.attempts) ||
+                    (card.status === "review" &&
+                      (approvalPending ||
+                        card.reviewWait === "github" ||
+                        autoJobs.some(
+                          (item) =>
+                            item.cardId === card.id && item.state === "running",
+                        ) ||
+                        currentComments.some(
+                          (item) =>
+                            item.runId === runs[0]?.id &&
+                            item.state === "draft",
+                        )))
+                  }
+                  title={
+                    card.blocked && !card.attempts
+                      ? "Waiting on unfinished cards. Start this card after they are Done."
+                      : undefined
+                  }
+                  onClick={() => {
+                    if (
+                      settings?.confirmRunStart &&
+                      !window.confirm(
+                        "Start Pi on this card? This run may use paid model tokens and can edit its Git worktree.",
+                      )
                     )
-                  )
-                    return;
-                  void action(() =>
-                    api(`/boards/${boardId}/cards/${card.id}/start`, {
-                      method: "POST",
-                    }),
-                  );
-                }}
-              >
-                <span className="text-base">✳</span>{" "}
-                {mergeConflict && ["review", "failed"].includes(card.status)
-                  ? "Fix conflict with Pi"
-                  : runs.length
-                    ? "Run again"
-                    : "Start Pi run"}
-              </Button>
-            )}
+                      return;
+                    void action(() =>
+                      api(`/boards/${boardId}/cards/${card.id}/start`, {
+                        method: "POST",
+                      }),
+                    );
+                  }}
+                >
+                  <span className="text-base">✳</span>{" "}
+                  {mergeConflict && ["review", "failed"].includes(card.status)
+                    ? "Fix conflict with Pi"
+                    : runs.length
+                      ? "Run again"
+                      : "Start Pi run"}
+                </Button>
+              )}
             {card?.status === "running" && runs[0] && (
               <Button
                 variant="destructive"
