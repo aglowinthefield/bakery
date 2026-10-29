@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { Check, Copy, Maximize2, Minimize2, Square } from "lucide-react";
 import { api } from "./api.js";
 import { AgentBadge, AttemptList, CostBadge } from "./attempts.js";
+import { CardHistory, type CardHistoryEntry } from "./card-history.js";
 import { DiscussionPanel } from "./discussion.js";
 import { CardLinks, Markdown } from "./markdown-view.js";
 import { Button } from "./components/ui/button";
@@ -98,6 +99,8 @@ export function CardDetails({
   useEffect(() => setMainRecovery(null), [cardId]);
   const [approvalPending, setApprovalPending] = useState(false);
   const [pushProgress, setPushProgress] = useState<PushProgress | null>(null);
+  const [history, setHistory] = useState<CardHistoryEntry[]>([]);
+  useEffect(() => setHistory([]), [cardId]);
   useEffect(() => setPushProgress(null), [cardId]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -126,8 +129,8 @@ export function CardDetails({
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const [attempts, approval, annotations, jobs, push] = await Promise.all(
-          [
+        const [attempts, approval, annotations, jobs, push, events] =
+          await Promise.all([
             api<Run[]>(`/boards/${boardId}/cards/${cardId}/runs`),
             api<{ pending: boolean }>(
               `/boards/${boardId}/cards/${cardId}/approval`,
@@ -139,9 +142,12 @@ export function CardDetails({
             api<PushProgress | null>(
               `/boards/${boardId}/cards/${cardId}/push-progress`,
             ),
-          ],
-        );
+            api<CardHistoryEntry[]>(
+              `/boards/${boardId}/cards/${cardId}/history`,
+            ),
+          ]);
         if (current) {
+          setHistory(events);
           setPushProgress(asPushProgress(push));
           setRuns(attempts);
           setApprovalPending(approval.pending);
@@ -843,6 +849,7 @@ export function CardDetails({
                     </Button>
                   </div>
                 )}
+                <CardHistory entries={history} />
                 {card?.idempotencyKey && (
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span>Idempotency key</span>

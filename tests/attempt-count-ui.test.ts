@@ -20,6 +20,7 @@ test("cards that needed rework show their attempt count in every lane and review
       "/api/boards/board/cards/reworked/runs": [run(3), run(2), run(1)],
       "/api/boards/board/cards/reworked/approval": { pending: false },
       "/api/boards/board/cards/reworked/push-progress": null,
+      "/api/boards/board/cards/reworked/history": [],
       "/api/boards/board/cards/reworked/comments": [],
       "/api/boards/board/cards/reworked/auto-review": [],
     };

@@ -34,6 +34,7 @@ export type Board = {
   /** What the GitHub main check found, or why it could not run. */
   integrationNote?: string;
   autoCollapseEmptySwimlanes: boolean;
+  pushMainAfterMerge?: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;
   autoReviewEnabledAt: string | null;

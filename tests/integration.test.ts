@@ -465,3 +465,35 @@ test("a failed fetch of origin warns and approval proceeds", () => {
     assert.match(item.integration.warnings[0], /^git fetch origin failed/);
   } finally { item.close(); }
 });
+
+test("with pushMainAfterMerge on, approval pushes main to origin; a failing push leaves the card Done and says why", () => {
+  for (const reachable of [true, false]) {
+    const item = fixture();
+    try {
+      const origin = join(item.dir, "origin.git");
+      execFileSync("git", ["init", "-q", "--bare", origin]);
+      git(item.repo, "remote", "add", "origin", reachable ? origin : join(item.dir, "missing.git"));
+      item.board.setPushMainAfterMerge(item.board.boardForRepo(item.repo)!.id, true);
+      writeFileSync(join(item.worktree, "new.txt"), "work\n");
+      const done = item.approve(item.card);
+      assert.equal(done.status, "done");
+      const note = item.board.listCardEvents(item.card.id).at(-1)!.reason;
+      if (reachable) {
+        assert.equal(git(origin, "rev-parse", "main"), git(item.repo, "rev-parse", "main"));
+        assert.match(note, /^Pushed main to origin/);
+      } else assert.match(note, /pushing main to origin failed[\s\S]*Push it yourself/);
+    } finally { item.close(); }
+  }
+});
+
+test("main is not pushed unless the board opts in", () => {
+  const item = fixture();
+  try {
+    const origin = join(item.dir, "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", origin]);
+    git(item.repo, "remote", "add", "origin", origin);
+    writeFileSync(join(item.worktree, "new.txt"), "work\n");
+    item.approve(item.card);
+    assert.throws(() => git(origin, "rev-parse", "main"));
+  } finally { item.close(); }
+});

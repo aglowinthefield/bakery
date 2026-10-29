@@ -2731,6 +2731,44 @@ export function App() {
                   {editingBoard.integrationError}
                 </p>
               )}
+              {(editingBoard.integration ?? "local") === "local" && (
+                <label className="mt-4 flex items-start gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label="Push main to origin after merging"
+                    checked={editingBoard.pushMainAfterMerge ?? false}
+                    disabled={busy}
+                    onChange={(event) => {
+                      const pushMainAfterMerge = event.target.checked;
+                      void action(async () => {
+                        const updated = await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({ pushMainAfterMerge }),
+                          },
+                        );
+                        setBoards((previous) =>
+                          previous.map((item) =>
+                            item.id === updated.id ? updated : item,
+                          ),
+                        );
+                        setEditingBoard(updated);
+                      });
+                    }}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span>
+                    Push main to origin after merging
+                    <span className="block text-muted-foreground">
+                      Runs git push origin main after each local merge,
+                      including merges made by the agent reviewer. If the push
+                      fails, the merge stays and the card&apos;s History says
+                      why.
+                    </span>
+                  </span>
+                </label>
+              )}
               <LocalMerges
                 boardId={editingBoard.id}
                 integration={editingBoard.integration ?? "local"}

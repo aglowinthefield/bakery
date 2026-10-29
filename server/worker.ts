@@ -36,7 +36,8 @@ export class Worker {
   private terminate(id: string, child: ChildProcess, reason: string) {
     if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
-  start(card: Card, startedBy: "manual" | "auto" = "manual"): Run {
+  /** `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked. */
+  start(card: Card, startedBy: "manual" | "auto" = "manual", why = ""): Run {
     if (this.draining) throw new Error("Bakery is waiting for active runs to finish before restarting to load code changes; start this run after the restart");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
@@ -60,7 +61,7 @@ export class Worker {
       realpathSync(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
       realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
-    const run = this.board.claim(card.id, startedBy);
+    const run = this.board.claim(card.id, startedBy, why);
     let created = false;
     try {
       if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");

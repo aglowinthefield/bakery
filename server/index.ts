@@ -18,6 +18,7 @@ import { draftPullRequest } from "./pr-draft.js";
 /** One PR draft job per card, kept after it settles so a closed or refreshed dialog rejoins it instead of starting over. */
 const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: number; steps: { at: number; text: string }[] }; result: Promise<unknown> }>();
 import { PullRequestFeed } from "./pull-request-feed.js";
+import { cardHistory } from "./card-history.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
@@ -44,7 +45,7 @@ const discussing = new Set<string>();
 // Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
-const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card));
+const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", "to apply the agent reviewer's requested changes"));
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
@@ -55,7 +56,7 @@ let updateTimer: NodeJS.Timeout | undefined;
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
-  card => worker.start(card),
+  card => worker.start(card, "manual", "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true)));
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
@@ -69,7 +70,7 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
       board.recordPushFailure(card.id, error.sha, error.output);
       const previous = board.listRuns(card.id)[0];
       if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
-      worker.start(board.getCard(card.id)!);
+      worker.start(board.getCard(card.id)!, "manual", "to fix the failing pre-push hook");
     } catch (startError) {
       board.clearCiFeedback(card.id);
       throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
@@ -317,6 +318,10 @@ const server = createServer(async (req, res) => {
           "pickupDailyLimit" in input ? Number(input.pickupDailyLimit) : undefined,
           "pickupCostBudget" in input ? input.pickupCostBudget as number | null : undefined)); return;
       }
+      if ("pushMainAfterMerge" in input) {
+        if (Object.keys(input).length !== 1 || typeof input.pushMainAfterMerge !== "boolean") throw new Error("Update pushMainAfterMerge as a boolean, separately from other board settings");
+        send(res, 200, board.setPushMainAfterMerge(repoBoard.id, input.pushMainAfterMerge)); return;
+      }
       if ("autoReviewEnabled" in input || "verificationCommand" in input) {
         if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
         send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled, input.verificationCommand)); return;
@@ -367,7 +372,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -385,6 +390,7 @@ const server = createServer(async (req, res) => {
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
+        if (req.method === "GET" && action === "history") { send(res, 200, cardHistory(item, board.listCardEvents(id), board.listRuns(id), board.listAutoReviewJobs(id))); return; }
         if (req.method === "GET" && action === "push-progress") { send(res, 200, integration.pushProgress(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
         if (req.method === "GET" && action === "review") {
@@ -539,7 +545,12 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
   for (const cardId of board.takeQueuedStarts()) {
     const card = board.getCard(cardId);
     if (!card || ["triage", "running", "done", "archived"].includes(card.status)) continue;
-    try { worker.start(card); } catch (error) { console.error(`Queued start for card ${cardId} failed: ${error instanceof Error ? error.message : error}`); }
+    try { worker.start(card, "manual", "from a start queued during the last restart"); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      board.noteCard(cardId, `A start queued during the last restart could not run: ${message}`);
+      console.error(`Queued start for card ${cardId} failed: ${message}`);
+    }
   }
   // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
   // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
