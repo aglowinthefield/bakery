@@ -3278,6 +3278,7 @@ export function App() {
             setSelected(null);
           }}
           onRefresh={refresh}
+          onCardUpdated={(next) => setCards((previous) => previous.map((item) => (item.id === next.id ? next : item)))}
           onError={setError}
           onConflict={(conflict) =>
             setMergeConflicts((previous) =>

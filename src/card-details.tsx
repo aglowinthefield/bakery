@@ -50,6 +50,8 @@ type Props = {
   onClose: () => void;
   onEdit: (card: Card) => void;
   onRefresh: () => void;
+  /** Shows a card the server just returned without waiting for the next poll. */
+  onCardUpdated: (card: Card) => void;
   onError: (message: string) => void;
   onConflict: (conflict: MergeConflict | null) => void;
   /** Set while reviewing cards one at a time from Today. */
@@ -68,6 +70,7 @@ export function CardDetails({
   onClose,
   onEdit,
   onRefresh,
+  onCardUpdated,
   onError,
   onConflict,
   queue,
@@ -284,7 +287,9 @@ export function CardDetails({
     setError("");
     onError("");
     try {
-      await fn();
+      const result = await fn();
+      // Approve and similar calls return the changed card; show it now instead of after the next poll.
+      if (result && typeof result === "object" && (result as Card).id === cardId && "status" in result) onCardUpdated(result as Card);
       refresh();
       return true;
     } catch (err) {
