@@ -56,7 +56,6 @@ export class Worker {
     const lastReviewed = this.board.listRuns(card.id).find(run => run.status === "review");
     const reviewerChanges = lastReviewed && !feedback.length ? this.board.getReviewerChanges(lastReviewed.id) : [];
     const ciFeedback = this.board.getCiFeedback(card.id);
-    const mainTip = conflict ? git(root, "rev-parse", "main") : null;
     if (conflict && !existsSync(worktree)) throw new Error("Card worktree is missing; inspect and restore it before repairing the conflict");
     if (conflict && (
       realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree) ||
@@ -65,21 +64,24 @@ export class Worker {
       realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     const run = this.board.claim(card.id, startedBy, why);
+    const prMode = this.board.integrationFor(card.repo) === "github-pr";
     let created = false;
     try {
       if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");
       mkdirSync(join(this.dataDir, "worktrees"), { recursive: true });
       // On a github-pr board a card starts from origin/main, fetched now, so it never builds on a stale checkout.
-      const prMode = this.board.integrationFor(card.repo) === "github-pr";
       if (prMode) fetchOrigin(root);
       if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : this.localBase(run, root)); created = true; }
-      else if (prMode && !conflict) this.rebaseRetry(run, worktree, branch);
+      else if (prMode && !conflict) this.rebaseRetry(card, run, worktree, branch);
     } catch (error) {
       this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
       return this.board.getRun(run.id)!;
     }
+    // A github-pr card conflicts with origin/main (fetched above), not with the local checkout's main.
+    const mainRef = prMode ? "origin/main" : "main";
+    const mainTip = conflict ? git(root, "rev-parse", mainRef) : null;
     const instructions = conflict
-      ? `This is a merge-conflict repair attempt. Bakery could not merge this card into main. Conflicting files: ${JSON.stringify(conflict.files)}. Current main tip: ${mainTip}. Reconcile the reviewed card work with current main. You may merge current main into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. Bakery will ask for human review and approval again; do not attempt to integrate it yourself.`
+      ? `This is a merge-conflict repair attempt. Bakery could not merge this card into ${mainRef}. Conflicting files: ${JSON.stringify(conflict.files)}. Current ${mainRef} tip: ${mainTip}. Reconcile the reviewed card work with current ${mainRef}. You may merge ${mainRef} into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. Bakery will ask for human review and approval again; do not attempt to integrate it yourself.`
       : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action.";
     const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
     const reviewerPrompt = reviewerChanges.length ? `\n\nAn independent agent reviewer inspected the previous attempt and sent it back with these requested changes. Address each item and report any you could not resolve: ${JSON.stringify(reviewerChanges)}` : "";
@@ -107,9 +109,10 @@ export class Worker {
   /**
    * A retry on a github-pr board whose base is behind origin/main is rebased onto it before Pi starts, but only
    * while nothing about it is published: a clean worktree whose branch was never pushed. A pushed branch is what
-   * the open PR shows, so it is left alone. Conflicts abort the rebase and fail the run for the operator.
+   * the open PR shows, so it is left alone. Conflicts abort the rebase, fail the run, and record a merge failure, so
+   * the next start is a conflict-repair run that merges origin/main instead of retrying the same rebase.
    */
-  private rebaseRetry(run: Run, worktree: string, branch: string) {
+  private rebaseRetry(card: Card, run: Run, worktree: string, branch: string) {
     if (git(worktree, "status", "--porcelain")) return;
     try { git(worktree, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`); return; } catch { /* Never pushed. */ }
     if (isAncestor(worktree, "origin/main", "HEAD")) return;
@@ -122,7 +125,10 @@ export class Worker {
       try { files = git(worktree, "diff", "--name-only", "--diff-filter=U"); } catch { /* Keep the rebase error. */ }
       try { git(worktree, "rebase", "--abort"); } catch { /* Nothing in progress. */ }
       const detail = (error as { stderr?: string }).stderr?.toString().trim() || (error instanceof Error ? error.message : String(error));
-      throw new Error(`Rebase onto origin/main conflicted${files ? ` in ${files.split("\n").join(", ")}` : ""}; the card branch is unchanged. Resolve it in ${worktree}, then run again. ${detail.slice(0, 1000)}`);
+      const conflicted = files.split("\n").filter(Boolean);
+      if (conflicted.length) this.board.recordMergeFailure(card.id, conflicted, detail);
+      const next = conflicted.length ? "Choose Fix conflict with Pi, or resolve it yourself" : "Resolve it";
+      throw new Error(`Rebase onto origin/main conflicted${conflicted.length ? ` in ${conflicted.join(", ")}` : ""}; the card branch is unchanged. ${next} in ${worktree}, then run again. ${detail.slice(0, 1000)}`);
     }
   }
   /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name (wiredtiger ships one). */

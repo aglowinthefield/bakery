@@ -668,6 +668,20 @@ test("github-pr: a retry of an unpushed card whose base is behind is rebased ont
     assert.match(conflicted.error ?? "", /Rebase onto origin\/main conflicted in feature\.txt; the card branch is unchanged/);
     assert.equal(git(worktree, "rev-parse", "HEAD"), before);
     assert.equal(f.board.getCard(card.id)?.status, "failed");
+
+    // The conflict is recorded, so the next start is a repair run against origin/main and does not rebase again.
+    assert.deepEqual(f.board.getMergeFailure(card.id)?.files, ["feature.txt"]);
+    const argsFile = join(f.dir, "args"), argsPi = join(f.dir, "pi-args");
+    writeFileSync(argsPi, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(argsPi, 0o755);
+    const repair = new Worker(f.board, f.data, argsPi).start(f.board.getCard(card.id)!);
+    await waitFor(() => f.board.getRun(repair.id)?.status !== "running");
+    assert.equal(f.board.getRun(repair.id)?.status, "review", f.board.getRun(repair.id)?.error ?? "");
+    const prompt = readFileSync(argsFile, "utf8");
+    assert.match(prompt, /merge-conflict repair attempt/);
+    assert.match(prompt, /could not merge this card into origin\/main/);
+    assert.ok(prompt.includes(git(f.repo, "rev-parse", "origin/main")), "prompt names the fetched origin/main tip");
+    assert.equal(f.board.getMergeFailure(card.id), undefined, "cleared once the repair run reaches review");
   } finally { f.cleanup(); }
 });
 
