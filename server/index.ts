@@ -23,6 +23,7 @@ import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
 import { LogBuffer } from "./logs.js";
+import { Updates, installScript } from "./updates.js";
 
 // The Logs view reads this process's console output from here.
 const logs = new LogBuffer();
@@ -47,6 +48,9 @@ const autoReview = new AutoReview(board, integration, piBin, card => worker.star
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
+// Only a hosted server (npm start) updates itself. Under the dev supervisor the checkout is someone's working copy.
+const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
+let updateTimer: NodeJS.Timeout | undefined;
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
@@ -130,8 +134,13 @@ const server = createServer(async (req, res) => {
         if (autoReview.activeCardId) cardIds.add(autoReview.activeCardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0, cards });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + (autoReview.active ? 1 : 0), cards, updates: updates?.state ?? null });
       return;
+    }
+    if (path === "/api/update" && req.method === "POST") {
+      if (!updates) throw new Error("Only a server started with npm start installs updates");
+      void updates.apply();
+      send(res, 202, updates.state); return;
     }
     if (path === "/api/logs" && req.method === "GET") {
       const after = Number(new URL(req.url ?? "/", "http://localhost").searchParams.get("after") ?? 0);
@@ -494,6 +503,10 @@ const server = createServer(async (req, res) => {
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
 server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
+  if (updates) {
+    updates.refresh();
+    updateTimer = setInterval(() => void updates.tick(!draining.on && worker.activeCount === 0 && !autoReview.active), 30_000);
+  }
   // Starts queued while the previous server drained for a restart.
   for (const cardId of board.takeQueuedStarts()) {
     const card = board.getCard(cardId);
@@ -507,7 +520,7 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
 });
 // Set once the dev supervisor asks for a drain. /api/status reports it so the UI can say a restart is coming.
 const draining = { on: false };
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {

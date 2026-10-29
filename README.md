@@ -365,9 +365,9 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 ### Keeping a hosted server up to date
 
-`npm start` has no file watcher. `scripts/update.sh` pulls `origin/main`, installs, builds the UI, then sends the server `SIGUSR2`. The server refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`.
+`npm start` has no file watcher. `deploy/bakery-update.service` and `deploy/bakery-update.timer` run `scripts/update.sh` every 2 minutes, which only fetches `origin/main`. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
 
-`deploy/bakery-update.service` and `deploy/bakery-update.timer` run the script every 2 minutes. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
+When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. While no run or review is active, it installs pending updates by itself within 30 seconds. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
 
 ## Safety
 
