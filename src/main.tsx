@@ -1962,7 +1962,7 @@ export function App() {
                       aria-label={`Expand ${column.label} lane`}
                       aria-expanded={false}
                       onClick={() => toggleLane(column.status, true)}
-                      className="flex min-h-48 w-full flex-col items-center gap-3 rounded-lg border border-border bg-card px-2 py-3 text-sm hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="flex min-h-48 w-full flex-col items-center gap-3 rounded-xl border border-dashed border-border/60 px-2 py-3 text-sm hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <ChevronRight size={16} />
                       <span
