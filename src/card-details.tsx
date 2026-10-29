@@ -690,6 +690,39 @@ export function CardDetails({
                           () => false,
                         )
                       }
+                      scopeComments={currentComments.filter(
+                        (item) => item.path === "" && item.runId === runs[0].id,
+                      )}
+                      onAddToScope={
+                        card.status === "review" &&
+                        currentReview &&
+                        runs[0].status === "review" &&
+                        !changesRequested &&
+                        !approvalPending
+                          ? (text) =>
+                              api<ReviewComment>(
+                                `/boards/${boardId}/cards/${card.id}/comments`,
+                                {
+                                  method: "POST",
+                                  body: JSON.stringify({
+                                    fingerprint: currentReview.fingerprint,
+                                    path: "",
+                                    line: 0,
+                                    body: text,
+                                  }),
+                                },
+                              ).then(
+                                (saved) => {
+                                  setComments((previous) => [
+                                    ...previous,
+                                    saved,
+                                  ]);
+                                  return true;
+                                },
+                                () => false,
+                              )
+                          : undefined
+                      }
                       findingsOnly={
                         card.status === "review" &&
                         currentReview?.files.length === 0
@@ -1655,6 +1688,8 @@ function RunReport({
   onAddFollowUp,
   onCreatePlan,
   planCreated,
+  scopeComments,
+  onAddToScope,
   findingsOnly,
   onCopyError,
   addedFollowUps,
@@ -1673,6 +1708,10 @@ function RunReport({
     title: string,
     body: string,
   ) => Promise<boolean>;
+  /** This attempt's note comments, so a reload still shows follow-ups already added to scope. */
+  scopeComments: ReviewComment[];
+  /** Adds a follow-up as a note for the next run of this card; undefined when the card cannot take more changes now. */
+  onAddToScope?: (text: string) => Promise<boolean>;
   findingsOnly: boolean;
   onCopyError: () => void;
 }) {
@@ -1685,6 +1724,10 @@ function RunReport({
     setPlanMade(false);
     setPlanFailed(false);
   }, [runId]);
+  const scopeText = (item: { title: string; body: string }) =>
+    `Also do this in this card: ${item.title}\n\n${item.body}`.slice(0, 1000);
+  const isInScope = (item: { title: string; body: string }) =>
+    scopeComments.some((comment) => comment.body === scopeText(item));
   const isAdded = (index: number) =>
     added.includes(index) || addedFollowUps.includes(index);
   const plan = parsePlan(report);
@@ -1800,20 +1843,32 @@ function RunReport({
                 className="flex items-start justify-between gap-3 text-sm"
               >
                 <span className="break-words">{item.title}</span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={isAdded(index)}
-                  onClick={() =>
-                    void onAddFollowUp(index, item.title, item.body).then(
-                      (ok) => {
-                        if (ok) setAdded((previous) => [...previous, index]);
-                      },
-                    )
-                  }
-                >
-                  {isAdded(index) ? "In Triage" : "Add to Triage"}
-                </Button>
+                <span className="flex shrink-0 gap-2">
+                  {onAddToScope && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isInScope(item) || isAdded(index)}
+                      onClick={() => void onAddToScope(scopeText(item))}
+                    >
+                      {isInScope(item) ? "In scope" : "Add to scope"}
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isAdded(index)}
+                    onClick={() =>
+                      void onAddFollowUp(index, item.title, item.body).then(
+                        (ok) => {
+                          if (ok) setAdded((previous) => [...previous, index]);
+                        },
+                      )
+                    }
+                  >
+                    {isAdded(index) ? "In Triage" : "Add to Triage"}
+                  </Button>
+                </span>
               </li>
             ))}
           </ul>
