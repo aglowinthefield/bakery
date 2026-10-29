@@ -972,17 +972,39 @@ test("github-pr: a small documentation conflict with main is repaired and pushed
   } finally { f.cleanup(); }
 });
 
-test("github-pr: a conflict outside documentation is left to a person, and said once", async () => {
+test("github-pr: any conflict is attempted, and an agent that leaves it alone says so on the PR once", async () => {
+  const f = fixture();
+  const idlePi = join(f.dir, "pi-idle");
+  writeFileSync(idlePi, `#!/bin/sh\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(idlePi, 0o755);
+  const worker = new Worker(f.board, f.data, idlePi);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card), async () => undefined);
+  try {
+    const { card } = await conflictingPr(f, "feature.txt", "main version\n");
+    await sync.syncBoard(f.repoBoard.id);
+    await waitFor(() => f.board.listRuns(card.id)[0].attempt === 2 && f.board.listRuns(card.id)[0].status === "review");
+    assert.equal(f.comments().filter(c => /conflicts with main at .* in `feature\.txt`/.test(c.body)).length, 1, "attempted although it is not a documentation file");
+    await sync.syncBoard(f.repoBoard.id);
+    await sync.syncBoard(f.repoBoard.id);
+    const said = f.comments().filter(c => /made no change, so nothing was pushed/.test(c.body));
+    assert.equal(said.length, 1);
+    assert.match(said[0].body, /resolve the conflict/);
+    assert.equal(f.board.listRuns(card.id).length, 2, "not retried for the same conflict");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: after three automatic conflict repairs a person is told, once", async () => {
   const f = fixture();
   const started: string[] = [];
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => { started.push(card.id); }, async () => undefined);
   try {
     const { card } = await conflictingPr(f, "feature.txt", "main version\n");
+    const db = new DatabaseSync(join(f.dir, "board.sqlite"));
+    try { db.prepare("UPDATE cards SET conflictRepairs=3 WHERE id=?").run(card.id); } finally { db.close(); }
     await sync.syncBoard(f.repoBoard.id);
     await sync.syncBoard(f.repoBoard.id);
     assert.deepEqual(started, [], "no repair run");
-    const said = f.comments().filter(c => /Bakery did not repair it automatically because `feature\.txt` is not a documentation file/.test(c.body));
-    assert.equal(said.length, 1);
+    assert.equal(f.comments().filter(c => /3 automatic repairs have already been tried/.test(c.body)).length, 1);
     assert.match(f.board.getCard(card.id)!.prError ?? "", /a person needs to resolve it/);
   } finally { f.cleanup(); }
 });

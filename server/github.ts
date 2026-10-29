@@ -140,9 +140,8 @@ export function trimFailedLog(log: string, maxLines = 60, maxChars = 4000): stri
 
 /** Most automatic CI fix runs per card. After that a failing PR waits for the operator. */
 export const maxCiReworks = 3;
-/** Conflicts Bakery repairs unattended: a few documentation files with a few hunks. Widen deliberately. */
-const maxConflictFiles = 3, maxConflictHunks = 6, maxConflictRepairs = 3;
-const repairableConflictFile = (path: string) => /\.mdx?$/i.test(path) || path.startsWith("docs/");
+/** Every conflict is attempted; the agent leaves one alone only when it takes a human decision. */
+const maxConflictRepairs = 3;
 const ciFixUnchanged = (head: string) => `The CI fix run made no change, so CI still fails at ${head.slice(0, 12)}. Read its report, then rerun the failed checks on GitHub or fix it in the card worktree.`;
 
 export class GitHub {
@@ -385,10 +384,10 @@ export class GitHubSync {
     await this.removeWorktree(repoBoard.repo, card);
   }
   /**
-   * An open PR that GitHub says conflicts with main. A small conflict (see `repairableConflictFile`) goes back to the
-   * agent as a conflict-repair run and its resolution is pushed by `pushCiFix`; anything bigger is said once on the PR
-   * and left to a person. Each (PR head, main tip) pair is tried once, `maxConflictRepairs` times per card. Returns
-   * undefined when there is no conflict to deal with, so CI handling carries on.
+   * An open PR that GitHub says conflicts with main always goes back to the agent as a conflict-repair run,
+   * whatever the files: the agent resolves what is mechanical and changes nothing when a human has to decide, which
+   * `pushCiFix` then reports. Its resolution is pushed by `pushCiFix`. Each (PR head, main tip) pair is tried once,
+   * `maxConflictRepairs` times per card. Returns undefined when there is no conflict to deal with, so CI handling carries on.
    */
   private async sendBackConflict(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown; pending?: boolean } | undefined> {
     const head = pr.headRefOid;
@@ -404,31 +403,26 @@ export class GitHubSync {
     if (await this.github.mergeable(repo, pr.number) !== "CONFLICTING") return undefined;
     const key = `${head}:${mainTip}`, short = head.slice(0, 12);
     const said = (error: string) => ({ error });
-    // Declined earlier (too big, or out of rounds): the reason is already on the card and the PR.
+    // Declined earlier (out of rounds): the reason is already on the card and the PR.
     if (card.conflictRepairKey === `${key}!`) return said(card.prError ?? `The pull request conflicts with main at ${short}; a person needs to resolve it.`);
     if (card.conflictRepairKey === key) {
       // Sent back, but the run could not start (the board was at its run limit, say): try again.
       if (this.board.getCiFeedback(card.id)?.source === "conflict") return this.startRework(card);
       return said(`The pull request still conflicts with main at ${short} and Bakery's automatic repair did not resolve it. Resolve it in the card worktree, or run the card again.`);
     }
-    // Which files conflict, and how many hunks, without touching the worktree.
-    let files: string[] = [], hunks = 0, details = "";
+    // Which files conflict, without touching the worktree. Only used to brief the agent and the PR.
+    let files: string[] = [], details = "";
     try { await git(worktree, "merge-tree", "--write-tree", "--name-only", "--no-messages", head, mainTip); }
     catch (error) {
       if ((error as { exitCode?: unknown }).exitCode !== 1) return undefined;
       details = (error as Error).message;
-      const [tree, ...rest] = details.split("\n");
-      for (const line of rest) { if (!line) break; files.push(line); }
-      for (const file of files) {
-        try { hunks += ((await git(worktree, "show", `${tree}:${file}`)).match(/^<{7}( |$)/gm) ?? []).length; } catch { hunks += maxConflictHunks + 1; }
-      }
+      for (const line of details.split("\n").slice(1)) { if (!line) break; files.push(line); }
     }
-    const reason = !files.length ? "" : files.length > maxConflictFiles ? `it touches ${files.length} files` : files.some(file => !repairableConflictFile(file)) ? `${files.filter(file => !repairableConflictFile(file)).map(file => `\`${file}\``).join(", ")} is not a documentation file`
-      : hunks > maxConflictHunks ? `it has ${hunks} conflicting hunks` : card.conflictRepairs >= maxConflictRepairs ? `${maxConflictRepairs} automatic repairs have already been tried` : "";
-    if (reason) {
+    if (card.conflictRepairs >= maxConflictRepairs) {
       this.board.markConflictHandled(card.id, `${key}!`);
-      await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short} in ${files.map(file => `\`${file}\``).join(", ")}. Bakery did not repair it automatically because ${reason}. A person needs to resolve it.`);
-      return said(`The pull request conflicts with main in ${files.join(", ")}; ${reason}, so a person needs to resolve it.`);
+      const reason = `${maxConflictRepairs} automatic repairs have already been tried`;
+      await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Bakery stopped repairing it automatically because ${reason}. A person needs to resolve it.`);
+      return said(`The pull request conflicts with main${files.length ? ` in ${files.join(", ")}` : ""}; ${reason}, so a person needs to resolve it.`);
     }
     this.board.recordConflictRepair(card.id, key, head, files, details || "GitHub reports a conflict with main");
     await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Bakery sent it back to its coding agent to merge main in (automatic conflict repair ${card.conflictRepairs + 1} of ${maxConflictRepairs}). The resolution will be pushed here when it's ready.`);
