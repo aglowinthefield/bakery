@@ -22,6 +22,7 @@ test("lanes sort by priority, non-Normal cards show a badge, and details can cha
       "/api/boards/board/cards/low/runs": [],
       "/api/boards/board/cards/low/approval": { pending: false },
       "/api/boards/board/cards/low/push-progress": null,
+      "/api/boards/board/cards/low/history": [],
       "/api/boards/board/cards/low/comments": [],
       "/api/boards/board/cards/low/auto-review": [],
     };

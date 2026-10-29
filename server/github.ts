@@ -37,7 +37,12 @@ function run(bin: string, args: string[], cwd?: string, timeout = 60_000): Promi
     execFile(...command(bin, args), { cwd, timeout, maxBuffer: 16 * 1024 * 1024, encoding: "utf8", env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" } }, (error, stdout, stderr) => {
       if (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        const detail = code === "ENOENT" ? `${bin} is not installed or not on PATH` : (stderr || stdout || error.message).trim();
+        const { killed, signal } = error as { killed?: boolean; signal?: string | null };
+        // Without output, Node's message is only "Command failed: <the command>", which says nothing about why.
+        // A timeout kills the process with SIGTERM before it prints anything, so name the timeout instead.
+        const detail = code === "ENOENT" ? `${bin} is not installed or not on PATH`
+          : (stderr || stdout).trim() || (killed && signal === "SIGTERM" ? `${bin} ${args[0] === "-C" ? args[2] : args[0]} timed out after ${Math.round(timeout / 1000)}s`
+            : signal ? `${bin} was stopped by ${signal}` : `${bin} exited with code ${typeof code === "number" ? code : "unknown"} and printed nothing`);
         reject(Object.assign(new Error(detail.slice(0, 4000)), { exitCode: typeof code === "number" ? code : (error as { code?: unknown }).code }));
       } else resolve({ stdout, stderr });
     });
@@ -152,10 +157,6 @@ export class GitHub {
   async listOpenPullRequestExtras(repo: string): Promise<(Pick<RepoPullRequest, "number" | "additions" | "deletions" | "reviewDecision"> & { mergeable?: string; statusCheckRollup?: Check[] })[]> {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number,reviewDecision,additions,deletions,mergeable,statusCheckRollup"]));
   }
-  /** Everything the Pull requests page's detail view shows for one PR. */
-  async pullRequestDetail(repo: string, number: number): Promise<unknown> {
-    return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "number,title,url,body,author,baseRefName,headRefName,isDraft,mergeable,mergeStateStatus,reviewDecision,additions,deletions,changedFiles,files,commits,latestReviews,comments,statusCheckRollup,labels,assignees,createdAt,updatedAt"]));
-  }
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {
     return (JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "statusCheckRollup"])) as PullRequest).statusCheckRollup ?? [];
@@ -268,11 +269,17 @@ export async function linkedPullRequest(github: GitHub, repo: string, card: Card
  * The github-pr timer. Every tick visits each github-pr board at most once per `intervalMs`:
  * check `gh`, fetch origin, settle Review cards from their PRs, then fast-forward local main.
  * Any failure is recorded as the board's integration error, which pauses auto pickup; success clears it.
+ * A failed fetch is the exception: networks drop and fetches time out, so for `fetchGraceMs` it is only a
+ * warning and the pass stops there (settling against a stale origin/main could misjudge a merge). It becomes
+ * an error once fetches have failed for longer than that.
  */
 export class GitHubSync {
   private timer?: ReturnType<typeof setInterval>;
   private lastRun = new Map<string, number>();
   private inFlight = new Map<string, Promise<void>>();
+  /** When fetching first failed in the current run of failures, per board. */
+  private fetchFailingSince = new Map<string, number>();
+  fetchGraceMs = 5 * 60_000;
   /** `rework` starts a fix run on a card whose PR failed CI; without it failures are only shown. */
   constructor(private readonly board: Board, private readonly dataDir: string, private readonly github: GitHub, private readonly wtBin?: string, private readonly intervalMs = 60_000,
     private readonly rework?: (card: Card) => unknown, private readonly autoApprove?: (card: Card) => Promise<unknown>) {}
@@ -303,10 +310,19 @@ export class GitHubSync {
     try {
       const repo = boardGithubRepo(repoBoard);
       await this.github.check();
-      await fetchOrigin(repoBoard.repo);
+      try { await fetchOrigin(repoBoard.repo); this.fetchFailingSince.delete(boardId); }
+      catch (error) {
+        const since = this.fetchFailingSince.get(boardId) ?? Date.now();
+        this.fetchFailingSince.set(boardId, since);
+        if (Date.now() - since >= this.fetchGraceMs) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (this.board.getBoard(boardId)?.integrationWarning !== message) console.error(`GitHub sync for ${repoBoard.repo}: ${message} (retrying)`);
+        this.board.setIntegrationWarning(boardId, message);
+        return;
+      }
       await this.settleCards(repoBoard, repo);
       await fastForwardMain(repoBoard.repo);
-      if (this.board.getBoard(boardId)?.integrationError) this.board.setIntegrationError(boardId, "");
+      this.board.recordIntegrationSync(boardId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (this.board.getBoard(boardId)?.integrationError !== message) console.error(`GitHub sync for ${repoBoard.repo}: ${message}`);

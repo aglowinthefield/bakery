@@ -420,13 +420,13 @@ test("approval is blocked when local main is behind origin/main", () => {
     origin.pushUpstream("upstream.txt");
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
     const main = git(item.repo, "rev-parse", "main");
-    assert.throws(() => item.approve(item.card), /Local main is 1 commit behind origin\/main\. Update main first/);
-    assert.equal(git(item.repo, "rev-parse", "main"), main);
+    assert.throws(() => item.approve(item.card), /Fast-forwarded main over 1 commit from origin\/main\. Refresh the diff and approve again/);
+    assert.equal(git(item.repo, "rev-parse", "main"), git(item.repo, "rev-parse", "origin/main"));
+    assert.notEqual(git(item.repo, "rev-parse", "main"), main);
     assert.equal(item.board.getCard(item.card.id)!.status, "review");
     assert.equal(item.board.getApproval(item.card.id), undefined);
     assert.equal(git(item.worktree, "rev-list", "--count", "main..HEAD"), "0", "nothing was committed on the card branch");
-    // Once main is updated, the refreshed review approves.
-    git(item.repo, "merge", "-q", "--ff-only", "origin/main");
+    // The refreshed review approves.
     assert.equal(item.approve(item.card).status, "done");
   } finally { item.close(); }
 });
@@ -441,14 +441,42 @@ test("approval proceeds when local main is ahead of origin/main", () => {
   } finally { item.close(); }
 });
 
-test("approval is blocked when local main has diverged from origin/main", () => {
+test("approval is blocked when main is behind and has uncommitted tracked changes", () => {
+  const item = fixture();
+  try {
+    withOrigin(item).pushUpstream("upstream.txt");
+    writeFileSync(join(item.repo, "README.md"), "local edit\n");
+    writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
+    assert.throws(() => item.approve(item.card), /Local main is 1 commit behind origin\/main\. Update main first/);
+  } finally { item.close(); }
+});
+
+test("a diverged local main is rebased onto origin/main, keeping the local commit", () => {
   const item = fixture();
   try {
     const origin = withOrigin(item);
     origin.pushUpstream("upstream.txt");
     origin.commitLocal("local.txt");
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
+    assert.throws(() => item.approve(item.card), /Rebased 1 local commit on main onto origin\/main\. Refresh the diff and approve again/);
+    assert.equal(git(item.repo, "rev-list", "--left-right", "--count", "main...origin/main"), "1\t0");
+    assert.equal(item.approve(item.card).status, "done");
+  } finally { item.close(); }
+});
+
+test("approval is blocked when local main has diverged from origin/main and the rebase conflicts", () => {
+  const item = fixture();
+  try {
+    const origin = withOrigin(item);
+    origin.pushUpstream("same.txt");
+    writeFileSync(join(item.repo, "same.txt"), "different\n");
+    git(item.repo, "add", "same.txt");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "same");
+    const local = git(item.repo, "rev-parse", "main");
+    writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
     assert.throws(() => item.approve(item.card), /Local main has diverged from origin\/main \(1 local, 1 commit behind\)/);
+    assert.equal(git(item.repo, "rev-parse", "main"), local, "the aborted rebase left main as it was");
+    assert.equal(git(item.repo, "status", "--porcelain"), "");
     assert.equal(item.board.getCard(item.card.id)!.status, "review");
   } finally { item.close(); }
 });
@@ -463,5 +491,37 @@ test("a failed fetch of origin warns and approval proceeds", () => {
     assert.equal(item.approve(item.card).status, "done");
     assert.equal(item.integration.warnings.length, 1);
     assert.match(item.integration.warnings[0], /^git fetch origin failed/);
+  } finally { item.close(); }
+});
+
+test("with pushMainAfterMerge on, approval pushes main to origin; a failing push leaves the card Done and says why", () => {
+  for (const reachable of [true, false]) {
+    const item = fixture();
+    try {
+      const origin = join(item.dir, "origin.git");
+      execFileSync("git", ["init", "-q", "--bare", origin]);
+      git(item.repo, "remote", "add", "origin", reachable ? origin : join(item.dir, "missing.git"));
+      item.board.setPushMainAfterMerge(item.board.boardForRepo(item.repo)!.id, true);
+      writeFileSync(join(item.worktree, "new.txt"), "work\n");
+      const done = item.approve(item.card);
+      assert.equal(done.status, "done");
+      const note = item.board.listCardEvents(item.card.id).at(-1)!.reason;
+      if (reachable) {
+        assert.equal(git(origin, "rev-parse", "main"), git(item.repo, "rev-parse", "main"));
+        assert.match(note, /^Pushed main to origin/);
+      } else assert.match(note, /pushing main to origin failed[\s\S]*Push it yourself/);
+    } finally { item.close(); }
+  }
+});
+
+test("main is not pushed unless the board opts in", () => {
+  const item = fixture();
+  try {
+    const origin = join(item.dir, "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", origin]);
+    git(item.repo, "remote", "add", "origin", origin);
+    writeFileSync(join(item.worktree, "new.txt"), "work\n");
+    item.approve(item.card);
+    assert.throws(() => git(origin, "rev-parse", "main"));
   } finally { item.close(); }
 });

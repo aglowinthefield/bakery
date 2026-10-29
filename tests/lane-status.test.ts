@@ -3,7 +3,7 @@ import { after, before, test } from "node:test";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 
-const statuses = ["triage", "ready", "running", "review", "failed", "interrupted", "done", "archived"];
+const statuses = ["triage", "ready", "running", "review", "failed", "done", "archived"];
 const labels: Record<string, string> = { archived: "Archive" };
 let server: ViteDevServer;
 let browser: Browser;
@@ -37,7 +37,7 @@ test("each lane keeps its label and a readable status dot in both palettes and w
     assert.equal(await page.getByRole("button", { name: /archived card/ }).count(), 0, "Archive starts collapsed");
     await page.getByRole("button", { name: "Expand Archive lane" }).click();
     let defaultColors: string[] = [];
-    for (const theme of ["default", "compline", "hearth", "gruvbox-dark", "gruvbox-light", "nord"]) {
+    for (const theme of ["default", "compline", "compline-light", "hearth", "gruvbox-dark", "gruvbox-light", "nord"]) {
       await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
       const colors = new Set<string>();
       for (const status of statuses) {

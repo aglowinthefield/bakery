@@ -29,6 +29,22 @@ export function compareWithOriginMain(repo: string, ref = "main"): { ahead: numb
   return { ahead, behind };
 }
 
+/**
+ * Brings local main level with origin/main when it is behind: a fast-forward, or a rebase of unpushed local commits
+ * onto it. Only from a clean tracked checkout. A rebase that conflicts is aborted so main is left as it was.
+ * Returns what it did, or null when it did not touch main (the caller then reports `behindOriginMessage`).
+ */
+export function syncMainWithOrigin(repo: string, state: { ahead: number; behind: number }): string | null {
+  if (!state.behind) return null;
+  try {
+    if (git(repo, ["status", "--porcelain", "--untracked-files=no"])) return null;
+    if (!state.ahead) { git(repo, ["merge", "--ff-only", "--quiet", "refs/remotes/origin/main"]); return `Fast-forwarded main over ${state.behind} commit${state.behind === 1 ? "" : "s"} from origin/main`; }
+    try { git(repo, ["rebase", "refs/remotes/origin/main"]); }
+    catch { try { git(repo, ["rebase", "--abort"]); } catch { /* Nothing in progress. */ } return null; }
+    return `Rebased ${state.ahead} local commit${state.ahead === 1 ? "" : "s"} on main onto origin/main`;
+  } catch { return null; }
+}
+
 /** Why approving into local main must wait, or null. Ahead of origin/main is fine; behind or diverged is not. */
 export function behindOriginMessage(repo: string, state: { ahead: number; behind: number }): string | null {
   if (!state.behind) return null;

@@ -33,6 +33,7 @@ test("changed files open their own patches and focus the heading without changin
       "/api/boards/board/cards/card/approval": { pending: false },
       "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/history": [],
       "/api/boards/board/cards/card/comments": comments,
       "/api/boards/board/cards/card/auto-review": [],
       "/api/boards/board/cards/card/review": { fingerprint, files: files.map((file, index) => ({ path: file, patch: `@@ -0,0 +1 @@\n+${["first", "second", "third"][index]}\n` })) },
@@ -97,6 +98,7 @@ test("the gutter + button comments on the hovered diff row and the layout choice
       "/api/boards/board/cards/card/approval": { pending: false },
       "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/history": [],
       "/api/boards/board/cards/card/comments": [],
       "/api/boards/board/cards/card/auto-review": [],
       "/api/boards/board/cards/card/review": { fingerprint, files: [{ path: "src/app.ts", patch }] },
@@ -144,6 +146,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
       "/api/boards/board/cards/card/approval": { pending: false },
       "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/history": [],
       "/api/boards/board/cards/card/comments": [],
       "/api/boards/board/cards/card/auto-review": [],
       "/api/boards/board/cards/card/review": { fingerprint, files: [{ path: "src/app.ts", patch }] },
@@ -195,6 +198,7 @@ test("Run again is unavailable while agent review is running and returns when it
       "/api/boards/board/cards/card/approval": { pending: false },
       "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/history": [],
       "/api/boards/board/cards/card/comments": [],
       "/api/boards/board/cards/card/auto-review": [{ cardId: "card", runId: "run", state: reviewState, details: "", fingerprint: "", startedAt: "2026-01-01", finishedAt: null }],
       "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [] },
@@ -240,6 +244,7 @@ test("a request failure remains visible after closing card details", async () =>
       "/api/boards/board/cards/ready/approval": { pending: false },
       "/api/boards/board/cards/ready/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/ready/push-progress": null,
+      "/api/boards/board/cards/ready/history": [],
       "/api/boards/board/cards/ready/comments": [],
       "/api/boards/board/cards/ready/auto-review": [],
     };
@@ -275,6 +280,7 @@ test("the side panel switches cards without leaking the previous card's review o
       "/api/boards/board/cards/review/approval": { pending: false },
       "/api/boards/board/cards/review/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/review/push-progress": null,
+      "/api/boards/board/cards/review/history": [],
       "/api/boards/board/cards/review/comments": [],
       "/api/boards/board/cards/review/auto-review": [],
       "/api/boards/board/cards/review/review": { fingerprint: "a".repeat(64), files: [{ path: "src/old.ts", patch: "@@ -0,0 +1 @@\n+old\n" }] },
@@ -282,6 +288,7 @@ test("the side panel switches cards without leaking the previous card's review o
       "/api/boards/board/cards/ready/approval": { pending: false },
       "/api/boards/board/cards/ready/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/ready/push-progress": null,
+      "/api/boards/board/cards/ready/history": [],
       "/api/boards/board/cards/ready/comments": [],
       "/api/boards/board/cards/ready/auto-review": [],
     };
@@ -300,7 +307,8 @@ test("the side panel switches cards without leaking the previous card's review o
     await page.getByRole("heading", { name: "Ready card" }).waitFor();
     assert.equal(await page.getByText("Old output").count(), 0);
     assert.equal(await page.getByRole("heading", { name: "Review diff" }).count(), 0);
-    await page.getByRole("button", { name: /Review card/ }).click();
+    // Fewer lanes leave the Review tile no room to scroll out from under the side panel, so click it directly.
+    await page.getByRole("button", { name: /Review card/ }).evaluate((tile) => (tile as HTMLElement).click());
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByText("Changed files (1)").waitFor();
     await page.getByRole("heading", { name: "Review card" }).click();

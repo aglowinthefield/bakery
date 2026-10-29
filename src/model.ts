@@ -23,6 +23,10 @@ export type Board = {
   integration?: "local" | "github-pr";
   /** Why GitHub sync last failed; auto pickup waits while it is set. */
   integrationError?: string;
+  /** A sync problem Bakery is retrying (a failed fetch); pickup is not paused. */
+  integrationWarning?: string;
+  /** When GitHub sync last completed. */
+  integrationSyncedAt?: string | null;
   /** The operator picked the integration mode; detection leaves it alone. */
   integrationChosen?: boolean;
   /** Whether GitHub main only accepts pull requests; null until Bakery could check. */
@@ -30,6 +34,7 @@ export type Board = {
   /** What the GitHub main check found, or why it could not run. */
   integrationNote?: string;
   autoCollapseEmptySwimlanes: boolean;
+  pushMainAfterMerge?: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;
   autoReviewEnabledAt: string | null;
@@ -161,6 +166,8 @@ export type Card = {
   locallyMerged?: boolean;
   /** Set on Review cards that are not your turn yet; see `reviewWaitLabels`. */
   reviewWait?: ReviewWait | null;
+  /** A start was asked for during a restart drain and runs after the restart. */
+  startQueued?: boolean;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
 } & UsageFields;

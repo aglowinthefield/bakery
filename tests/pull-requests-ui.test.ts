@@ -8,9 +8,10 @@ const boards = [
   { id: "gl", repo: "/tmp/gl", remoteUrl: "https://gitlab.com/acme/gl", autoCollapseEmptySwimlanes: false },
   { id: "none", repo: "/tmp/none", autoCollapseEmptySwimlanes: false },
 ];
+const merged: string[] = [];
 const pulls = [
   { number: 7, title: "Add widgets", url: "https://github.com/acme/gh/pull/7", headRefName: "bakery/c1", isDraft: false, updatedAt: "2025-01-01T00:00:00Z", author: { login: "me" },
-    card: { id: "c1", title: "Widgets", status: "review", prChecks: "passing" } },
+    card: { id: "c1", title: "Widgets", status: "review", prChecks: "passing" }, checks: "passing" },
   { number: 8, title: "Outside change", url: "https://github.com/acme/gh/pull/8", headRefName: "feature", isDraft: true, updatedAt: "2025-01-02T00:00:00Z", author: { login: "you" }, card: null },
 ];
 
@@ -24,7 +25,7 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/boards") return route.fulfill({ json: boards });
       if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
-      if (path === "/api/boards/gh/pull-requests/8") return route.fulfill({ json: { body: "Does **things**\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<details><summary>More</summary>hidden text</details>\n\n- [x] done item\n\n<script>window.pwned=1</script>", baseRefName: "main", changedFiles: 1, files: [{ path: "src/a.ts", additions: 3, deletions: 1, changeType: "MODIFIED" }], commits: [{ oid: "abcdef123456", messageHeadline: "Do things", authors: [{ login: "you" }], committedDate: "2025-01-02T00:00:00Z" }], comments: [], latestReviews: [], statusCheckRollup: [{ name: "build", conclusion: "SUCCESS" }] } });
+      if (path === "/api/boards/gh/pull-requests/7/merge") { merged.push(route.request().method()); return route.fulfill({ json: { ok: true } }); }
       if (path === "/api/boards/gh/pull-requests") return route.fulfill({ json: pulls });
       await route.fulfill({ json: [] });
     });
@@ -38,21 +39,12 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
     await page.getByRole("button", { name: "Pull requests" }).click();
     await page.getByRole("list", { name: "Pull requests" }).waitFor();
     assert.equal(await page.locator("[data-pr]").count(), 2);
-    assert.equal(await page.locator("[data-pr='8']").getByText("No card").count(), 1);
-    await page.locator("[data-pr='8']").getByRole("button", { name: /Outside change/ }).click();
-    const dialog = page.locator("[data-pr='8']");
-    await dialog.getByText("src/a.ts").waitFor();
-    assert.equal(await dialog.getByText("Do things").count(), 1);
-    assert.equal(await dialog.getByText("build").count(), 1);
-    assert.equal(await dialog.locator("strong", { hasText: "things" }).count(), 1);
-    assert.equal(await dialog.locator("table td", { hasText: "2" }).count(), 1);
-    assert.equal(await dialog.locator("details summary", { hasText: "More" }).count(), 1);
-    assert.equal(await dialog.locator("input[type=checkbox]:checked").count(), 1);
-    assert.equal(await page.evaluate(() => (window as unknown as { pwned?: number }).pwned), undefined);
-    assert.equal(await page.getByRole("dialog").count(), 0);
-    await dialog.getByRole("button", { name: /Outside change/ }).click();
-    await dialog.getByText("src/a.ts").waitFor({ state: "detached" });
-    await page.locator("[data-pr='7']").getByRole("button", { name: /Card · review · passing/ }).click();
+    assert.equal(await page.locator("[data-pr='7']").getByText("CI passing").count(), 1);
+    assert.equal(await page.locator("[data-pr='8']").getByRole("button", { name: "Queue merge" }).isDisabled(), true);
+    await page.locator("[data-pr='7']").getByRole("button", { name: "Queue merge" }).click();
+    await page.locator("[data-pr='7']").getByText("Queued").waitFor();
+    assert.deepEqual(merged, ["POST"]);
+    await page.locator("[data-pr='7']").getByRole("button", { name: /Card · review/ }).click();
     await page.locator("h1").filter({ hasText: "gh" }).waitFor();
     assert.equal(await page.getByRole("list", { name: "Pull requests" }).count(), 0);
   } finally {

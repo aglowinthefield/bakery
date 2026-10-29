@@ -8,7 +8,7 @@ import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from 
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
-import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
+import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin, syncMainWithOrigin } from "./origin.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false): string {
   try {
@@ -94,6 +94,15 @@ const progressLogLines = 400;
  * pre-push hook's own stdout is part of the push output, so a failure message carries everything it printed, not
  * only stderr. `\r` progress redraws replace the line they redraw.
  */
+/** A failed `git push`. `hookFailed` when a pre-push hook refused it, as opposed to the remote or the network. */
+export class PushError extends Error {
+  constructor(message: string, readonly output: string, readonly hookFailed: boolean) { super(message); }
+}
+/** A pre-push hook refused the push of `sha`, which Bakery had committed from the card's reviewed work. */
+export class PushHookError extends PushError {
+  constructor(error: PushError, readonly sha: string) { super(error.message, error.output, true); }
+}
+
 export function pushBranch(cwd: string, refspec: string, onLine: (line: string, replace: boolean) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["-C", cwd, "push", "--progress", "origin", refspec], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -122,7 +131,11 @@ export function pushBranch(cwd: string, refspec: string, onLine: (line: string, 
       if (code === 0) { resolve(); return; }
       const detail = output.filter(line => line.trim()).join("\n") || `git push exited with code ${code}`;
       // The end of the output names the failing check; keep it when the output is long.
-      reject(new Error(`push failed: ${detail.length > 6000 ? "…" + detail.slice(-6000) : detail}`));
+      // Git prints "! [rejected]" lines when the remote refuses and "fatal:" when it cannot connect. A hook failing
+      // prints neither: only the hook's own output, then "error: failed to push some refs".
+      const hookFailed = !output.some(line => /^\s*! \[|^(fatal|remote):/.test(line));
+      const body = (detail.length > 6000 ? "…" + detail.slice(-6000) : detail);
+      reject(new PushError(`push failed: ${hookFailed ? "the repository's pre-push hook refused it.\n\n" : ""}${body}`, detail, hookFailed));
     });
   });
 }
@@ -316,7 +329,8 @@ export class Integration {
       } else {
         step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
         // A plain push: if the branch on GitHub moved after the fetch, Git still refuses instead of overwriting it.
-        await push(worktree, `${candidate}:refs/heads/${branch}`);
+        try { await push(worktree, `${candidate}:refs/heads/${branch}`); }
+        catch (error) { throw error instanceof PushError && error.hookFailed ? new PushHookError(error, candidate) : error; }
       }
       step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
       const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
@@ -459,13 +473,18 @@ export class Integration {
   /**
    * When the repository has an `origin`, fetch it and refuse to merge into a main that is behind origin/main, so a
    * card never lands on a stale main. Ahead is fine (local work not yet pushed). A failed fetch only warns.
+   * Behind main is brought level when that is safe (clean checkout, no rebase conflict). The review diff and its
+   * fingerprint were taken against the old main, so the operator still refreshes and approves again.
    */
   private requireMainCurrent(repo: string) {
     if (!hasOrigin(repo)) return;
     const warning = fetchOriginBestEffort(repo, this.fetchTimeoutMs);
     if (warning) { this.warnings.push(warning); this.warnings.splice(0, this.warnings.length - 20); console.warn(`${repo}: ${warning}`); }
     const state = compareWithOriginMain(repo);
-    const blocked = state && behindOriginMessage(repo, state);
+    if (!state) return;
+    const synced = syncMainWithOrigin(repo, state);
+    if (synced) throw new Error(`${synced}. Refresh the diff and approve again`);
+    const blocked = behindOriginMessage(repo, state);
     if (blocked) throw new Error(blocked);
   }
 
@@ -479,6 +498,19 @@ export class Integration {
     return this.board.acceptFindings(card.id, run.id);
   }
 
+  /** Marks the card Done, then pushes main when the board asks for it. A failed push never undoes the merge; it goes in the card's history. */
+  private completeAndPush(card: Card, runId: string, candidate: string, repo: string): Card {
+    const done = this.board.completeApproval(card.id, runId, candidate);
+    if (!this.board.boardForRepo(card.repo)?.pushMainAfterMerge) return done;
+    try {
+      execFileSync("git", ["-C", repo, "push", "origin", "main"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
+      this.board.noteCard(card.id, "Pushed main to origin after the merge");
+    } catch (error) {
+      const detail = (error as { stderr?: string }).stderr?.trim() || (error instanceof Error ? error.message : String(error));
+      this.board.noteCard(card.id, `Merged into local main, but pushing main to origin failed: ${detail.slice(0, 500)}. Push it yourself.`);
+    }
+    return done;
+  }
   approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const repoBoard = this.board.boardForRepo(card.repo);
@@ -511,7 +543,7 @@ export class Integration {
 
     if (approved.preparedHead && isAncestor(repo, approved.preparedHead, "main")) {
       if (git(repo, "rev-parse", "main") !== approved.preparedHead) throw new Error("Main changed after Bakery merged this card; inspect the result before closing it");
-      return this.board.completeApproval(card.id, run.id, approved.candidate);
+      return this.completeAndPush(card, run.id, approved.candidate, repo);
     }
     if (isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Bakery; inspect main before closing this card");
     const base = git(repo, "rev-parse", "main");
@@ -546,7 +578,7 @@ export class Integration {
       this.board.recordPreparedMerge(card.id, run.id, approved.candidate, merged);
       git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
       // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.
-      return this.board.completeApproval(card.id, run.id, approved.candidate);
+      return this.completeAndPush(card, run.id, approved.candidate, repo);
     } finally {
       // Only remove Bakery's temporary integration checkout. Keep the card worktree on every failure.
       try { git(repo, "worktree", "remove", "--force", scratch); } catch { /* Keep the original error; the scratch path is recoverable. */ }

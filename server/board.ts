@@ -9,21 +9,21 @@ import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/rep
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; agentModels: AgentModels };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationChosen: number; githubMainProtected: number | null; integrationNote: string };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
   autoReviewEnabledAt: row.autoReviewEnabledAt, pickupConcurrency: row.pickupConcurrency,
   pickupDailyLimit: row.pickupDailyLimit, autoPickupEnabledAt: row.autoPickupEnabledAt, autoPickupError: row.autoPickupError,
-  autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0,
+  autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, pushMainAfterMerge: row.pushMainAfterMerge !== 0,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
   autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels),
   autoPickupNextAt: row.pickupDailyLimit > 0 && starts.length >= row.pickupDailyLimit
     ? new Date(Date.parse(starts[starts.length - row.pickupDailyLimit]) + 86_400_000).toISOString() : null,
-  pickupCostBudget: row.pickupCostBudget, cost24h, integration: row.integration, integrationError: row.integrationError,
+  pickupCostBudget: row.pickupCostBudget, cost24h, integration: row.integration, integrationError: row.integrationError, integrationWarning: row.integrationWarning, integrationSyncedAt: row.integrationSyncedAt,
   integrationChosen: row.integrationChosen !== 0, githubMainProtected: row.githubMainProtected === null ? null : row.githubMainProtected !== 0, integrationNote: row.integrationNote,
   autoPickupBudgetReached: row.pickupCostBudget !== null && cost24h >= row.pickupCostBudget,
 });
@@ -61,6 +61,8 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   lastActivityAt: string | null;
   /** Set only for Review cards that are not your turn; null means a person is needed (or the card is not in Review). */
   reviewWait: ReviewWait | null;
+  /** A start was asked for during a restart drain and runs after the restart. */
+  startQueued: boolean;
   /** Done cards on a local board with a GitHub remote: is the merge on origin/main (last fetch)? */
   originMain?: "pushed" | "local" } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
@@ -69,15 +71,17 @@ export type CardRef = { id: string; title: string; status: CardStatus };
 const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
-type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
+type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationChosen, githubMainProtected, integrationNote";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
 const now = () => new Date().toISOString();
+/** A status change (fromStatus/toStatus set) or a note (both null), with why it happened. */
+export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string };
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COUNT(runs.id) AS attempts,
   (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds,
@@ -124,7 +128,13 @@ export class Board {
       CREATE INDEX IF NOT EXISTS card_dependencies_parent ON card_dependencies(dependsOn);
       DELETE FROM card_dependencies WHERE cardId NOT IN (SELECT id FROM cards) OR dependsOn NOT IN (SELECT id FROM cards);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL CHECK(confirmRunStart IN (0, 1)), cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side')), theme TEXT NOT NULL DEFAULT 'default', notifyOnReview INTEGER NOT NULL DEFAULT 0 CHECK(notifyOnReview IN (0, 1)), agentModels TEXT NOT NULL DEFAULT '{}');
-      INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);`);
+      INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);
+      CREATE TABLE IF NOT EXISTS card_events (id INTEGER PRIMARY KEY AUTOINCREMENT, cardId TEXT NOT NULL, at TEXT NOT NULL, fromStatus TEXT, toStatus TEXT, reason TEXT NOT NULL DEFAULT '');
+      CREATE INDEX IF NOT EXISTS card_events_card ON card_events(cardId, id);
+      -- Every status change lands here, whichever code path made it. The method that made it then fills in the reason (see explain).
+      CREATE TRIGGER IF NOT EXISTS card_status_events AFTER UPDATE OF status ON cards WHEN OLD.status IS NOT NEW.status BEGIN
+        INSERT INTO card_events(cardId, at, fromStatus, toStatus) VALUES (NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), OLD.status, NEW.status);
+      END;`);
     // Scripts may pass an idempotency key so a re-run returns the card it already created on that board.
     const cardColumns = new Set((this.db.prepare("PRAGMA table_info(cards)").all() as { name: string }[]).map(column => column.name));
     if (!cardColumns.has("priority")) this.db.exec("ALTER TABLE cards ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
@@ -139,6 +149,8 @@ export class Board {
     }
     // CI failures from a card's PR, waiting to be handed to the card's next run.
     this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
+    // 'ci' for a PR's failed checks, 'push' for a pre-push hook that refused the push.
+    if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
@@ -164,6 +176,7 @@ export class Board {
     if (!migratedSettings.has("agentModels")) this.db.exec("ALTER TABLE settings ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
     if (!migratedSettings.has("density")) this.db.exec("ALTER TABLE settings ADD COLUMN density TEXT NOT NULL DEFAULT 'default' CHECK(density IN ('compact', 'default', 'cozy'))");
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
+    if (!boardColumns.has("pushMainAfterMerge")) this.db.exec("ALTER TABLE boards ADD COLUMN pushMainAfterMerge INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("icon")) this.db.exec("ALTER TABLE boards ADD COLUMN icon TEXT NOT NULL DEFAULT 'sprinkle_donut'");
     if (!boardColumns.has("color")) this.db.exec("ALTER TABLE boards ADD COLUMN color TEXT NOT NULL DEFAULT 'violet'");
@@ -188,6 +201,9 @@ export class Board {
     if (!boardColumns.has("agentModels")) this.db.exec("ALTER TABLE boards ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
     if (!boardColumns.has("integration")) this.db.exec("ALTER TABLE boards ADD COLUMN integration TEXT NOT NULL DEFAULT 'local' CHECK(integration IN ('local', 'github-pr'))");
     if (!boardColumns.has("integrationError")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationError TEXT NOT NULL DEFAULT ''");
+    // integrationWarning: a sync problem Bakery is riding out (a failed fetch it retries). integrationSyncedAt: last full sync.
+    if (!boardColumns.has("integrationWarning")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationWarning TEXT NOT NULL DEFAULT ''");
+    if (!boardColumns.has("integrationSyncedAt")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationSyncedAt TEXT");
     // integrationChosen: the operator picked the mode, so detection never changes it. githubMainProtected: NULL until checked.
     if (!boardColumns.has("integrationChosen")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationChosen INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("githubMainProtected")) this.db.exec("ALTER TABLE boards ADD COLUMN githubMainProtected INTEGER");
@@ -236,7 +252,8 @@ export class Board {
   recoverInterruptedRuns(): void {
     // Only the server calls this under the exclusive data-directory lock.
     this.db.exec(`UPDATE runs SET status='interrupted', error='Server restarted while this run was active', finishedAt=datetime('now') WHERE status='running';
-      UPDATE cards SET status='interrupted' WHERE status='running';`);
+      UPDATE cards SET status='interrupted' WHERE status='running';
+      UPDATE card_events SET reason='The server restarted while Pi was running' WHERE toStatus='interrupted' AND reason='';`);
   }
   recoverAutoReviews(): void {
     // Only the server may call this, after obtaining its exclusive data-directory lock.
@@ -254,6 +271,8 @@ export class Board {
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     this.db.prepare("INSERT OR IGNORE INTO queued_starts(cardId, queuedAt) VALUES (?, ?)").run(cardId, now());
   }
+  /** Drops a start queued during a restart drain. Returns whether one was queued. */
+  cancelQueuedStart(cardId: string): boolean { return this.db.prepare("DELETE FROM queued_starts WHERE cardId=?").run(cardId).changes > 0; }
   isStartQueued(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM queued_starts WHERE cardId=?").get(cardId); }
   /** Returns queued card ids oldest first and empties the queue. */
   takeQueuedStarts(): string[] {
@@ -328,7 +347,7 @@ export class Board {
     if (!board) throw new Error("Board not found");
     if (mode !== "local" && mode !== "github-pr") throw new Error("Integration must be local or github-pr");
     if (mode === "github-pr" && !githubRepo(board.remoteUrl)) throw new Error("github-pr integration requires the board's remote to be a GitHub repository link (https://github.com/OWNER/REPO)");
-    this.db.prepare("UPDATE boards SET integration=?, integrationError='', integrationChosen=1 WHERE id=?").run(mode, id);
+    this.db.prepare("UPDATE boards SET integration=?, integrationError='', integrationWarning='', integrationChosen=1 WHERE id=?").run(mode, id);
     return this.getBoard(id)!;
   }
   /**
@@ -346,7 +365,15 @@ export class Board {
   }
   /** An integration error pauses automatic pickup on the board until a later sync clears it. */
   setIntegrationError(id: string, error: string): void {
-    this.db.prepare("UPDATE boards SET integrationError=? WHERE id=?").run(error.slice(0, 2000), id);
+    this.db.prepare("UPDATE boards SET integrationError=?, integrationWarning='' WHERE id=?").run(error.slice(0, 2000), id);
+  }
+  /** A sync problem that does not pause pickup yet: Bakery retries, and escalates to an error if it lasts. */
+  setIntegrationWarning(id: string, warning: string): void {
+    this.db.prepare("UPDATE boards SET integrationWarning=? WHERE id=?").run(warning.slice(0, 2000), id);
+  }
+  /** A sync pass finished: clears any error or warning and records when. */
+  recordIntegrationSync(id: string, at = new Date().toISOString()): void {
+    this.db.prepare("UPDATE boards SET integrationError='', integrationWarning='', integrationSyncedAt=? WHERE id=?").run(at, id);
   }
   boardForRepo(repo: string): RepoBoard | undefined { return this.listBoards().find(item => item.repo === repo); }
   integrationFor(repo: string): IntegrationMode {
@@ -389,13 +416,21 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  /**
+   * A pre-push hook refused the push of `sha`: keep its output for the card's next run. Unlike CI rounds this is not
+   * counted or limited, because each round starts from an operator's Approve, and the fix waits for another one.
+   */
+  recordPushFailure(cardId: string, sha: string, output: string): void {
+    this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, 'push') ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt, source='push'")
+      .run(cardId, sha, output.slice(-20_000), now());
+  }
   /** Marks `headSha` as handled without sending the card back, e.g. once the rework limit is reached. */
   markCiHandled(cardId: string, headSha: string): void {
     this.db.prepare("UPDATE cards SET ciReworkSha=? WHERE id=?").run(headSha, cardId);
   }
   /** CI failures waiting for the card's next run. */
-  getCiFeedback(cardId: string): { headSha: string; failures: string } | undefined {
-    return this.db.prepare("SELECT headSha, failures FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string } | undefined;
+  getCiFeedback(cardId: string): { headSha: string; failures: string; source: "ci" | "push" } | undefined {
+    return this.db.prepare("SELECT headSha, failures, source FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string; source: "ci" | "push" } | undefined;
   }
   /**
    * The waiting failures went stale before a fix run took them (CI is re-running or passed). The round never ran,
@@ -404,14 +439,14 @@ export class Board {
   dropCiFeedback(cardId: string): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      if (this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId).changes)
+      if (this.db.prepare("DELETE FROM ci_feedback WHERE cardId=? AND source='ci'").run(cardId).changes)
         this.db.prepare("UPDATE cards SET ciReworks=MAX(ciReworks-1, 0), ciReworkSha=NULL WHERE id=?").run(cardId);
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  /** Marks a run as a CI fix run and hands it the waiting failures. */
-  startCiFix(cardId: string, runId: string): void {
-    this.db.prepare("UPDATE runs SET ciFix=1 WHERE id=?").run(runId);
+  /** Hands a run the waiting failures. A CI fix run is also marked, so its result is pushed without Approve; a hook fix waits for Approve. */
+  startCiFix(cardId: string, runId: string, source: "ci" | "push" = "ci"): void {
+    if (source === "ci") this.db.prepare("UPDATE runs SET ciFix=1 WHERE id=?").run(runId);
     this.clearCiFeedback(cardId);
   }
   clearCiFeedback(cardId: string): void { this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId); }
@@ -426,6 +461,7 @@ export class Board {
       this.db.prepare("INSERT INTO external_integrations(cardId, runId, candidate, mergeCommit, integratedAt) VALUES (?, ?, ?, ?, ?)")
         .run(cardId, run.id, candidate, mergeCommit, now());
       this.db.prepare("UPDATE cards SET status='done', prState='MERGED', prError=NULL, updatedAt=? WHERE id=?").run(now(), cardId);
+      this.explain(cardId, `Pull request #${card.prNumber ?? "?"} merged; ${mergeCommit.slice(0, 7)} is on origin/main`);
       this.clearMergeFailure(cardId);
       this.db.exec("COMMIT");
       return this.getCard(cardId)!;
@@ -452,6 +488,7 @@ export class Board {
       this.db.prepare("DELETE FROM approvals WHERE cardId=?").run(cardId);
       this.db.prepare("UPDATE cards SET status='review', prNumber=?, prUrl=?, prState='OPEN', prChecks=NULL, prError=NULL, prCiPending=0, prPushedRunId=?, updatedAt=? WHERE id=?")
         .run(pr.number, pr.url, approval.runId, now(), cardId);
+      this.explain(cardId, `Local merge published as pull request #${pr.number}; Done again once it merges`);
       this.clearMergeFailure(cardId);
       this.db.exec("COMMIT");
       return this.getCard(cardId)!;
@@ -459,7 +496,8 @@ export class Board {
   }
   /** A PR closed without merging needs the operator: the card fails with the reason. */
   closePullRequestUnmerged(cardId: string, reason: string): Card {
-    this.db.prepare("UPDATE cards SET status='failed', prState='CLOSED', prError=?, updatedAt=? WHERE id=? AND status='review'").run(reason, now(), cardId);
+    const result = this.db.prepare("UPDATE cards SET status='failed', prState='CLOSED', prError=?, updatedAt=? WHERE id=? AND status='review'").run(reason, now(), cardId);
+    if (result.changes) this.explain(cardId, `Pull request closed without merging: ${reason}`);
     return this.getCard(cardId)!;
   }
   setAgentModels(id: string, agentModels: unknown): RepoBoard {
@@ -475,6 +513,12 @@ export class Board {
   setAutoCollapseEmptySwimlanes(id: string, enabled: boolean): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");
     this.db.prepare("UPDATE boards SET autoCollapseEmptySwimlanes=? WHERE id=?").run(enabled ? 1 : 0, id);
+    return this.getBoard(id)!;
+  }
+  /** Local-merge boards only: after Bakery merges a card into local main it pushes main to origin. Off by default. */
+  setPushMainAfterMerge(id: string, enabled: boolean): RepoBoard {
+    if (!this.getBoard(id)) throw new Error("Board not found");
+    this.db.prepare("UPDATE boards SET pushMainAfterMerge=? WHERE id=?").run(enabled ? 1 : 0, id);
     return this.getBoard(id)!;
   }
   setAutoReview(id: string, enabled: boolean, verificationCommand: string): RepoBoard {
@@ -585,7 +629,7 @@ export class Board {
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
   }
   /** See `ReviewWait`. Anything this does not recognize as someone else's turn is the person's turn. */
-  private reviewWait(card: Omit<Card, "reviewWait">, repoBoard: RepoBoard | undefined): ReviewWait | null {
+  private reviewWait(card: Omit<Card, "reviewWait" | "startQueued">, repoBoard: RepoBoard | undefined): ReviewWait | null {
     if (card.status !== "review" || !repoBoard) return null;
     const run = this.listRuns(card.id)[0];
     if (run?.status !== "review") return null;
@@ -596,16 +640,17 @@ export class Board {
       // A run newer than the pushed one (a CI fix, a rerun) waits for Approve to push it.
       if (card.prState !== "OPEN" || (!card.prOverrideUrl && card.prPushedRunId !== run.id)) return null;
       if (card.prChecks !== "failing") return "github";
-      return card.prCiPending || this.getCiFeedback(card.id) ? "ci_fix" : null;
+      return card.prCiPending || this.getCiFeedback(card.id)?.source === "ci" ? "ci_fix" : null;
     }
     if (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run)) return "agent_review";
     return null;
   }
   private toCards(rows: CardRow[]): Card[] {
     const boards = new Map(this.listBoards().map(item => [item.repo, item]));
+    const queued = new Set((this.db.prepare("SELECT cardId FROM queued_starts").all() as { cardId: string }[]).map(item => item.cardId));
     return rows.map(row => {
       const card = { ...row, createdCardIds: row.createdCardIds === null ? null : JSON.parse(row.createdCardIds) as string[], dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0, locallyMerged: row.locallyMerged !== 0, planOnly: row.planOnly !== 0 };
-      return { ...card, reviewWait: this.reviewWait(card, boards.get(card.repo)) };
+      return { ...card, reviewWait: this.reviewWait(card, boards.get(card.repo)), startQueued: queued.has(card.id) };
     });
   }
   autoReviewMergesToday(repo: string): number {
@@ -811,9 +856,11 @@ export class Board {
     // Recover cards closed by the old status-only action without launching another Pi run.
     if (status === "ready" && card.status === "done" && this.listRuns(id)[0]?.status === "review" && !this.wasIntegrated(id)) {
       this.db.prepare("UPDATE cards SET status='review', updatedAt=? WHERE id=?").run(now(), id);
+      this.explain(id, "Reopened; its work was never merged, so it is back for review");
       return this.getCard(id)!;
     }
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
+    this.explain(id, card.status === "done" ? "Reopened" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage");
     return this.getCard(id)!;
   }
   // Drops a Review card without merging. The run, worktree and branch stay, so Reopen can bring it back.
@@ -823,6 +870,7 @@ export class Board {
     if (card.status !== "review") throw new Error("Only Review cards can be closed without merging");
     if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge into local main");
     this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), id);
+    this.explain(id, "Closed without merging; the worktree and branch stay, and Reopen brings it back to Review");
     return this.getCard(id)!;
   }
   // Archiving only hides Done cards in a separate lane. It never touches runs, worktrees, or Git.
@@ -838,7 +886,7 @@ export class Board {
         if (card.status !== from) throw new Error(archived ? "Only Done cards can be archived" : "Only archived cards can be restored");
       }
       const time = now(), update = this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?");
-      for (const id of unique) update.run(to, time, id);
+      for (const id of unique) { update.run(to, time, id); this.explain(id, archived ? "Archived" : "Restored from the archive"); }
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return unique.map(id => this.getCard(id)!);
@@ -890,6 +938,7 @@ export class Board {
       if (this.db.prepare("SELECT 1 FROM review_comments WHERE cardId=? AND runId=? AND fingerprint<>? AND state='draft'").get(cardId, runId, fingerprint)) throw new Error("Remove draft comments on older diffs before requesting changes");
       const result = this.db.prepare("UPDATE review_comments SET state='requested' WHERE cardId=? AND runId=? AND fingerprint=? AND state='draft'").run(cardId, runId, fingerprint);
       if (!result.changes) throw new Error("Add comments on the current diff before requesting changes");
+      this.noteCard(cardId, `Changes requested on attempt ${run.attempt} (${result.changes} comment${result.changes === 1 ? "" : "s"}); they go to Pi on the next run`);
       this.db.exec("COMMIT");
       return this.listReviewComments(cardId);
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
@@ -935,6 +984,7 @@ export class Board {
       this.db.prepare("INSERT INTO external_integrations(cardId, runId, candidate, mergeCommit, integratedAt) VALUES (?, ?, ?, ?, ?)")
         .run(cardId, runId, candidate, mergeCommit, now());
       this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), cardId);
+      this.explain(cardId, `Merged outside Bakery; ${mergeCommit.slice(0, 7)} contains this card's work`);
       this.clearMergeFailure(cardId);
       this.db.exec("COMMIT");
       return this.getCard(cardId)!;
@@ -963,6 +1013,7 @@ export class Board {
       const card = this.getCard(cardId), run = this.listRuns(cardId)[0], approval = this.getApproval(cardId);
       if (card?.status !== "review" || run?.id !== runId || run.status !== "review" || approval?.candidate !== candidate || approval.runId !== runId) throw new Error("Approval state changed");
       this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), cardId);
+      this.explain(cardId, `Attempt ${run.attempt} approved and merged into local main`);
       this.db.prepare("UPDATE approvals SET merged=1 WHERE cardId=?").run(cardId);
       this.clearMergeFailure(cardId);
       this.db.exec("COMMIT");
@@ -978,9 +1029,11 @@ export class Board {
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
     }
     this.db.prepare("UPDATE cards SET status='failed', updatedAt=? WHERE id=?").run(now(), id);
+    this.explain(id, "Released after the interrupted run's process was confirmed gone");
     return this.getCard(id)!;
   }
-  claim(cardId: string, startedBy: "manual" | "auto" = "manual"): Run {
+  /** `why` says what asked for the run, for the card's history (e.g. the agent reviewer sending it back). */
+  claim(cardId: string, startedBy: "manual" | "auto" = "manual", why = ""): Run {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId);
@@ -1005,9 +1058,21 @@ export class Board {
       const id = randomUUID(), sessionId = `bakery-${cardId}`;
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy);
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
+      this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);
       this.db.exec("COMMIT");
       return this.getRun(id)!;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** Attaches a reason to the status change the card_status_events trigger just recorded for this card. */
+  private explain(cardId: string, reason: string): void {
+    this.db.prepare("UPDATE card_events SET reason=? WHERE id=(SELECT MAX(id) FROM card_events WHERE cardId=? AND toStatus IS NOT NULL) AND reason=''").run(reason.slice(0, 2000), cardId);
+  }
+  /** Records something worth knowing about a card that did not change its status, such as a failed restart. */
+  noteCard(cardId: string, reason: string): void {
+    this.db.prepare("INSERT INTO card_events(cardId, at, reason) VALUES (?, ?, ?)").run(cardId, now(), reason.slice(0, 2000));
+  }
+  listCardEvents(cardId: string): CardEvent[] {
+    return this.db.prepare("SELECT at, fromStatus, toStatus, reason FROM card_events WHERE cardId=? ORDER BY id").all(cardId) as CardEvent[];
   }
   getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
   listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }
@@ -1034,6 +1099,7 @@ export class Board {
       if (card?.status !== "review" || run?.id !== runId || run.status !== "review") throw new Error("Card changed since review; refresh and try again");
       if (this.getApproval(cardId)) throw new Error("Approval is in progress; retry or withdraw it first");
       this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), cardId);
+      this.explain(cardId, "Findings accepted; the run changed no files, so nothing was merged");
       this.db.exec("COMMIT");
       return this.getCard(cardId)!;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
@@ -1052,6 +1118,7 @@ export class Board {
     try {
       this.db.prepare("UPDATE runs SET status=?, error=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, now(), id);
       this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), run.cardId);
+      this.explain(run.cardId, status === "review" ? `Attempt ${run.attempt} finished; waiting for review` : `Attempt ${run.attempt} failed: ${error ?? "unknown error"}`);
       if (status === "review") this.clearMergeFailure(run.cardId);
       this.db.exec("COMMIT");
     } catch (err) { this.db.exec("ROLLBACK"); throw err; }

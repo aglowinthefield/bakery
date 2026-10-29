@@ -8,7 +8,7 @@ import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
-import { Integration } from "../server/integration.js";
+import { Integration, PushHookError } from "../server/integration.js";
 import { GitHub, GitHubSync, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 import { draftPullRequest, readPullRequestRules } from "../server/pr-draft.js";
@@ -513,6 +513,34 @@ test("github-pr: gh errors from creating the PR reach the card verbatim, and the
   } finally { f.cleanup(); }
 });
 
+test("github-pr: a refused push's hook output goes to the card's next run, which still waits for Approve", async () => {
+  const f = fixture();
+  const promptFile = join(f.dir, "prompt.txt");
+  const fixPi = join(f.dir, "pi-fix");
+  writeFileSync(fixPi, `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > "${promptFile}"\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fixPi, 0o755);
+  try {
+    const card = await reviewedCard(f);
+    writeFileSync(join(f.repo, ".git", "hooks", "pre-push"), "#!/bin/sh\necho 'Unused files (1)'\nexit 1\n");
+    chmodSync(join(f.repo, ".git", "hooks", "pre-push"), 0o755);
+    const error = await approve(f, card.id).catch((e: unknown) => e);
+    assert.ok(error instanceof PushHookError);
+    f.board.recordPushFailure(card.id, error.sha, error.output);
+    assert.equal(f.board.getCiFeedback(card.id)?.source, "push");
+    f.board.dropCiFeedback(card.id);
+    assert.ok(f.board.getCiFeedback(card.id), "a CI sync does not drop hook output");
+    const worker = new Worker(f.board, f.data, fixPi);
+    worker.start(f.board.getCard(card.id)!);
+    await waitFor(() => f.board.getCard(card.id)!.status === "review");
+    const prompt = readFileSync(promptFile, "utf8");
+    assert.match(prompt, /pre-push hook refused it/);
+    assert.match(prompt, /Unused files \(1\)/);
+    assert.doesNotMatch(prompt, /failed CI/);
+    assert.equal(f.board.listRuns(card.id)[0].ciFix, 0, "its result is not pushed without Approve");
+    assert.equal(f.board.getCiFeedback(card.id), undefined);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: a failing pre-push hook's stdout and stderr both reach the error, and push progress records each step and line", async () => {
   const f = fixture();
   try {
@@ -523,7 +551,7 @@ test("github-pr: a failing pre-push hook's stdout and stderr both reach the erro
     const integration = new Integration(f.board, f.data);
     const pending = integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
     assert.equal(integration.pushProgress(card.id)?.finishedAt, null, "progress exists while the push runs");
-    await assert.rejects(pending, (error: Error) => /^push failed: /.test(error.message) && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
+    await assert.rejects(pending, (error: Error) => error instanceof PushHookError && /^push failed: the repository's pre-push hook refused it\.\n\n/.test(error.message) && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
     const progress = integration.pushProgress(card.id)!;
     assert.match(progress.step, /^Pushing bakery\//, "the failed step is the push");
     assert.ok(progress.log.includes("SETTINGS_TAB_IDS  settingsTabs.ts:9:14"));
@@ -641,6 +669,20 @@ test("github-pr: a retry of an unpushed card whose base is behind is rebased ont
     assert.match(conflicted.error ?? "", /Rebase onto origin\/main conflicted in feature\.txt; the card branch is unchanged/);
     assert.equal(git(worktree, "rev-parse", "HEAD"), before);
     assert.equal(f.board.getCard(card.id)?.status, "failed");
+
+    // The conflict is recorded, so the next start is a repair run against origin/main and does not rebase again.
+    assert.deepEqual(f.board.getMergeFailure(card.id)?.files, ["feature.txt"]);
+    const argsFile = join(f.dir, "args"), argsPi = join(f.dir, "pi-args");
+    writeFileSync(argsPi, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(argsPi, 0o755);
+    const repair = new Worker(f.board, f.data, argsPi).start(f.board.getCard(card.id)!);
+    await waitFor(() => f.board.getRun(repair.id)?.status !== "running");
+    assert.equal(f.board.getRun(repair.id)?.status, "review", f.board.getRun(repair.id)?.error ?? "");
+    const prompt = readFileSync(argsFile, "utf8");
+    assert.match(prompt, /merge-conflict repair attempt/);
+    assert.match(prompt, /could not merge this card into origin\/main/);
+    assert.ok(prompt.includes(git(f.repo, "rev-parse", "origin/main")), "prompt names the fetched origin/main tip");
+    assert.equal(f.board.getMergeFailure(card.id), undefined, "cleared once the repair run reaches review");
   } finally { f.cleanup(); }
 });
 
@@ -1125,4 +1167,38 @@ test("github-pr: a manual start is refused while the card waits on GitHub CI", a
     try { assert.equal((after.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(card.id) as { n: number }).n, runs, "no new run started"); }
     finally { after.close(); }
   } finally { child?.kill(); f.cleanup(); }
+
+test("sync: a failed fetch is a warning that keeps pickup running until it lasts past the grace period", async () => {
+  const f = fixture();
+  try {
+    await f.sync.syncBoard(f.repoBoard.id);
+    const synced = f.board.getBoard(f.repoBoard.id)!.integrationSyncedAt;
+    assert.ok(synced, "a good sync records when it finished");
+
+    const good = git(f.repo, "remote", "get-url", "origin");
+    git(f.repo, "remote", "set-url", "origin", join(f.dir, "gone.git"));
+    await f.sync.syncBoard(f.repoBoard.id);
+    let current = f.board.getBoard(f.repoBoard.id)!;
+    assert.match(current.integrationWarning, /git fetch origin failed.*gone\.git/s, "the warning carries git's own reason");
+    assert.equal(current.integrationError, "", "one failed fetch does not stop sync");
+    assert.equal(current.integrationSyncedAt, synced, "the last good sync time is kept");
+    f.board.setAutoPickup(f.repoBoard.id, true, 1, 5);
+    const waiting = f.board.createCard({ title: "Waiting", body: "", repo: f.repo });
+    f.board.setStatus(waiting.id, "ready");
+    assert.deepEqual(f.board.listAutoPickupCandidates().map(item => item.card.id), [waiting.id], "pickup keeps running during the grace period");
+
+    f.sync.fetchGraceMs = 0;
+    await f.sync.syncBoard(f.repoBoard.id);
+    current = f.board.getBoard(f.repoBoard.id)!;
+    assert.match(current.integrationError, /git fetch origin failed/);
+    assert.equal(current.integrationWarning, "");
+    assert.deepEqual(f.board.listAutoPickupCandidates().map(item => item.card.id), [], "a lasting failure pauses pickup");
+
+    git(f.repo, "remote", "set-url", "origin", good);
+    await f.sync.syncBoard(f.repoBoard.id);
+    current = f.board.getBoard(f.repoBoard.id)!;
+    assert.equal(current.integrationError, "");
+    assert.equal(current.integrationWarning, "");
+    assert.notEqual(current.integrationSyncedAt, synced);
+  } finally { f.cleanup(); }
 });

@@ -1,7 +1,8 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { Check, Copy, Maximize2, Minimize2, Square } from "lucide-react";
+import { Check, Copy, Maximize2, Minimize2, Pencil, Square } from "lucide-react";
 import { api } from "./api.js";
 import { AgentBadge, AttemptList, CostBadge } from "./attempts.js";
+import { CardHistory, type CardHistoryEntry } from "./card-history.js";
 import { DiscussionPanel } from "./discussion.js";
 import { CardLinks, Markdown } from "./markdown-view.js";
 import { Button } from "./components/ui/button";
@@ -49,6 +50,8 @@ type Props = {
   onClose: () => void;
   onEdit: (card: Card) => void;
   onRefresh: () => void;
+  /** Shows a card the server just returned without waiting for the next poll. */
+  onCardUpdated: (card: Card) => void;
   onError: (message: string) => void;
   onConflict: (conflict: MergeConflict | null) => void;
   /** Set while reviewing cards one at a time from Today. */
@@ -67,6 +70,7 @@ export function CardDetails({
   onClose,
   onEdit,
   onRefresh,
+  onCardUpdated,
   onError,
   onConflict,
   queue,
@@ -98,6 +102,8 @@ export function CardDetails({
   useEffect(() => setMainRecovery(null), [cardId]);
   const [approvalPending, setApprovalPending] = useState(false);
   const [pushProgress, setPushProgress] = useState<PushProgress | null>(null);
+  const [history, setHistory] = useState<CardHistoryEntry[]>([]);
+  useEffect(() => setHistory([]), [cardId]);
   useEffect(() => setPushProgress(null), [cardId]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -126,8 +132,8 @@ export function CardDetails({
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const [attempts, approval, annotations, jobs, push] = await Promise.all(
-          [
+        const [attempts, approval, annotations, jobs, push, events] =
+          await Promise.all([
             api<Run[]>(`/boards/${boardId}/cards/${cardId}/runs`),
             api<{ pending: boolean }>(
               `/boards/${boardId}/cards/${cardId}/approval`,
@@ -139,9 +145,12 @@ export function CardDetails({
             api<PushProgress | null>(
               `/boards/${boardId}/cards/${cardId}/push-progress`,
             ),
-          ],
-        );
+            api<CardHistoryEntry[]>(
+              `/boards/${boardId}/cards/${cardId}/history`,
+            ),
+          ]);
         if (current) {
+          setHistory(events);
           setPushProgress(asPushProgress(push));
           setRuns(attempts);
           setApprovalPending(approval.pending);
@@ -216,7 +225,9 @@ export function CardDetails({
     setDraftStarted(false);
     if (!cardId || !reviewFingerprint || !boardId) return;
     let current = true;
-    api<{ fingerprint: string | null }>(`/boards/${boardId}/cards/${cardId}/pr-draft`)
+    api<{ fingerprint: string | null }>(
+      `/boards/${boardId}/cards/${cardId}/pr-draft`,
+    )
       .then((job) => {
         if (current) setDraftStarted(job.fingerprint === reviewFingerprint);
       })
@@ -251,6 +262,10 @@ export function CardDetails({
     currentComments.some(
       (item) => item.runId === runs[0]?.id && item.state === "requested",
     );
+  const reviewDecisionPending =
+    card?.status === "review" &&
+    !changesRequested &&
+    !(mergeConflict && card.id === mergeConflict.cardId);
   // While a push runs (Approve, or an automatic CI fix), follow its output more often than the 2s board poll.
   const pushing = !!pushProgress && !pushProgress.finishedAt;
   useEffect(() => {
@@ -276,7 +291,15 @@ export function CardDetails({
     setError("");
     onError("");
     try {
-      await fn();
+      const result = await fn();
+      // Approve and similar calls return the changed card; show it now instead of after the next poll.
+      if (
+        result &&
+        typeof result === "object" &&
+        (result as Card).id === cardId &&
+        "status" in result
+      )
+        onCardUpdated(result as Card);
       refresh();
       return true;
     } catch (err) {
@@ -367,9 +390,24 @@ export function CardDetails({
               className="absolute inset-y-0 left-0 hidden w-2 cursor-ew-resize bg-transparent hover:bg-primary/30 focus-visible:bg-primary/40 lg:block"
             />
           )}
-          <DialogTitle className="pr-7 text-xl font-semibold tracking-tight">
-            {card?.title}
-          </DialogTitle>
+          <div className="flex items-start gap-2 pr-7">
+            <DialogTitle className="text-xl font-semibold tracking-tight">
+              {card?.title}
+            </DialogTitle>
+            {card && card.status !== "running" && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7 shrink-0"
+                disabled={busy}
+                aria-label="Edit title and description"
+                title="Edit title and description. Doesn't affect runs or reviews."
+                onClick={() => onEdit(card)}
+              >
+                <Pencil size={14} />
+              </Button>
+            )}
+          </div>
           <DialogDescription className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
             <span className="rounded bg-primary/10 px-2 py-1 uppercase tracking-wider text-primary">
               {card?.status}
@@ -841,6 +879,7 @@ export function CardDetails({
                     </Button>
                   </div>
                 )}
+                <CardHistory entries={history} />
                 {card?.idempotencyKey && (
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span>Idempotency key</span>
@@ -853,17 +892,6 @@ export function CardDetails({
             )}
           </div>
           <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-5">
-            {card && card.status !== "running" && (
-              <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={() => {
-                  onEdit(card);
-                }}
-              >
-                Edit card
-              </Button>
-            )}
             {card?.status === "triage" && (
               <Button
                 disabled={busy}
@@ -895,8 +923,35 @@ export function CardDetails({
                 Move to Triage
               </Button>
             )}
-            {card && ["ready", "failed", "review"].includes(card.status) && (
+            {card?.startQueued && (
+              <>
+                <span
+                  className="rounded border border-amber-500/50 px-2 py-1 text-xs text-amber-600"
+                  data-testid="start-queued-badge"
+                >
+                  Queued, starts after restart
+                </span>
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() =>
+                    action(() =>
+                      api(`/boards/${boardId}/cards/${card.id}/start`, {
+                        method: "DELETE",
+                      }),
+                    )
+                  }
+                >
+                  Cancel queued start
+                </Button>
+              </>
+            )}
+            {card && !card.startQueued && ["ready", "failed", "review"].includes(card.status) && (
               <Button
+                // In review the next step is a decision. Rerunning is secondary unless changes were
+                // requested or a conflict needs Pi.
+                variant={reviewDecisionPending ? "outline" : "default"}
+                className={reviewDecisionPending ? "order-last" : undefined}
                 disabled={
                   busy ||
                   !settings ||
@@ -989,7 +1044,7 @@ export function CardDetails({
             )}
             {card?.status === "review" && currentReview?.files.length !== 0 && (
               <Button
-                variant="outline"
+                variant={reviewDecisionPending ? "default" : "outline"}
                 disabled={
                   busy ||
                   !currentReview ||
@@ -1383,7 +1438,10 @@ function PullRequestLink({
           ` \u00b7 sent back for CI ${card.ciReworks} time${card.ciReworks === 1 ? "" : "s"}`}
       </div>
       {card.prError && (
-        <div role="status" className="mt-1 text-destructive">
+        <div
+          role="status"
+          className="mt-1 whitespace-pre-wrap text-destructive"
+        >
           {card.prError}
         </div>
       )}

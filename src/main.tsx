@@ -21,6 +21,7 @@ import {
   CircleHelp,
   Clock3,
   GitBranch,
+  Bot,
   GitPullRequest,
   Hourglass,
   Pencil,
@@ -103,6 +104,7 @@ import {
 } from "./model.js";
 import { formatRoute, parseRoute, type RouteView } from "./route.js";
 import { Logs } from "./logs.js";
+import { applyTheme } from "./apply-theme.js";
 import { themeNames, themes } from "./themes.js";
 import { UpdateNotice } from "./update-notice.js";
 
@@ -170,16 +172,47 @@ function cacheTheme(theme: BakerySettings["theme"]) {
   }
 }
 
-const columns: { id: Status; label: string; icon: LucideIcon }[] = [
-  { id: "triage", label: "Triage", icon: Inbox },
-  { id: "ready", label: "Ready", icon: ListTodo },
-  { id: "running", label: "Running", icon: LoaderCircle },
-  { id: "review", label: "Review", icon: Eye },
-  { id: "failed", label: "Failed", icon: CircleX },
-  { id: "interrupted", label: "Interrupted", icon: CirclePause },
-  { id: "done", label: "Done", icon: CircleCheck },
-  { id: "archived", label: "Archive", icon: Archive },
+type Lane = {
+  id: Status | "agent" | "waiting";
+  status: Status;
+  label: string;
+  icon: LucideIcon;
+};
+const columns: Lane[] = [
+  { id: "triage", status: "triage", label: "Triage", icon: Inbox },
+  { id: "ready", status: "ready", label: "Ready", icon: ListTodo },
+  { id: "running", status: "running", label: "Running", icon: LoaderCircle },
+  { id: "review", status: "review", label: "Review", icon: Eye },
+  { id: "failed", status: "failed", label: "Failed", icon: CircleX },
+  { id: "done", status: "done", label: "Done", icon: CircleCheck },
+  { id: "archived", status: "archived", label: "Archive", icon: Archive },
 ];
+/**
+ * On a pull request board the Review lane holds only cards that need you. Cards an agent still has (a review, a CI
+ * fix) and cards waiting on GitHub get lanes of their own, still Review underneath.
+ */
+const pullRequestLanes: Lane[] = columns.flatMap((lane) =>
+  lane.id === "review"
+    ? [
+        lane,
+        { id: "agent", status: "review", label: "Agent reviewing", icon: Bot },
+        {
+          id: "waiting",
+          status: "review",
+          label: "Waiting on GitHub",
+          icon: GitPullRequest,
+        },
+      ]
+    : [lane],
+);
+const laneOf = (card: Card, split: boolean): Lane["id"] =>
+  card.status === "interrupted"
+    ? "failed"
+    : split && card.status === "review" && card.reviewWait
+      ? card.reviewWait === "github"
+        ? "waiting"
+        : "agent"
+      : card.status;
 
 // The sidebar condenses the lanes into the stages you scan for. Done and Archive are left out;
 // Failed only appears when something failed or was interrupted.
@@ -802,7 +835,7 @@ export function App() {
       .catch((err) => setError(String(err)));
     void api<BakerySettings>("/settings")
       .then((next) => {
-        document.documentElement.dataset.theme = next.theme;
+        applyTheme(next.theme);
         cacheTheme(next.theme);
         applyDensity(next.density);
         setSettings(next);
@@ -1047,7 +1080,7 @@ export function App() {
     if (!settings) return;
     const previous = settings;
     setSettings({ ...settings, ...patch });
-    if (patch.theme) document.documentElement.dataset.theme = patch.theme;
+    if (patch.theme) applyTheme(patch.theme);
     if (patch.density) applyDensity(patch.density);
     void action(async () => {
       try {
@@ -1056,12 +1089,12 @@ export function App() {
           body: JSON.stringify(patch),
         });
         setSettings(saved);
-        document.documentElement.dataset.theme = saved.theme;
+        applyTheme(saved.theme);
         cacheTheme(saved.theme);
         applyDensity(saved.density);
       } catch (error) {
         setSettings(previous);
-        document.documentElement.dataset.theme = previous.theme;
+        applyTheme(previous.theme);
         applyDensity(previous.density);
         throw error;
       }
@@ -1176,6 +1209,7 @@ export function App() {
     0,
   );
   const visibleCards = filterCards(cards, query);
+  const splitReview = currentBoard?.integration === "github-pr";
   // Bulk selection only covers cards the search leaves visible.
   const doneIds = visibleCards
     .filter((item) => item.status === "done")
@@ -1759,13 +1793,41 @@ export function App() {
           </div>
         )}
         {currentBoard?.integration === "github-pr" &&
-          currentBoard.integrationError && (
+          (currentBoard.integrationError ||
+            currentBoard.integrationWarning) && (
             <div
               role="alert"
-              className="mx-6 mt-5 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive lg:mx-10"
+              className={`mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border px-4 py-3 text-sm lg:mx-10 ${currentBoard.integrationError ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-amber-500/40 bg-amber-500/10"}`}
             >
-              GitHub sync stopped and auto pickup is waiting:{" "}
-              {currentBoard.integrationError}
+              <span className="min-w-0 break-words">
+                <strong>
+                  {currentBoard.integrationError
+                    ? "GitHub sync stopped and auto pickup is waiting:"
+                    : "Can't reach GitHub right now; retrying every minute:"}
+                </strong>{" "}
+                {currentBoard.integrationError ||
+                  currentBoard.integrationWarning}
+                {currentBoard.integrationSyncedAt && (
+                  <> Last synced {date(currentBoard.integrationSyncedAt)}.</>
+                )}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  const target = currentBoard;
+                  void action(async () => {
+                    updateBoard(
+                      await api<Board>(`/boards/${target.id}/sync`, {
+                        method: "POST",
+                      }),
+                    );
+                  });
+                }}
+              >
+                Retry now
+              </Button>
             </div>
           )}
         {error && (
@@ -1819,27 +1881,33 @@ export function App() {
           className={`overflow-x-auto p-6 lg:p-10 ${boardId && loadedBoard !== boardId ? "hidden" : ""}`}
         >
           <div className="flex min-h-[500px] min-w-max gap-4">
-            {columns.map((column) => {
+            {(splitReview ? pullRequestLanes : columns).map((column) => {
               const sorted = byPriority(
-                visibleCards.filter((c) => c.status === column.id),
+                visibleCards.filter(
+                  (c) => laneOf(c, splitReview) === column.id,
+                ),
               );
               // Review splits into cards that need you, then cards an agent, CI or GitHub still has.
               const waitingCards = sorted.filter((c) => c.reviewWait);
               const laneCards =
-                column.id === "review"
+                column.id === "review" && !splitReview
                   ? [...sorted.filter((c) => !c.reviewWait), ...waitingCards]
                   : sorted;
               const firstWaiting =
-                column.id === "review" ? waitingCards[0]?.id : undefined;
+                column.id === "review" && !splitReview
+                  ? waitingCards[0]?.id
+                  : undefined;
               const yourTurnCount = laneCards.filter(needsYourReview).length;
-              const firstYourTurn = laneCards.find(needsYourReview)?.id;
+              const firstYourTurn = splitReview
+                ? undefined
+                : laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
               const collapsible = cards
-                .filter((c) => c.status === column.id)
+                .filter((c) => laneOf(c, splitReview) === column.id)
                 .every((c) => c.status === "done" || c.status === "archived");
               const override = boardId
-                ? manualCollapse[boardId]?.[column.id]
+                ? manualCollapse[boardId]?.[column.status]
                 : undefined;
               const collapsed =
                 collapsible &&
@@ -1848,12 +1916,14 @@ export function App() {
                     (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
               const selecting =
                 column.id === "done" && selectingDone && laneCards.length > 0;
-              const droppable = !!dragging?.targets.includes(column.id);
+              const droppable =
+                !!dragging?.targets.includes(column.status) &&
+                column.id === column.status;
               return (
                 <section
                   key={column.id}
                   aria-label={`${column.label} lane`}
-                  data-status={column.id}
+                  data-status={column.status}
                   data-drop={
                     dragging
                       ? droppable
@@ -1867,11 +1937,11 @@ export function App() {
                     if (!droppable) return;
                     event.preventDefault();
                     event.dataTransfer.dropEffect = "move";
-                    if (dropLane !== column.id) setDropLane(column.id);
+                    if (dropLane !== column.status) setDropLane(column.status);
                   }}
                   onDragLeave={(event) => {
                     if (
-                      dropLane === column.id &&
+                      dropLane === column.status &&
                       !event.currentTarget.contains(
                         event.relatedTarget as Node | null,
                       )
@@ -1883,7 +1953,7 @@ export function App() {
                     event.preventDefault();
                     const { card } = dragging;
                     endDrag();
-                    moveCard(card, column.id);
+                    moveCard(card, column.status);
                   }}
                   className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
@@ -1892,8 +1962,8 @@ export function App() {
                       type="button"
                       aria-label={`Expand ${column.label} lane`}
                       aria-expanded={false}
-                      onClick={() => toggleLane(column.id, true)}
-                      className="flex min-h-48 w-full flex-col items-center gap-3 rounded-lg border border-border bg-card px-2 py-3 text-sm hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => toggleLane(column.status, true)}
+                      className="flex min-h-48 w-full flex-col items-center gap-3 rounded-xl border border-dashed border-border/60 px-2 py-3 text-sm hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <ChevronRight size={16} />
                       <span
@@ -1916,7 +1986,7 @@ export function App() {
                             collapsible &&
                             !(event.target as HTMLElement).closest("button")
                           )
-                            toggleLane(column.id, false);
+                            toggleLane(column.status, false);
                         }}
                       >
                         <span
@@ -1948,7 +2018,7 @@ export function App() {
                             type="button"
                             aria-label={`Collapse ${column.label} lane`}
                             aria-expanded={true}
-                            onClick={() => toggleLane(column.id, false)}
+                            onClick={() => toggleLane(column.status, false)}
                             className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <ChevronDown size={16} />
@@ -2703,6 +2773,44 @@ export function App() {
                   {editingBoard.integrationError}
                 </p>
               )}
+              {(editingBoard.integration ?? "local") === "local" && (
+                <label className="mt-4 flex items-start gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label="Push main to origin after merging"
+                    checked={editingBoard.pushMainAfterMerge ?? false}
+                    disabled={busy}
+                    onChange={(event) => {
+                      const pushMainAfterMerge = event.target.checked;
+                      void action(async () => {
+                        const updated = await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({ pushMainAfterMerge }),
+                          },
+                        );
+                        setBoards((previous) =>
+                          previous.map((item) =>
+                            item.id === updated.id ? updated : item,
+                          ),
+                        );
+                        setEditingBoard(updated);
+                      });
+                    }}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span>
+                    Push main to origin after merging
+                    <span className="block text-muted-foreground">
+                      Runs git push origin main after each local merge,
+                      including merges made by the agent reviewer. If the push
+                      fails, the merge stays and the card&apos;s History says
+                      why.
+                    </span>
+                  </span>
+                </label>
+              )}
               <LocalMerges
                 boardId={editingBoard.id}
                 integration={editingBoard.integration ?? "local"}
@@ -3171,6 +3279,11 @@ export function App() {
             setSelected(null);
           }}
           onRefresh={refresh}
+          onCardUpdated={(next) =>
+            setCards((previous) =>
+              previous.map((item) => (item.id === next.id ? next : item)),
+            )
+          }
           onError={setError}
           onConflict={(conflict) =>
             setMergeConflicts((previous) =>
@@ -3258,6 +3371,16 @@ function ActivityBadge({
   card: Card;
   activity: ReturnType<typeof cardActivity>;
 }) {
+  if (card.status === "interrupted")
+    return (
+      <span
+        data-testid="activity-badge"
+        className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+      >
+        <CirclePause size={10} aria-hidden />
+        Interrupted
+      </span>
+    );
   if (card.status === "review" && card.reviewWait)
     return (
       <span

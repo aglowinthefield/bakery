@@ -167,6 +167,34 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+test("the agent reviewer's requested changes still reach the run after a failed attempt", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+    const card = board.createCard({ title: "Test", body: "", repo });
+    board.setStatus(card.id, "ready");
+    const first = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(first.id)?.status === "review");
+    const db = new DatabaseSync(join(dir, "board.sqlite"));
+    db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,cost,changes) VALUES (?,?,'needs_human',?,0,0,0,0,0,?)")
+      .run(card.id, first.id, new Date().toISOString(), JSON.stringify([{ path: "README.md", comment: "Compute the limit once" }]));
+    db.close();
+    // The next attempt dies before Pi starts (a rebase conflict, say).
+    board.finish(board.claim(card.id, "manual").id, "failed", "Rebase conflicted");
+    const retry = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(retry.id)?.status === "review");
+    assert.equal(retry.attempt, 3);
+    assert.match(readFileSync(promptFile, "utf8"), /Compute the limit once/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 test("a conflict retry tells Pi to reconcile only the card branch with current main", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
@@ -506,7 +534,13 @@ test("starts queued during a drain persist and are taken once, oldest first", ()
     board.close();
     const reopened = new Board(path);
     assert.equal(reopened.isStartQueued(a.id), true);
-    assert.deepEqual(reopened.takeQueuedStarts(), [b.id, a.id]);
+    assert.equal(reopened.getCard(a.id)?.startQueued, true);
+    assert.equal(reopened.cancelQueuedStart(a.id), true);
+    assert.equal(reopened.cancelQueuedStart(a.id), false);
+    assert.equal(reopened.getCard(a.id)?.startQueued, false);
+    assert.deepEqual(reopened.takeQueuedStarts(), [b.id]);
+    reopened.queueStart(a.id);
+    assert.deepEqual(reopened.takeQueuedStarts(), [a.id]);
     assert.deepEqual(reopened.takeQueuedStarts(), []);
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }

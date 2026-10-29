@@ -157,7 +157,12 @@ export class AutoReview {
         if (this.integration.review(latest).fingerprint !== fingerprint) throw new Error("Work changed during agent review");
         this.board.finishAutoReview(run.id, "needs_human", `Sent back to the implementer: ${verdict.reason}`, fingerprint, verdict.changes);
         try { this.sendBack(latest); console.log(`Auto-review sent card ${card.id} back to its implementer`); }
-        catch (error) { console.error(`Auto-review could not restart card ${card.id}: ${error instanceof Error ? error.message : error}`); }
+        catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // Without this note the card sits in Review with a "Sent back" verdict and no new attempt.
+          this.board.noteCard(card.id, `The agent reviewer sent this back, but Bakery could not start the new attempt: ${message}. Run it again to apply the requested changes, or review it yourself.`);
+          console.error(`Auto-review could not restart card ${card.id}: ${message}`);
+        }
         return;
       }
       if (verdict.verdict === "approve" && pullRequests) {

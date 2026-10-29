@@ -5,10 +5,10 @@ import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync,
 import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
-import { Board, parsePriority } from "./board.js";
+import { Board, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
 import { Worker } from "./worker.js";
-import { Integration, IntegrationConflictError } from "./integration.js";
+import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
@@ -18,6 +18,7 @@ import { draftPullRequest } from "./pr-draft.js";
 /** One PR draft job per card, kept after it settles so a closed or refreshed dialog rejoins it instead of starting over. */
 const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: number; steps: { at: number; text: string }[] }; result: Promise<unknown> }>();
 import { PullRequestFeed } from "./pull-request-feed.js";
+import { cardHistory } from "./card-history.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
@@ -44,7 +45,7 @@ const discussing = new Set<string>();
 // Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
-const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card));
+const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", "to apply the agent reviewer's requested changes"));
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
@@ -55,8 +56,28 @@ let updateTimer: NodeJS.Timeout | undefined;
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
-  card => worker.start(card),
-  card => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true));
+  card => worker.start(card, "manual", "to fix failing CI on the pull request"),
+  card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true)));
+/**
+ * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
+ * as a new run, like failed CI, and the card (now running) is returned. If that run cannot start, the push error stands.
+ */
+async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promise<Card> {
+  try { return await push(); }
+  catch (error) {
+    if (!(error instanceof PushHookError)) throw error;
+    try {
+      board.recordPushFailure(card.id, error.sha, error.output);
+      const previous = board.listRuns(card.id)[0];
+      if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
+      worker.start(board.getCard(card.id)!, "manual", "to fix the failing pre-push hook");
+    } catch (startError) {
+      board.clearCiFeedback(card.id);
+      throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
+    }
+    return board.getCard(card.id)!;
+  }
+}
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 // Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
 const bindHost = process.env.BAKERY_HOST || "127.0.0.1";
@@ -224,11 +245,13 @@ const server = createServer(async (req, res) => {
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
     }
-    const pullRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})$/);
-    if (pullRoute && req.method === "GET") {
-      const repoBoard = board.getBoard(pullRoute[1]);
+    const pullMergeRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})\/merge$/);
+    if (pullMergeRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(pullMergeRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
-      send(res, 200, await github.pullRequestDetail(boardGithubRepo(repoBoard), Number(pullRoute[2]))); return;
+      // Trunk's merge queue is driven by this comment.
+      await github.comment(boardGithubRepo(repoBoard), Number(pullMergeRoute[2]), "/trunk merge");
+      send(res, 200, { ok: true }); return;
     }
     const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
     if (pullsRoute && req.method === "GET") {
@@ -251,6 +274,14 @@ const server = createServer(async (req, res) => {
       const repoBoard = board.getBoard(pickupResetRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.resetAutoPickupLimit(repoBoard.id)); return;
+    }
+    const syncRoute = path.match(/^\/api\/boards\/([\w-]+)\/sync$/);
+    if (syncRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(syncRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      if (repoBoard.integration !== "github-pr") { send(res, 400, { error: "Only pull-request boards sync with GitHub" }); return; }
+      await githubSync.syncBoard(repoBoard.id);
+      send(res, 200, board.getBoard(repoBoard.id)); return;
     }
     const settingsRoute = path.match(/^\/api\/boards\/([\w-]+)\/settings$/);
     if (settingsRoute && req.method === "PATCH") {
@@ -288,6 +319,10 @@ const server = createServer(async (req, res) => {
         send(res, 200, board.setAutoPickup(repoBoard.id, input.autoPickupEnabled, Number(input.pickupConcurrency),
           "pickupDailyLimit" in input ? Number(input.pickupDailyLimit) : undefined,
           "pickupCostBudget" in input ? input.pickupCostBudget as number | null : undefined)); return;
+      }
+      if ("pushMainAfterMerge" in input) {
+        if (Object.keys(input).length !== 1 || typeof input.pushMainAfterMerge !== "boolean") throw new Error("Update pushMainAfterMerge as a boolean, separately from other board settings");
+        send(res, 200, board.setPushMainAfterMerge(repoBoard.id, input.pushMainAfterMerge)); return;
       }
       if ("autoReviewEnabled" in input || "verificationCommand" in input) {
         if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
@@ -339,7 +374,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -357,6 +392,7 @@ const server = createServer(async (req, res) => {
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
+        if (req.method === "GET" && action === "history") { send(res, 200, cardHistory(item, board.listCardEvents(id), board.listRuns(id), board.listAutoReviewJobs(id))); return; }
         if (req.method === "GET" && action === "push-progress") { send(res, 200, integration.pushProgress(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
         if (req.method === "GET" && action === "review") {
@@ -411,6 +447,7 @@ const server = createServer(async (req, res) => {
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
           send(res, 202, worker.start(item)); return;
         }
+        if (req.method === "DELETE" && action === "start") { send(res, 200, { cancelled: board.cancelQueuedStart(id) }); return; }
         if (req.method === "GET" && action === "pr-draft") { const job = draftJobs.get(id); send(res, 200, { ...(job?.progress ?? { startedAt: 0, steps: [] }), fingerprint: job?.fingerprint ?? null }); return; }
         if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);
@@ -436,7 +473,7 @@ const server = createServer(async (req, res) => {
           if (repoBoard.integration === "github-pr") {
             if ((title !== undefined || prBody !== undefined) && (typeof title !== "string" || !title.trim() || title.length > 250 || typeof prBody !== "string" || prBody.length > 20_000))
               throw new Error("Pull request title (up to 250 characters) and body (up to 20,000) are required");
-            const card = await integration.openPullRequest(item, fingerprint, github, typeof title === "string" ? { title, body: prBody as string } : undefined);
+            const card = await sendBackRefusedPush(item, () => integration.openPullRequest(item, fingerprint, github, typeof title === "string" ? { title, body: prBody as string } : undefined));
             draftJobs.delete(id);
             void githubSync.syncBoard(repoBoard.id);
             send(res, 200, card); return;
@@ -511,7 +548,12 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
   for (const cardId of board.takeQueuedStarts()) {
     const card = board.getCard(cardId);
     if (!card || ["triage", "running", "done", "archived"].includes(card.status)) continue;
-    try { worker.start(card); } catch (error) { console.error(`Queued start for card ${cardId} failed: ${error instanceof Error ? error.message : error}`); }
+    try { worker.start(card, "manual", "from a start queued during the last restart"); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      board.noteCard(cardId, `A start queued during the last restart could not run: ${message}`);
+      console.error(`Queued start for card ${cardId} failed: ${message}`);
+    }
   }
   // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
   // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
