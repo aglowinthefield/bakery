@@ -421,6 +421,7 @@ test("reviewer progress reports elapsed time, turns, tool counts and narration w
 test("on a pull-request board an agent approval is advice: the card stays in Review with the verdict recorded", async () => {
   const item = fixture();
   try {
+    item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
     item.board.setIntegration(item.repoBoard.id, "github-pr");
     item.board.setAutoReview(item.repoBoard.id, true, "test -f README.md");
     await new Promise(resolve => setTimeout(resolve, 5));

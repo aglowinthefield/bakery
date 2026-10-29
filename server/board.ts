@@ -568,8 +568,8 @@ export class Board {
   }
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {
     const result: { card: Card; run: Run; board: RepoBoard }[] = [];
-    // Unattended review merges locally, so it never runs on a board that integrates through GitHub pull requests.
-    for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled && item.integration === "local")) {
+    // On a github-pr board the agent only reviews: AutoReview never merges there, and Approve still opens the PR.
+    for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled)) {
       for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
         const run = this.listRuns(card.id)[0];
         if (run && this.awaitsAutoReview(repoBoard, card.id, run)) result.push({ card, run, board: repoBoard });
@@ -579,7 +579,7 @@ export class Board {
   }
   /** The run finished after auto-review was enabled and nothing (a person, an earlier job) has handled it yet. */
   private awaitsAutoReview(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
-    return repoBoard.autoReviewEnabled && repoBoard.integration === "local" &&
+    return repoBoard.autoReviewEnabled &&
       run.status === "review" && !!run.finishedAt && !!repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&
       !(this.getAutoReviewJob(run.id)?.requeued === 0) && !this.getApproval(cardId) && !this.getMergeFailure(cardId) &&
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
@@ -590,6 +590,8 @@ export class Board {
     const run = this.listRuns(card.id)[0];
     if (run?.status !== "review") return null;
     if (repoBoard.integration === "github-pr") {
+      // Before a pull request exists, an agent review in progress or queued is the agent's turn.
+      if (!card.prState && (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run))) return "agent_review";
       if (card.prState === "MERGED") return "github";
       // A run newer than the pushed one (a CI fix, a rerun) waits for Approve to push it.
       if (card.prState !== "OPEN" || (!card.prOverrideUrl && card.prPushedRunId !== run.id)) return null;
