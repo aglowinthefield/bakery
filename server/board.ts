@@ -9,11 +9,11 @@ import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/rep
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; agentModels: AgentModels };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationChosen: number; githubMainProtected: number | null; integrationNote: string };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
   autoReviewEnabledAt: row.autoReviewEnabledAt, pickupConcurrency: row.pickupConcurrency,
@@ -23,7 +23,7 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoar
   autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels),
   autoPickupNextAt: row.pickupDailyLimit > 0 && starts.length >= row.pickupDailyLimit
     ? new Date(Date.parse(starts[starts.length - row.pickupDailyLimit]) + 86_400_000).toISOString() : null,
-  pickupCostBudget: row.pickupCostBudget, cost24h, integration: row.integration, integrationError: row.integrationError,
+  pickupCostBudget: row.pickupCostBudget, cost24h, integration: row.integration, integrationError: row.integrationError, integrationWarning: row.integrationWarning, integrationSyncedAt: row.integrationSyncedAt,
   integrationChosen: row.integrationChosen !== 0, githubMainProtected: row.githubMainProtected === null ? null : row.githubMainProtected !== 0, integrationNote: row.integrationNote,
   autoPickupBudgetReached: row.pickupCostBudget !== null && cost24h >= row.pickupCostBudget,
 });
@@ -76,7 +76,7 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationChosen, githubMainProtected, integrationNote";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote";
 const now = () => new Date().toISOString();
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COUNT(runs.id) AS attempts,
@@ -188,6 +188,9 @@ export class Board {
     if (!boardColumns.has("agentModels")) this.db.exec("ALTER TABLE boards ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
     if (!boardColumns.has("integration")) this.db.exec("ALTER TABLE boards ADD COLUMN integration TEXT NOT NULL DEFAULT 'local' CHECK(integration IN ('local', 'github-pr'))");
     if (!boardColumns.has("integrationError")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationError TEXT NOT NULL DEFAULT ''");
+    // integrationWarning: a sync problem Bakery is riding out (a failed fetch it retries). integrationSyncedAt: last full sync.
+    if (!boardColumns.has("integrationWarning")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationWarning TEXT NOT NULL DEFAULT ''");
+    if (!boardColumns.has("integrationSyncedAt")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationSyncedAt TEXT");
     // integrationChosen: the operator picked the mode, so detection never changes it. githubMainProtected: NULL until checked.
     if (!boardColumns.has("integrationChosen")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationChosen INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("githubMainProtected")) this.db.exec("ALTER TABLE boards ADD COLUMN githubMainProtected INTEGER");
@@ -328,7 +331,7 @@ export class Board {
     if (!board) throw new Error("Board not found");
     if (mode !== "local" && mode !== "github-pr") throw new Error("Integration must be local or github-pr");
     if (mode === "github-pr" && !githubRepo(board.remoteUrl)) throw new Error("github-pr integration requires the board's remote to be a GitHub repository link (https://github.com/OWNER/REPO)");
-    this.db.prepare("UPDATE boards SET integration=?, integrationError='', integrationChosen=1 WHERE id=?").run(mode, id);
+    this.db.prepare("UPDATE boards SET integration=?, integrationError='', integrationWarning='', integrationChosen=1 WHERE id=?").run(mode, id);
     return this.getBoard(id)!;
   }
   /**
@@ -346,7 +349,15 @@ export class Board {
   }
   /** An integration error pauses automatic pickup on the board until a later sync clears it. */
   setIntegrationError(id: string, error: string): void {
-    this.db.prepare("UPDATE boards SET integrationError=? WHERE id=?").run(error.slice(0, 2000), id);
+    this.db.prepare("UPDATE boards SET integrationError=?, integrationWarning='' WHERE id=?").run(error.slice(0, 2000), id);
+  }
+  /** A sync problem that does not pause pickup yet: Bakery retries, and escalates to an error if it lasts. */
+  setIntegrationWarning(id: string, warning: string): void {
+    this.db.prepare("UPDATE boards SET integrationWarning=? WHERE id=?").run(warning.slice(0, 2000), id);
+  }
+  /** A sync pass finished: clears any error or warning and records when. */
+  recordIntegrationSync(id: string, at = new Date().toISOString()): void {
+    this.db.prepare("UPDATE boards SET integrationError='', integrationWarning='', integrationSyncedAt=? WHERE id=?").run(at, id);
   }
   boardForRepo(repo: string): RepoBoard | undefined { return this.listBoards().find(item => item.repo === repo); }
   integrationFor(repo: string): IntegrationMode {
