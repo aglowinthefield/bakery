@@ -686,6 +686,39 @@ test("github-pr: a retry of an unpushed card whose base is behind is rebased ont
   } finally { f.cleanup(); }
 });
 
+test("github-pr: a retry after a merge-based conflict repair merges the newer origin/main instead of replaying the conflict", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const worktree = join(f.data, "worktrees", card.id);
+    git(worktree, "add", "-A"); git(worktree, ...commitArgs, "attempt one");
+    // origin/main changes the same file, and the retry's rebase conflicts.
+    git(f.upstream, "pull", "-q", "--ff-only", "origin", "main");
+    writeFileSync(join(f.upstream, "feature.txt"), "conflicting\n"); git(f.upstream, "add", "feature.txt"); git(f.upstream, ...commitArgs, "conflict"); git(f.upstream, "push", "-q", "origin", "main");
+    f.board.setStatus(card.id, "ready");
+    const conflicted = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+    assert.equal(conflicted.status, "failed");
+
+    // The repair resolves it the way the repair prompt allows: merge origin/main into the card branch and commit.
+    assert.throws(() => git(worktree, "merge", "--no-edit", "origin/main"));
+    writeFileSync(join(worktree, "feature.txt"), "resolved\n"); git(worktree, "add", "feature.txt"); git(worktree, ...commitArgs, "--no-edit");
+    f.board.clearMergeFailure(card.id);
+    const repaired = git(worktree, "rev-parse", "HEAD");
+
+    // origin/main moves on before the next start. Rebasing would drop the merge and replay attempt one onto the
+    // conflicting commit again, so the retry merges the new tip instead and keeps the resolution.
+    const tip = f.landUpstream("later.txt");
+    f.board.setStatus(card.id, "ready");
+    const retry = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+    await waitFor(() => f.board.getRun(retry.id)?.status !== "running");
+    assert.equal(f.board.getRun(retry.id)?.status, "review", f.board.getRun(retry.id)?.error ?? "");
+    assert.match(f.board.getRun(retry.id)!.output, /Merging origin\/main into the card branch/);
+    assert.equal(git(worktree, "rev-parse", "HEAD^1"), repaired, "the repair merge is kept");
+    assert.equal(git(worktree, "rev-parse", "HEAD^2"), tip, "the new origin/main tip is merged");
+    assert.equal(f.board.getMergeFailure(card.id), undefined);
+  } finally { f.cleanup(); }
+});
+
 // Worktrunk itself, when installed: `wt remove` cleans up a squash-merged card and `wt step rebase` rebases a retry.
 test("github-pr with Worktrunk: wt removes a squash-merged Done card and rebases an unpushed retry", { skip: !hasWorktrunk("wt") && "wt is not installed" }, async () => {
   const f = fixture("wt");

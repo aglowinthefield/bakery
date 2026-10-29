@@ -107,7 +107,7 @@ export class Worker {
     return state && !state.ahead ? "refs/remotes/origin/main" : "HEAD";
   }
   /**
-   * A retry on a github-pr board whose base is behind origin/main is rebased onto it before Pi starts, but only
+   * A retry on a github-pr board whose base is behind origin/main is rebased onto it (or, after a conflict repair, has it merged in) before Pi starts, but only
    * while nothing about it is published: a clean worktree whose branch was never pushed. A pushed branch is what
    * the open PR shows, so it is left alone. Conflicts abort the rebase, fail the run, and record a merge failure, so
    * the next start is a conflict-repair run that merges origin/main instead of retrying the same rebase.
@@ -116,19 +116,23 @@ export class Worker {
     if (git(worktree, "status", "--porcelain")) return;
     try { git(worktree, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`); return; } catch { /* Never pushed. */ }
     if (isAncestor(worktree, "origin/main", "HEAD")) return;
-    this.board.append(run.id, "Rebasing the card branch onto origin/main…\n");
+    // A merge of origin/main on the branch is a conflict repair. A rebase would drop it and replay the card's own
+    // commits onto the same conflict, so a branch carrying one is brought up to date by merging instead.
+    const merging = git(worktree, "rev-list", "--merges", "--max-count=1", "origin/main..HEAD") !== "";
+    this.board.append(run.id, merging ? "Merging origin/main into the card branch…\n" : "Rebasing the card branch onto origin/main…\n");
     try {
+      if (merging) { git(worktree, "merge", "--no-edit", "origin/main"); return; }
       if (this.hasWorktrunk()) execFileSync(...command(this.wtBin!, ["-C", worktree, "step", "rebase", "origin/main", "--yes"]), { cwd: worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
       else git(worktree, "rebase", "origin/main");
     } catch (error) {
       let files = "";
       try { files = git(worktree, "diff", "--name-only", "--diff-filter=U"); } catch { /* Keep the rebase error. */ }
-      try { git(worktree, "rebase", "--abort"); } catch { /* Nothing in progress. */ }
+      try { git(worktree, merging ? "merge" : "rebase", "--abort"); } catch { /* Nothing in progress. */ }
       const detail = (error as { stderr?: string }).stderr?.toString().trim() || (error instanceof Error ? error.message : String(error));
       const conflicted = files.split("\n").filter(Boolean);
       if (conflicted.length) this.board.recordMergeFailure(card.id, conflicted, detail);
       const next = conflicted.length ? "Choose Fix conflict with Pi, or resolve it yourself" : "Resolve it";
-      throw new Error(`Rebase onto origin/main conflicted${conflicted.length ? ` in ${conflicted.join(", ")}` : ""}; the card branch is unchanged. ${next} in ${worktree}, then run again. ${detail.slice(0, 1000)}`);
+      throw new Error(`${merging ? "Merge of" : "Rebase onto"} origin/main conflicted${conflicted.length ? ` in ${conflicted.join(", ")}` : ""}; the card branch is unchanged. ${next} in ${worktree}, then run again. ${detail.slice(0, 1000)}`);
     }
   }
   /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name (wiredtiger ships one). */
