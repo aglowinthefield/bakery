@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
@@ -1212,6 +1213,50 @@ test("github-pr: a PR comment that fails to post does not stop a CI send-back", 
     assert.deepEqual(started, [card.id]);
     assert.equal(f.board.getCard(card.id)!.prError, null);
   } finally { console.error = error; f.cleanup(); }
+});
+
+test("github-pr: a manual start is refused while the card waits on GitHub CI", async () => {
+  const f = fixture();
+  let child: ReturnType<typeof spawn> | undefined;
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCard(card.id)!.reviewWait, "github");
+    const runs = f.board.listRuns(card.id).length;
+
+    // Serve a snapshot of this board, so the request goes through the real route.
+    mkdirSync(f.data, { recursive: true });
+    const db = new DatabaseSync(join(f.dir, "board.sqlite"));
+    try { db.exec(`VACUUM INTO '${join(f.data, "bakery.sqlite").replace(/'/g, "''")}'`); } finally { db.close(); }
+    const listener = createServer();
+    await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+    const port = (listener.address() as { port: number }).port;
+    await new Promise<void>(resolve => listener.close(() => resolve()));
+    child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+      cwd: process.cwd(),
+      env: { ...process.env, HOME: f.dir, BAKERY_DATA_DIR: f.data, BAKERY_PORT: String(port), BAKERY_PI_BIN: f.fakePi },
+      stdio: "ignore",
+    });
+    const url = `http://127.0.0.1:${port}/api`;
+    const end = Date.now() + 10_000;
+    while (true) {
+      try { await fetch(`${url}/boards`); break; }
+      catch {
+        if (Date.now() > end || child.exitCode !== null) throw new Error("Server did not start");
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    const response = await fetch(`${url}/boards/${f.repoBoard.id}/cards/${card.id}/start`, { method: "POST" });
+    assert.equal(response.status, 400);
+    assert.match(((await response.json()) as { error: string }).error, /Waiting on GitHub CI/);
+    const after = new DatabaseSync(join(f.data, "bakery.sqlite"));
+    try { assert.equal((after.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(card.id) as { n: number }).n, runs, "no new run started"); }
+    finally { after.close(); }
+  } finally { child?.kill(); f.cleanup(); }
 });
 
 test("sync: a failed fetch is a warning that keeps pickup running until it lasts past the grace period", async () => {

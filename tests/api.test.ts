@@ -289,3 +289,52 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("POST start while the server drains answers 202 queued and does not start a run", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bakery-drain-"));
+  const repo = join(home, "code", "alpha");
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q", repo]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
+  const port = await freePort();
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+  });
+  let output = "";
+  child.stderr?.on("data", chunk => { output += chunk.toString(); });
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    async function request(path: string, method = "GET", input?: unknown) {
+      const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
+      return { status: response.status, data: await response.json() };
+    }
+    const deadline = Date.now() + 5000;
+    while (true) {
+      try { await fetch(`${url}/api/boards`); break; }
+      catch {
+        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    const board = (await request("/boards", "POST", { repo })).data;
+    const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Queued", body: "" })).data;
+    assert.equal((await request(`/boards/${board.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
+    // With no active runs the drain finishes at once, and the server keeps serving until it is restarted.
+    const drained = new Promise<void>(resolve => child.on("message", message => { if ((message as { type?: string }).type === "drained") resolve(); }));
+    child.send({ type: "drain" });
+    await drained;
+    assert.equal((await request("/status")).data.draining, true);
+    const started = await request(`/boards/${board.id}/cards/${card.id}/start`, "POST");
+    assert.deepEqual(started, { status: 202, data: { queued: true, cardId: card.id } });
+    assert.deepEqual((await request(`/boards/${board.id}/cards/${card.id}/runs`)).data, [], "no run starts during the drain");
+    assert.equal((await request(`/boards/${board.id}/cards/${card.id}/start`, "POST")).status, 202, "queueing twice is harmless");
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise(resolve => child.once("close", resolve));
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
