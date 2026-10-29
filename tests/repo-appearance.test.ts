@@ -10,8 +10,6 @@ test("repository icon and color picker updates navigation and heading after save
     await server.listen();
     browser = await chromium.launch();
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let board = { id: "board", repo: "/tmp/example", icon: "sprinkle_donut", color: "violet", autoCollapseEmptySwimlanes: false };
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
@@ -31,7 +29,7 @@ test("repository icon and color picker updates navigation and heading after save
       else throw new Error(`Unexpected API request: ${path}`);
     });
     const badges = page.locator("aside button[title='/tmp/example'] img, header h1 .repo-badge img");
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await badges.first().waitFor();
     assert.equal(await badges.count(), 2);
     const initial = await badges.first().evaluate(el => el.getAttribute("src"));
@@ -60,7 +58,7 @@ test("repository icon and color picker updates navigation and heading after save
     await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
     assert.notEqual(await badges.last().evaluate(el => getComputedStyle(el.parentElement!).getPropertyValue("--repo-color").trim()), "#fbbf24");
     await page.reload();
-    assert.equal(await page.getByRole("button", { name: "Edit /tmp/renamed" }).count(), 1);
+    await page.getByRole("button", { name: "Edit /tmp/renamed" }).waitFor();
     assert.notEqual(await page.locator("header h1 .repo-badge img").evaluate(el => el.getAttribute("src")), initial);
     await page.close();
   } finally { await browser?.close(); await server.close(); }

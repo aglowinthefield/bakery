@@ -13,7 +13,6 @@ const card = (id: string, status: string, title: string) => ({
 const boardCards = [card("a1b2c3d4-0000", "ready", "Fix login redirect"), card("e5f6a7b8-0000", "done", "Polish sidebar")];
 
 async function openCard(server: ViteDevServer, page: Page) {
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
@@ -34,7 +33,7 @@ async function openCard(server: ViteDevServer, page: Page) {
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
-  await page.goto(server.resolvedUrls!.local[0]);
+  await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
   await page.locator("section[data-status]").getByText("Polish sidebar", { exact: true }).click();
   await page.getByRole("dialog").getByText("Polish sidebar").waitFor();
 }

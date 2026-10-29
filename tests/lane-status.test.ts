@@ -17,8 +17,6 @@ after(async () => { await browser?.close(); await server?.close(); });
 
 test("each lane keeps its label and a readable status dot in both palettes and when collapsed", async () => {
   const page = await browser.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
@@ -32,7 +30,7 @@ test("each lane keeps its label and a readable status dot in both palettes and w
     await route.fulfill({ json: data[path] });
   });
   try {
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await page.getByRole("heading", { name: "Triage" }).waitFor();
     assert.equal(await page.getByText("Can start a Pi run", { exact: true }).count(), 0, "lane captions do not take space below headings");
     assert.equal(await page.getByRole("button", { name: /ready card/ }).isVisible(), true);

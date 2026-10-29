@@ -17,7 +17,6 @@ async function openApp(status: Record<string, unknown>, onUpdate?: () => unknown
   const page = await browser.newPage();
   let statusServed!: () => void;
   const served = new Promise<void>(resolve => { statusServed = resolve; });
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
@@ -36,7 +35,7 @@ async function openApp(status: Record<string, unknown>, onUpdate?: () => unknown
     await route.fulfill({ json: data[path] });
     if (path === "/api/status") statusServed();
   });
-  await page.goto(server.resolvedUrls!.local[0]);
+  await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
   return { page, served, close: async () => { await browser.close(); await server.close(); } };
 }
 

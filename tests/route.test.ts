@@ -17,6 +17,7 @@ test("routes round-trip through their path", () => {
 });
 
 test("unknown paths are not routes", () => {
+  assert.equal(parseRoute("/"), null, "/ opens the screen viewed last");
   assert.equal(parseRoute("/nope"), null);
   assert.equal(parseRoute("/board"), null);
   assert.equal(parseRoute("/board/b1/card"), null);

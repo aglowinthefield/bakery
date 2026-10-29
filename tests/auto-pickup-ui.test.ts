@@ -11,8 +11,6 @@ test("a capped board shows the reason, next slot, and a confirmed reset in the r
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let board = { id: "board", repo: "/tmp/bakery", autoPickupEnabled: true, pickupConcurrency: 2,
       pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z" as string | null,
       autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false, verificationCommand: "" };
@@ -32,7 +30,7 @@ test("a capped board shows the reason, next slot, and a confirmed reset in the r
         : [];
       await route.fulfill({ json: data });
     });
-    await page.goto(`http://127.0.0.1:${address.port}/`);
+    await page.goto(`http://127.0.0.1:${address.port}/board/board`);
     await page.getByText(/Auto pickup waiting: 6 \/ 6/).waitFor();
     await page.getByText(/Next slot around/).first().waitFor();
     await page.getByRole("button", { name: "Reset start limit" }).first().click();

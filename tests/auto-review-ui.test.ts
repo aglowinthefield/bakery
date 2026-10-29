@@ -11,8 +11,6 @@ test("unattended review is configured per repository, not in global Settings", a
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     const boards = [
       { id: "first", repo: "/tmp/first/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: true, verificationCommand: "npm test", autoCollapseEmptySwimlanes: false },
       { id: "second", repo: "/tmp/second/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: false, verificationCommand: "npm run check", autoCollapseEmptySwimlanes: false },
@@ -24,7 +22,7 @@ test("unattended review is configured per repository, not in global Settings", a
         : path === "/api/repository-root" ? { root: "/tmp" }
         : [] });
     });
-    await page.goto(`http://127.0.0.1:${address.port}/`);
+    await page.goto(`http://127.0.0.1:${address.port}/board/first`);
     await page.getByRole("button", { name: "Settings" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByText("Theme").waitFor();

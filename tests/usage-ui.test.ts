@@ -20,8 +20,6 @@ async function open(board: Record<string, unknown>, onPatch: (input: Record<stri
   assert.ok(address && typeof address !== "string");
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   let current = board;
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -38,7 +36,7 @@ async function open(board: Record<string, unknown>, onPatch: (input: Record<stri
       : [];
     await route.fulfill({ json: data });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/`);
+  await page.goto(`http://127.0.0.1:${address.port}/board/board`);
   return { page, close: async () => { await browser.close(); await server.close(); } };
 }
 
@@ -55,7 +53,7 @@ test("attempts show their cost, older attempts show a dash, and the card shows i
     await page.getByRole("button", { name: /Attempt #1/ }).getByText("Cost: —").waitFor();
     assert.match(await page.getByRole("button", { name: /Attempt #2/ }).getByText("Cost: $0.42").getAttribute("title") ?? "", /1,200 input, 300 output, 5,000 cache read, 100 cache write/);
     await page.getByText("Card total: $0.50 + older attempts not recorded").waitFor();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByText("Review cost: $0.08").waitFor();
   } finally { await close(); }
 });

@@ -16,8 +16,6 @@ after(async () => { await browser?.close(); await server?.close(); });
 
 test("cached theme colors the first paint while the database request is pending", async () => {
   const page = await browser.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.addInitScript(() => localStorage.setItem("bakery-theme", "light"));
   let reply!: () => void;
   const pending = new Promise<void>(resolve => { reply = resolve; });
@@ -30,7 +28,7 @@ test("cached theme colors the first paint while the database request is pending"
     }
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     assert.deepEqual(await page.evaluate(() => ({
       theme: document.documentElement.dataset.theme,
       background: getComputedStyle(document.body).backgroundColor,
@@ -44,8 +42,6 @@ test("cached theme colors the first paint while the database request is pending"
 
 test("database theme still loads when browser storage rejects writes", async () => {
   const page = await browser.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.addInitScript(() => {
     Storage.prototype.setItem = () => { throw new Error("Storage disabled"); };
   });
@@ -60,7 +56,7 @@ test("database theme still loads when browser storage rejects writes", async () 
     await route.fulfill({ json: data[path] });
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: "Settings" }).click();
     assert.equal(await page.getByRole("radio", { name: "Light", exact: true }).isChecked(), true);
     assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(245, 243, 238)");
@@ -69,8 +65,6 @@ test("database theme still loads when browser storage rejects writes", async () 
 
 test("theme picker changes board and reopened review, then loads the saved palette before rendering", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   let theme: "default" | "light" = "default";
   let failPatch = false;
   let releasePatch!: () => void;
@@ -96,6 +90,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
       "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
       "/api/boards/board/cards/card/comments": [],
       "/api/boards/board/cards/card/auto-review": [],
@@ -115,9 +110,9 @@ test("theme picker changes board and reopened review, then loads the saved palet
   }));
   const diffRendered = () => page.locator('[data-line][data-line-type="change-addition"] span').first().waitFor();
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     const dark = await palette();
     assert.equal(dark.background, "rgb(26, 29, 33)");
@@ -129,7 +124,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     const light = await palette();
     assert.equal(light.background, "rgb(245, 243, 238)");
@@ -142,7 +137,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.waitForFunction(() => localStorage.getItem("bakery-theme") === "light");
     // The reload reopens the card this tab had open.
     await page.reload();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), light);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
@@ -152,7 +147,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), dark);
     failPatch = true;
@@ -162,7 +157,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.getByRole("alert").filter({ hasText: "Save rejected" }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), dark);
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");

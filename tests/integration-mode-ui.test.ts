@@ -20,7 +20,6 @@ const card = (id: string, title: string, status: string, extra: Record<string, u
 
 async function open(integration: "local" | "github-pr") {
   const page = await browser.newPage();
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   const fingerprint = "a".repeat(64);
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -43,7 +42,7 @@ async function open(integration: "local" | "github-pr") {
     if (path in data) await route.fulfill({ json: data[path] });
     else await route.fulfill({ json: [] });
   });
-  await page.goto(url);
+  await page.goto(new URL("/board/board", url).href);
   await page.getByRole("button", { name: /Review card/ }).waitFor();
   return page;
 }

@@ -9,8 +9,6 @@ test("clicking the already open repo in the sidebar does nothing", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let cardLoads = 0;
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
@@ -25,7 +23,7 @@ test("clicking the already open repo in the sidebar does nothing", async () => {
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     const card = page.getByRole("button", { name: /Open card/ });
     await card.waitFor();
     await page.waitForTimeout(500);

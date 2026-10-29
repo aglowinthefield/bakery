@@ -17,8 +17,6 @@ after(async () => { await browser?.close(); await server?.close(); });
 
 test("changed files open their own patches and focus the heading without changing review data", async () => {
   const page = await browser.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   const fingerprint = "a".repeat(64);
   const files = ["src/first.ts", "src/second.ts", "src/third.ts"];
   const comments = [{ id: "note", cardId: "card", runId: "run", fingerprint, path: files[1], line: 2, fileLine: 1, kind: "add", code: "second", body: "Keep this note", state: "draft", createdAt: "2026-01-01" }];
@@ -33,6 +31,7 @@ test("changed files open their own patches and focus the heading without changin
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
       "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
       "/api/boards/board/cards/card/comments": comments,
       "/api/boards/board/cards/card/auto-review": [],
@@ -43,11 +42,11 @@ test("changed files open their own patches and focus the heading without changin
     await route.fulfill({ json: data[path] });
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: /Review card/ }).click();
     const list = page.getByRole("list").filter({ has: page.getByRole("button", { name: files[1], exact: true }) });
     const patchButton = (index: number) => page.locator(`button[aria-controls="review-file-${index}"]`);
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByText("Changed files (3)").waitFor();
     for (const index of [0, 1, 2]) assert.equal(await patchButton(index).getAttribute("aria-expanded"), "true");
     await list.getByRole("button", { name: files[1] }).focus();
@@ -79,8 +78,6 @@ test("changed files open their own patches and focus the heading without changin
 
 test("the gutter + button comments on the hovered diff row and the layout choice persists", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   const fingerprint = "b".repeat(64);
   const posted: unknown[] = [];
   const patch = "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n const c = 4;\n";
@@ -98,6 +95,7 @@ test("the gutter + button comments on the hovered diff row and the layout choice
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
       "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
       "/api/boards/board/cards/card/comments": [],
       "/api/boards/board/cards/card/auto-review": [],
@@ -108,9 +106,9 @@ test("the gutter + button comments on the hovered diff row and the layout choice
     await route.fulfill({ json: data[path] });
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByRole("button", { name: /src\/app\.ts.*1 added, 1 removed/ }).waitFor();
     const added = page.locator('[data-line][data-line-type="change-addition"]');
     await added.hover();
@@ -125,7 +123,7 @@ test("the gutter + button comments on the hovered diff row and the layout choice
     await page.locator("[data-additions]").waitFor();
     // The reload reopens the card this tab had open.
     await page.reload();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.locator("[data-additions]").waitFor();
     assert.equal(await page.getByRole("radio", { name: "split" }).getAttribute("aria-checked"), "true");
   } finally { await page.close(); }
@@ -133,8 +131,6 @@ test("the gutter + button comments on the hovered diff row and the layout choice
 
 test("the diff theme picker repaints the patch and the choice persists", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   const fingerprint = "c".repeat(64);
   const patch = "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n const c = 4;\n";
   await page.route("**/api/**", async route => {
@@ -146,6 +142,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
       "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
       "/api/boards/board/cards/card/comments": [],
       "/api/boards/board/cards/card/auto-review": [],
@@ -162,9 +159,9 @@ test("the diff theme picker repaints the patch and the choice persists", async (
     return pre && getComputedStyle(pre).backgroundColor === "rgb(0, 43, 54)";
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.locator('[data-line-type="change-addition"]').first().waitFor();
     const picker = page.getByRole("combobox", { name: "Diff theme" });
     assert.equal(await picker.inputValue(), "bakery");
@@ -175,7 +172,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
     assert.notEqual(bakery, "rgb(0, 43, 54)");
     await page.reload();
     // The reload reopens the card this tab had open.
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.locator('[data-line-type="change-addition"]').first().waitFor();
     assert.equal(await page.getByRole("combobox", { name: "Diff theme" }).inputValue(), "solarized");
     await solarized();
@@ -184,8 +181,6 @@ test("the diff theme picker repaints the patch and the choice persists", async (
 
 test("Run again is unavailable while agent review is running and returns when it ends", async () => {
   const page = await browser.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   let reviewState: "running" | "needs_human" = "running";
   let starts = 0;
   await page.route("**/api/**", async route => {
@@ -198,6 +193,7 @@ test("Run again is unavailable while agent review is running and returns when it
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
       "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/card/push-progress": null,
       "/api/boards/board/cards/card/comments": [],
       "/api/boards/board/cards/card/auto-review": [{ cardId: "card", runId: "run", state: reviewState, details: "", fingerprint: "", startedAt: "2026-01-01", finishedAt: null }],
@@ -208,10 +204,10 @@ test("Run again is unavailable while agent review is running and returns when it
     await route.fulfill({ json: data[path] });
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: /Review card/ }).click();
     const runAgain = page.getByRole("button", { name: "Run again" });
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByText("Agent review: checking").waitFor();
     assert.equal(await runAgain.isDisabled(), true);
     reviewState = "needs_human";
@@ -223,8 +219,6 @@ test("Run again is unavailable while agent review is running and returns when it
 
 test("a request failure remains visible after closing card details", async () => {
   const page = await browser.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   let resolveStart!: () => void;
   const started = new Promise<void>(resolve => { resolveStart = resolve; });
   let finishStart!: () => void;
@@ -244,6 +238,7 @@ test("a request failure remains visible after closing card details", async () =>
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/ready/runs": [],
       "/api/boards/board/cards/ready/approval": { pending: false },
+      "/api/boards/board/cards/ready/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/ready/push-progress": null,
       "/api/boards/board/cards/ready/comments": [],
       "/api/boards/board/cards/ready/auto-review": [],
@@ -253,7 +248,7 @@ test("a request failure remains visible after closing card details", async () =>
     await route.fulfill({ json: data[path] });
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: /Ready card/ }).click();
     await page.getByRole("button", { name: "Start Pi run" }).click();
     await started;
@@ -265,8 +260,6 @@ test("a request failure remains visible after closing card details", async () =>
 
 test("the side panel switches cards without leaking the previous card's review or attempts", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const cards = [
@@ -280,12 +273,14 @@ test("the side panel switches cards without leaking the previous card's review o
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/review/runs": [{ id: "run", attempt: 1, status: "review", output: "Old output", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
       "/api/boards/board/cards/review/approval": { pending: false },
+      "/api/boards/board/cards/review/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/review/push-progress": null,
       "/api/boards/board/cards/review/comments": [],
       "/api/boards/board/cards/review/auto-review": [],
       "/api/boards/board/cards/review/review": { fingerprint: "a".repeat(64), files: [{ path: "src/old.ts", patch: "@@ -0,0 +1 @@\n+old\n" }] },
       "/api/boards/board/cards/ready/runs": [],
       "/api/boards/board/cards/ready/approval": { pending: false },
+      "/api/boards/board/cards/ready/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
       "/api/boards/board/cards/ready/push-progress": null,
       "/api/boards/board/cards/ready/comments": [],
       "/api/boards/board/cards/ready/auto-review": [],
@@ -295,9 +290,9 @@ test("the side panel switches cards without leaking the previous card's review o
     await route.fulfill({ json: data[path] });
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByText("Changed files (1)").waitFor();
     await page.getByRole("tab", { name: /^Attempts/ }).click();
     await page.getByText("Old output").waitFor();
@@ -306,7 +301,7 @@ test("the side panel switches cards without leaking the previous card's review o
     assert.equal(await page.getByText("Old output").count(), 0);
     assert.equal(await page.getByRole("heading", { name: "Review diff" }).count(), 0);
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByText("Changed files (1)").waitFor();
     await page.getByRole("heading", { name: "Review card" }).click();
     assert.equal(await page.getByRole("dialog").count(), 1, "clicking inside keeps the rail open");
