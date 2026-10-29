@@ -245,11 +245,13 @@ const server = createServer(async (req, res) => {
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
     }
-    const pullRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})$/);
-    if (pullRoute && req.method === "GET") {
-      const repoBoard = board.getBoard(pullRoute[1]);
+    const pullMergeRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})\/merge$/);
+    if (pullMergeRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(pullMergeRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
-      send(res, 200, await github.pullRequestDetail(boardGithubRepo(repoBoard), Number(pullRoute[2]))); return;
+      // Trunk's merge queue is driven by this comment.
+      await github.comment(boardGithubRepo(repoBoard), Number(pullMergeRoute[2]), "/trunk merge");
+      send(res, 200, { ok: true }); return;
     }
     const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
     if (pullsRoute && req.method === "GET") {

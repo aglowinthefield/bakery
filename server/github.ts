@@ -157,10 +157,6 @@ export class GitHub {
   async listOpenPullRequestExtras(repo: string): Promise<(Pick<RepoPullRequest, "number" | "additions" | "deletions" | "reviewDecision"> & { mergeable?: string; statusCheckRollup?: Check[] })[]> {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number,reviewDecision,additions,deletions,mergeable,statusCheckRollup"]));
   }
-  /** Everything the Pull requests page's detail view shows for one PR. */
-  async pullRequestDetail(repo: string, number: number): Promise<unknown> {
-    return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "number,title,url,body,author,baseRefName,headRefName,isDraft,mergeable,mergeStateStatus,reviewDecision,additions,deletions,changedFiles,files,commits,latestReviews,comments,statusCheckRollup,labels,assignees,createdAt,updatedAt"]));
-  }
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {
     return (JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "statusCheckRollup"])) as PullRequest).statusCheckRollup ?? [];
