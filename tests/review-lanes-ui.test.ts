@@ -34,10 +34,10 @@ for (const integration of ["github-pr", "local"]) {
       const inLane = (name: string) => page.getByRole("region", { name: `${name} lane` }).getByRole("button", { name: / card/ }).evaluateAll(els => els.map(el => el.textContent?.match(/(mine|agent|fixing|github) card/)?.[1]));
       if (integration === "github-pr") {
         assert.deepEqual(await inLane("Review"), ["mine"]);
-        assert.deepEqual((await inLane("Agent working")).sort(), ["agent", "fixing"]);
+        assert.deepEqual((await inLane("Agent reviewing")).sort(), ["agent", "fixing"]);
         assert.deepEqual(await inLane("Waiting on GitHub"), ["github"]);
       } else {
-        assert.equal(await page.getByRole("region", { name: "Agent working lane" }).count(), 0);
+        assert.equal(await page.getByRole("region", { name: "Agent reviewing lane" }).count(), 0);
         assert.equal((await inLane("Review")).length, 4);
       }
     } finally {

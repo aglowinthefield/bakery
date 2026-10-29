@@ -200,7 +200,7 @@ const pullRequestLanes: Lane[] = columns.flatMap((lane) =>
   lane.id === "review"
     ? [
         lane,
-        { id: "agent", status: "review", label: "Agent working", icon: Bot },
+        { id: "agent", status: "review", label: "Agent reviewing", icon: Bot },
         {
           id: "waiting",
           status: "review",
@@ -1901,7 +1901,9 @@ export function App() {
                   ? waitingCards[0]?.id
                   : undefined;
               const yourTurnCount = laneCards.filter(needsYourReview).length;
-              const firstYourTurn = laneCards.find(needsYourReview)?.id;
+              const firstYourTurn = splitReview
+                ? undefined
+                : laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
               const collapsible = cards
