@@ -39,6 +39,7 @@ import {
   XCircle,
   X,
   Kanban,
+  Workflow,
   PanelLeftClose,
   PanelLeftOpen,
   type LucideIcon,
@@ -65,6 +66,7 @@ import { AgentBadge, reworkSummary } from "./attempts.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
+import { Visualizer } from "./visualizer/visualizer.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
@@ -568,6 +570,7 @@ export function App() {
     const saved = readTab("bakery-view") ?? localStorage.getItem("bakery-view");
     return saved === "board" ||
       saved === "pulls" ||
+      saved === "visualizer" ||
       saved === "stats" ||
       saved === "logs"
       ? saved
@@ -925,6 +928,11 @@ export function App() {
     openBoard(id);
     setView("pulls");
     localStorage.setItem("bakery-view", "pulls");
+  };
+  const openVisualizer = (id: string) => {
+    openBoard(id);
+    setView("visualizer");
+    localStorage.setItem("bakery-view", "visualizer");
   };
   const openPage = (page: "stats" | "logs") => {
     setView(page);
@@ -1352,7 +1360,11 @@ export function App() {
             {boards.map((item) => {
               const active = view === "board" && boardId === item.id;
               const pullsActive = view === "pulls" && boardId === item.id;
-              const open = repoOpen[item.id] ?? (active || pullsActive);
+              const visualizerActive =
+                view === "visualizer" && boardId === item.id;
+              const open =
+                repoOpen[item.id] ??
+                (active || pullsActive || visualizerActive);
               return (
                 <div key={item.id} className="rounded-lg">
                   <div className="flex items-center rounded-lg hover:bg-accent/30">
@@ -1425,6 +1437,15 @@ export function App() {
                     >
                       <GitPullRequest size={13} aria-hidden="true" /> Pull
                       requests
+                    </button>
+                  )}
+                  {open && (
+                    <button
+                      onClick={() => openVisualizer(item.id)}
+                      aria-current={visualizerActive ? "page" : undefined}
+                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${visualizerActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                    >
+                      <Workflow size={13} aria-hidden="true" /> Visualizer
                     </button>
                   )}
                 </div>
@@ -1531,10 +1552,31 @@ export function App() {
             />
           </main>
         )}
+      {view === "visualizer" && boardId && currentBoard && (
+        <main className="min-w-0 flex-1">
+          <header className="border-b border-border px-6 py-6 lg:px-10">
+            <h1 className="text-[27px] font-semibold tracking-[-.05em]">
+              Visualizer
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {currentBoard.repo}
+            </p>
+          </header>
+          <Visualizer
+            cards={cards}
+            loaded={loadedBoard === boardId}
+            onOpenCard={(id) => {
+              openBoard(boardId);
+              setSelected(id);
+            }}
+          />
+        </main>
+      )}
       <main
         className="min-w-0 flex-1"
         hidden={
           view === "today" ||
+          (view === "visualizer" && !!currentBoard) ||
           view === "stats" ||
           view === "logs" ||
           (view === "pulls" &&
