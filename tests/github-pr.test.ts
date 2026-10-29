@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
@@ -925,6 +925,64 @@ test("github-pr: a CI fix run that changes nothing says so on the PR and the car
     await sync.syncBoard(f.repoBoard.id);
     assert.equal(said().length, 1, "said once");
     assert.match(f.board.getCard(card.id)!.prError ?? "", /CI fix run made no change/, "the reason stays on the card");
+  } finally { f.cleanup(); }
+});
+
+/** A card whose PR is open and pushed, with main then changing `file` so the PR conflicts. */
+async function conflictingPr(f: Fixture, file: string, mainText: string) {
+  const card = await reviewedCard(f);
+  await approve(f, card.id);
+  const [pr] = f.prs();
+  const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+  git(f.upstream, "pull", "-q", "--ff-only", "origin", "main");
+  mkdirSync(dirname(join(f.upstream, file)), { recursive: true });
+  writeFileSync(join(f.upstream, file), mainText); git(f.upstream, "add", file); git(f.upstream, ...commitArgs, "main edits it"); git(f.upstream, "push", "-q", "origin", "main");
+  f.setPrs([{ ...pr, headRefOid: pushed, mergeable: "CONFLICTING", statusCheckRollup: [] }]);
+  return { card, pr, pushed };
+}
+
+test("github-pr: a small documentation conflict with main is repaired and pushed without Approve", async () => {
+  const f = fixture();
+  writeFileSync(f.fakePi, `#!/bin/sh\nmkdir -p docs && echo card > docs/notes.md\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  const repairPi = join(f.dir, "pi-merge");
+  writeFileSync(repairPi, `#!/bin/sh\ngit merge origin/main >/dev/null 2>&1\nprintf 'card\\nmain\\n' > docs/notes.md\ngit add docs/notes.md\ngit -c user.name=t -c user.email=t@t commit -qm resolve\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(repairPi, 0o755);
+  const worker = new Worker(f.board, f.data, repairPi);
+  const integration = new Integration(f.board, f.data);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, true));
+  try {
+    const { card, pr, pushed } = await conflictingPr(f, "docs/notes.md", "main\n");
+    await sync.syncBoard(f.repoBoard.id);
+    await waitFor(() => f.board.getCard(card.id)!.status === "review" && f.board.listRuns(card.id)[0].attempt === 2 && f.board.listRuns(card.id)[0].status === "review");
+    assert.equal(f.board.listRuns(card.id)[0].ciFix, 2, "a conflict repair run");
+    assert.equal(f.comments().filter(c => /conflicts with main at .* in `docs\/notes\.md`/.test(c.body)).length, 1);
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), pushed, "nothing pushed while the run was going");
+
+    await sync.syncBoard(f.repoBoard.id);
+    const fixed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    assert.notEqual(fixed, pushed, "the resolution was pushed without Approve");
+    assert.equal(git(f.origin, "show", `${fixed}:docs/notes.md`), "card\nmain");
+    assert.equal(f.prs().length, 1, "to the same PR");
+    f.setPrs([{ ...pr, headRefOid: fixed, mergeable: "MERGEABLE", statusCheckRollup: [] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.comments().filter(c => /conflicts with main at/.test(c.body)).length, 1, "said once");
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), fixed);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a conflict outside documentation is left to a person, and said once", async () => {
+  const f = fixture();
+  const started: string[] = [];
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => { started.push(card.id); }, async () => undefined);
+  try {
+    const { card } = await conflictingPr(f, "feature.txt", "main version\n");
+    await sync.syncBoard(f.repoBoard.id);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [], "no repair run");
+    const said = f.comments().filter(c => /Bakery did not repair it automatically because `feature\.txt` is not a documentation file/.test(c.body));
+    assert.equal(said.length, 1);
+    assert.match(f.board.getCard(card.id)!.prError ?? "", /a person needs to resolve it/);
   } finally { f.cleanup(); }
 });
 

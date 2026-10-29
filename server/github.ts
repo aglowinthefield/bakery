@@ -140,6 +140,9 @@ export function trimFailedLog(log: string, maxLines = 60, maxChars = 4000): stri
 
 /** Most automatic CI fix runs per card. After that a failing PR waits for the operator. */
 export const maxCiReworks = 3;
+/** Conflicts Bakery repairs unattended: a few documentation files with a few hunks. Widen deliberately. */
+const maxConflictFiles = 3, maxConflictHunks = 6, maxConflictRepairs = 3;
+const repairableConflictFile = (path: string) => /\.mdx?$/i.test(path) || path.startsWith("docs/");
 const ciFixUnchanged = (head: string) => `The CI fix run made no change, so CI still fails at ${head.slice(0, 12)}. Read its report, then rerun the failed checks on GitHub or fix it in the card worktree.`;
 
 export class GitHub {
@@ -161,6 +164,10 @@ export class GitHub {
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {
     return (JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "statusCheckRollup"])) as PullRequest).statusCheckRollup ?? [];
+  }
+  /** Whether GitHub can merge one PR into its base. `UNKNOWN` while GitHub is still working it out. */
+  async mergeable(repo: string, number: number): Promise<NonNullable<RepoPullRequest["mergeable"]>> {
+    return (JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "mergeable"])) as RepoPullRequest).mergeable ?? "UNKNOWN";
   }
   /** The failed steps' log of one GitHub Actions job. */
   async failedLog(repo: string, jobId: string): Promise<string> {
@@ -352,11 +359,12 @@ export class GitHubSync {
     const checks = checksState(pr);
     if (pr.state === "OPEN") {
       if (await this.pushCiFix(card, pr, repo)) return;
-      const ci = await this.sendBackFailingCi(this.board.getCard(card.id) ?? card, pr, repo);
+      const fresh = this.board.getCard(card.id) ?? card;
+      const ci = await this.sendBackConflict(fresh, pr, repo) ?? await this.sendBackFailingCi(fresh, pr, repo);
       this.board.recordPullRequest(card.id, { ...pr, checks, error: ci.error, ciPending: ci.pending || !!ci.rework });
       if (ci.rework) {
         try { await ci.rework(); }
-        catch (error) { this.board.recordPullRequestError(card.id, `CI failed, and Bakery could not start a fix run yet: ${error instanceof Error ? error.message : String(error)}. It retries on the next sync, and the failures go to whichever run starts next.`); }
+        catch (error) { this.board.recordPullRequestError(card.id, `Bakery could not start a fix run yet: ${error instanceof Error ? error.message : String(error)}. It retries on the next sync, and the failures go to whichever run starts next.`); }
       }
       return;
     }
@@ -375,6 +383,56 @@ export class GitHubSync {
     this.board.recordPullRequest(card.id, { ...pr, checks });
     this.board.recordPullRequestMerge(card.id, pr.headRefOid || merge, merge);
     await this.removeWorktree(repoBoard.repo, card);
+  }
+  /**
+   * An open PR that GitHub says conflicts with main. A small conflict (see `repairableConflictFile`) goes back to the
+   * agent as a conflict-repair run and its resolution is pushed by `pushCiFix`; anything bigger is said once on the PR
+   * and left to a person. Each (PR head, main tip) pair is tried once, `maxConflictRepairs` times per card. Returns
+   * undefined when there is no conflict to deal with, so CI handling carries on.
+   */
+  private async sendBackConflict(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown; pending?: boolean } | undefined> {
+    const head = pr.headRefOid;
+    if (!this.rework || card.prOverrideUrl || !head || this.board.getCiFeedback(card.id)?.source === "ci") return undefined;
+    const worktree = join(this.dataDir, "worktrees", card.id);
+    if (!existsSync(worktree)) return undefined;
+    let mainTip: string;
+    try {
+      if (await git(worktree, "rev-parse", "HEAD") !== head || await git(worktree, "status", "--porcelain")) return undefined;
+      mainTip = await git(worktree, "rev-parse", "origin/main");
+      if (await isAncestor(worktree, mainTip, head)) return undefined;
+    } catch { return undefined; }
+    if (await this.github.mergeable(repo, pr.number) !== "CONFLICTING") return undefined;
+    const key = `${head}:${mainTip}`, short = head.slice(0, 12);
+    const said = (error: string) => ({ error });
+    // Declined earlier (too big, or out of rounds): the reason is already on the card and the PR.
+    if (card.conflictRepairKey === `${key}!`) return said(card.prError ?? `The pull request conflicts with main at ${short}; a person needs to resolve it.`);
+    if (card.conflictRepairKey === key) {
+      // Sent back, but the run could not start (the board was at its run limit, say): try again.
+      if (this.board.getCiFeedback(card.id)?.source === "conflict") return this.startRework(card);
+      return said(`The pull request still conflicts with main at ${short} and Bakery's automatic repair did not resolve it. Resolve it in the card worktree, or run the card again.`);
+    }
+    // Which files conflict, and how many hunks, without touching the worktree.
+    let files: string[] = [], hunks = 0, details = "";
+    try { await git(worktree, "merge-tree", "--write-tree", "--name-only", "--no-messages", head, mainTip); }
+    catch (error) {
+      if ((error as { exitCode?: unknown }).exitCode !== 1) return undefined;
+      details = (error as Error).message;
+      const [tree, ...rest] = details.split("\n");
+      for (const line of rest) { if (!line) break; files.push(line); }
+      for (const file of files) {
+        try { hunks += ((await git(worktree, "show", `${tree}:${file}`)).match(/^<{7}( |$)/gm) ?? []).length; } catch { hunks += maxConflictHunks + 1; }
+      }
+    }
+    const reason = !files.length ? "" : files.length > maxConflictFiles ? `it touches ${files.length} files` : files.some(file => !repairableConflictFile(file)) ? `${files.filter(file => !repairableConflictFile(file)).map(file => `\`${file}\``).join(", ")} is not a documentation file`
+      : hunks > maxConflictHunks ? `it has ${hunks} conflicting hunks` : card.conflictRepairs >= maxConflictRepairs ? `${maxConflictRepairs} automatic repairs have already been tried` : "";
+    if (reason) {
+      this.board.markConflictHandled(card.id, `${key}!`);
+      await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short} in ${files.map(file => `\`${file}\``).join(", ")}. Bakery did not repair it automatically because ${reason}. A person needs to resolve it.`);
+      return said(`The pull request conflicts with main in ${files.join(", ")}; ${reason}, so a person needs to resolve it.`);
+    }
+    this.board.recordConflictRepair(card.id, key, head, files, details || "GitHub reports a conflict with main");
+    await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Bakery sent it back to its coding agent to merge main in (automatic conflict repair ${card.conflictRepairs + 1} of ${maxConflictRepairs}). The resolution will be pushed here when it's ready.`);
+    return this.startRework(card);
   }
   /**
    * A PR whose checks failed goes back to the agent with the failures, so it returns to Review only once it has a
@@ -442,7 +500,8 @@ export class GitHubSync {
       // The PR already holds everything this run has, so the run counts as pushed and the card is the operator's turn.
       this.board.recordPullRequestPush(card.id, run.id);
       const report = (run.report ?? "").trim();
-      await commentOnPullRequest(this.github, repo, pr.number, `The automatic fix run for the CI failure at ${(pr.headRefOid ?? "").slice(0, 12)} made no change, so nothing was pushed. A person needs to decide whether to rerun the failed checks or fix it by hand.${report ? `\n\nThe agent's report:\n\n${report.slice(0, 3000).split("\n").map(line => `> ${line}`).join("\n")}` : ""}`);
+      const what = run.ciFix === 2 ? "conflict with main" : "CI failure";
+      await commentOnPullRequest(this.github, repo, pr.number, `The automatic fix run for the ${what} at ${(pr.headRefOid ?? "").slice(0, 12)} made no change, so nothing was pushed. A person needs to ${run.ciFix === 2 ? "resolve the conflict" : "decide whether to rerun the failed checks or fix it by hand"}.${report ? `\n\nThe agent's report:\n\n${report.slice(0, 3000).split("\n").map(line => `> ${line}`).join("\n")}` : ""}`);
       return false;
     }
     if (!this.autoApprove) return false;

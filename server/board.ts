@@ -48,7 +48,7 @@ export function parsePriority(value: unknown): CardPriority {
  * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
  * `prCiPending` is set while Bakery holds a CI failure to send back to Pi (waiting for the other checks to settle).
  */
-export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number };
+export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number; conflictRepairs: number; conflictRepairKey: string | null };
 /**
  * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Bakery is about to send
  * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
@@ -139,7 +139,7 @@ export class Board {
     const cardColumns = new Set((this.db.prepare("PRAGMA table_info(cards)").all() as { name: string }[]).map(column => column.name));
     if (!cardColumns.has("priority")) this.db.exec("ALTER TABLE cards ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
-    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT"])
+    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     if (!cardColumns.has("prPushedRunId")) {
       // Before this column, a PR was opened from the latest run unless a CI fix run came after it. When a fix run may
@@ -424,13 +424,31 @@ export class Board {
     this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, 'push') ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt, source='push'")
       .run(cardId, sha, output.slice(-20_000), now());
   }
+  /**
+   * The PR conflicts with main and the conflict is small enough to repair unattended: count a repair round, keep the
+   * conflict for the next run, and remember `key` (PR head and main tip) so the same conflict is sent back once.
+   */
+  recordConflictRepair(cardId: string, key: string, headSha: string, files: string[], details: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE cards SET conflictRepairs=conflictRepairs+1, conflictRepairKey=? WHERE id=?").run(key, cardId);
+      this.recordMergeFailure(cardId, files, details);
+      this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, 'conflict') ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt, source='conflict'")
+        .run(cardId, headSha, details.slice(0, 20_000), now());
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** Marks a conflict as seen without repairing it (too big, or out of rounds). */
+  markConflictHandled(cardId: string, key: string): void {
+    this.db.prepare("UPDATE cards SET conflictRepairKey=? WHERE id=?").run(key, cardId);
+  }
   /** Marks `headSha` as handled without sending the card back, e.g. once the rework limit is reached. */
   markCiHandled(cardId: string, headSha: string): void {
     this.db.prepare("UPDATE cards SET ciReworkSha=? WHERE id=?").run(headSha, cardId);
   }
   /** CI failures waiting for the card's next run. */
-  getCiFeedback(cardId: string): { headSha: string; failures: string; source: "ci" | "push" } | undefined {
-    return this.db.prepare("SELECT headSha, failures, source FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string; source: "ci" | "push" } | undefined;
+  getCiFeedback(cardId: string): { headSha: string; failures: string; source: "ci" | "push" | "conflict" } | undefined {
+    return this.db.prepare("SELECT headSha, failures, source FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string; source: "ci" | "push" | "conflict" } | undefined;
   }
   /**
    * The waiting failures went stale before a fix run took them (CI is re-running or passed). The round never ran,
@@ -445,8 +463,9 @@ export class Board {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   /** Hands a run the waiting failures. A CI fix run is also marked, so its result is pushed without Approve; a hook fix waits for Approve. */
-  startCiFix(cardId: string, runId: string, source: "ci" | "push" = "ci"): void {
-    if (source === "ci") this.db.prepare("UPDATE runs SET ciFix=1 WHERE id=?").run(runId);
+  startCiFix(cardId: string, runId: string, source: "ci" | "push" | "conflict" = "ci"): void {
+    // ciFix is 1 for a CI fix and 2 for a conflict repair; both are pushed without Approve.
+    if (source !== "push") this.db.prepare("UPDATE runs SET ciFix=? WHERE id=?").run(source === "conflict" ? 2 : 1, runId);
     this.clearCiFeedback(cardId);
   }
   clearCiFeedback(cardId: string): void { this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId); }
@@ -639,6 +658,7 @@ export class Board {
       if (card.prState === "MERGED") return "github";
       // A run newer than the pushed one (a CI fix, a rerun) waits for Approve to push it.
       if (card.prState !== "OPEN" || (!card.prOverrideUrl && card.prPushedRunId !== run.id)) return null;
+      if (this.getCiFeedback(card.id)?.source === "conflict") return "ci_fix";
       if (card.prChecks !== "failing") return "github";
       return card.prCiPending || this.getCiFeedback(card.id)?.source === "ci" ? "ci_fix" : null;
     }
