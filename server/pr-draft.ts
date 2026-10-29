@@ -144,9 +144,9 @@ export function progressLine(line: string): string {
 }
 
 function runPi(piBin: string, prompt: string, cwd: string, models: string[], onProgress: (step: string) => void): Promise<string> {
-  // One turn, no tools: the prompt already carries the diff and the writing style, so skills, extensions, MCP and
-  // AGENTS.md would only add startup time and extra read-a-file turns.
-  const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-mcp", "--no-extensions", "--no-skills", "--no-context-files", "--thinking", "low", ...models, "--", prompt];
+  // One turn, no tools: the prompt already carries the diff and the writing style, so skills, MCP and
+  // AGENTS.md would only add startup time. Extensions stay on: the Anthropic OAuth and multi-pass plugins are extensions.
+  const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-mcp", "--no-skills", "--no-context-files", "--thinking", "low", ...models, "--", prompt];
   return new Promise((resolve, reject) => {
     const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", exceeded = false;
