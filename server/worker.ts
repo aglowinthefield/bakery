@@ -29,6 +29,9 @@ function providerFailure(error: unknown): string {
 /** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
 export type LiveActivity = { tool: string; turn: number; since: string };
 
+// Screenshots read back into a session make single events several MB; the cap only guards against a runaway line.
+const MAX_PI_EVENT_BYTES = 500_000_000;
+
 export class Worker {
   private active = new Map<string, ChildProcess>();
   /** In memory only, keyed by run id; cleared when the run ends. */
@@ -197,17 +200,29 @@ export class Worker {
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
     const startedAt = Date.now();
-    let buffer = "", settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
+    // Pi writes each event as one JSON line, and a line holding a screenshot can run to several MB.
+    // Chunks stay as Buffers until a newline arrives, so a long line is concatenated once rather than rescanned per chunk.
+    let pending: Buffer[] = [], pendingBytes = 0, overflowed = false;
+    let settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
     let turn = 0, lastWorktreeSnapshot = "", lastAgent = "";
     const tools = new Map<string, { name: string; finished: boolean; failed: boolean }>();
     let touchedAt = Date.now();
     child.stdout?.on("data", (chunk: Buffer) => {
       // Any output counts as activity; a write every 10s is enough for the board to tell working from quiet.
       if (Date.now() - touchedAt >= 10_000) { touchedAt = Date.now(); this.board.touch(run.id); }
-      buffer += chunk.toString("utf8");
-      let i: number;
-      while ((i = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, i).replace(/\r$/, ""); buffer = buffer.slice(i + 1);
+      if (overflowed) return;
+      pending.push(chunk); pendingBytes += chunk.length;
+      if (chunk.indexOf(10) < 0) {
+        if (pendingBytes > MAX_PI_EVENT_BYTES) {
+          overflowed = true; pending = []; pendingBytes = 0;
+          protocolError = "Pi event exceeded 500 MB"; this.terminate(run.id, child, "Pi event exceeded 500 MB");
+        }
+        return;
+      }
+      const data = pending.length === 1 ? chunk : Buffer.concat(pending, pendingBytes);
+      let start = 0, i: number;
+      while ((i = data.indexOf(10, start)) >= 0) {
+        const line = data.toString("utf8", start, i).replace(/\r$/, ""); start = i + 1;
         try {
           const event = JSON.parse(line);
           if (event.type === "agent_settled") { settled = true; aborted = event.aborted === true; }
@@ -266,7 +281,8 @@ export class Worker {
           }
         } catch { protocolError = "Invalid Pi event stream"; }
       }
-      if (buffer.length > 1_000_000) { protocolError = "Pi event exceeded 1 MB"; this.terminate(run.id, child, "Pi event exceeded 1 MB"); }
+      pending = start < data.length ? [data.subarray(start)] : [];
+      pendingBytes = data.length - start;
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
     const timer = setTimeout(() => this.terminate(run.id, child, "30-minute run timeout"), 30 * 60 * 1000);

@@ -70,6 +70,27 @@ test("card transcript groups tool activity by turn without storing tool argument
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a multi-megabyte Pi event line (a screenshot read back) does not kill the run", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), big = join(dir, "big.json");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(big, JSON.stringify({ type: "turn_end", message: { stopReason: "stop", content: [{ type: "image", data: "A".repeat(3_000_000) }] } }) + "\n");
+    writeFileSync(fakePi, `#!/bin/sh\ncat '${big}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Big event", body: "", repo });
+    board.setStatus(card.id, "ready");
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(run.id)?.status !== "running");
+    assert.equal(board.getRun(run.id)?.status, "review", board.getRun(run.id)?.error ?? "");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a run keeps the agent's final message as its markdown report, separate from the transcript", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
