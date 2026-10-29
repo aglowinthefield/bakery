@@ -12,8 +12,8 @@
     "start": "tsx server/index.ts",
     "test": "node --import tsx --import ./tests/setup.ts --test --test-force-exit --test-timeout=120000 tests/*.test.ts",
     "bakery": "node scripts/bakery-cli.mjs",
-    "format": "prettier --write src/entry.tsx src/main.tsx src/route.ts src/visualizer/visualizer.tsx src/card-details.tsx src/discussion.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/logs.tsx src/components/ui/chart.tsx src/components/ui/card.tsx src/visualizer/graph.ts",
-    "format:check": "prettier --check src/entry.tsx src/main.tsx src/route.ts src/visualizer/visualizer.tsx src/card-details.tsx src/discussion.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/logs.tsx src/components/ui/chart.tsx src/components/ui/card.tsx src/visualizer/graph.ts"
+    "format": "prettier --write src/entry.tsx src/main.tsx src/route.ts src/visualizer/visualizer.tsx src/card-details.tsx src/discussion.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/logs.tsx src/components/ui/chart.tsx src/components/ui/card.tsx src/visualizer/graph.ts src/visualizer/layout.ts src/visualizer/look.ts src/visualizer/scene.ts src/visualizer/shaders.ts",
+    "format:check": "prettier --check src/entry.tsx src/main.tsx src/route.ts src/visualizer/visualizer.tsx src/card-details.tsx src/discussion.tsx src/review.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/logs.tsx src/components/ui/chart.tsx src/components/ui/card.tsx src/visualizer/graph.ts src/visualizer/layout.ts src/visualizer/look.ts src/visualizer/scene.ts src/visualizer/shaders.ts"
   },
   "dependencies": {
     "@pierre/diffs": "^1.6.2",
@@ -22,6 +22,7 @@
     "@tailwindcss/vite": "^4.1.16",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "elkjs": "^0.12.1",
     "highlight.js": "^11.12.0",
     "lucide-react": "^0.548.0",
     "react": "^19.2.0",
@@ -32,12 +33,14 @@
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.3.1",
-    "tailwindcss": "^4.1.16"
+    "tailwindcss": "^4.1.16",
+    "three": "^0.186.1"
   },
   "devDependencies": {
     "@types/node": "^24.9.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^5.2.0",
     "concurrently": "^9.2.1",
     "playwright": "^1.64.1",
