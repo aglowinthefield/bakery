@@ -253,6 +253,14 @@ const server = createServer(async (req, res) => {
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.resetAutoPickupLimit(repoBoard.id)); return;
     }
+    const syncRoute = path.match(/^\/api\/boards\/([\w-]+)\/sync$/);
+    if (syncRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(syncRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      if (repoBoard.integration !== "github-pr") { send(res, 400, { error: "Only pull-request boards sync with GitHub" }); return; }
+      await githubSync.syncBoard(repoBoard.id);
+      send(res, 200, board.getBoard(repoBoard.id)); return;
+    }
     const settingsRoute = path.match(/^\/api\/boards\/([\w-]+)\/settings$/);
     if (settingsRoute && req.method === "PATCH") {
       const repoBoard = board.getBoard(settingsRoute[1]);

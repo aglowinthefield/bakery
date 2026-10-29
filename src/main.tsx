@@ -1759,13 +1759,41 @@ export function App() {
           </div>
         )}
         {currentBoard?.integration === "github-pr" &&
-          currentBoard.integrationError && (
+          (currentBoard.integrationError ||
+            currentBoard.integrationWarning) && (
             <div
               role="alert"
-              className="mx-6 mt-5 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive lg:mx-10"
+              className={`mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border px-4 py-3 text-sm lg:mx-10 ${currentBoard.integrationError ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-amber-500/40 bg-amber-500/10"}`}
             >
-              GitHub sync stopped and auto pickup is waiting:{" "}
-              {currentBoard.integrationError}
+              <span className="min-w-0 break-words">
+                <strong>
+                  {currentBoard.integrationError
+                    ? "GitHub sync stopped and auto pickup is waiting:"
+                    : "Can't reach GitHub right now; retrying every minute:"}
+                </strong>{" "}
+                {currentBoard.integrationError ||
+                  currentBoard.integrationWarning}
+                {currentBoard.integrationSyncedAt && (
+                  <> Last synced {date(currentBoard.integrationSyncedAt)}.</>
+                )}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  const target = currentBoard;
+                  void action(async () => {
+                    updateBoard(
+                      await api<Board>(`/boards/${target.id}/sync`, {
+                        method: "POST",
+                      }),
+                    );
+                  });
+                }}
+              >
+                Retry now
+              </Button>
             </div>
           )}
         {error && (

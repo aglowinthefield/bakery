@@ -1081,3 +1081,38 @@ test("github-pr: a PR comment that fails to post does not stop a CI send-back", 
     assert.equal(f.board.getCard(card.id)!.prError, null);
   } finally { console.error = error; f.cleanup(); }
 });
+
+test("sync: a failed fetch is a warning that keeps pickup running until it lasts past the grace period", async () => {
+  const f = fixture();
+  try {
+    await f.sync.syncBoard(f.repoBoard.id);
+    const synced = f.board.getBoard(f.repoBoard.id)!.integrationSyncedAt;
+    assert.ok(synced, "a good sync records when it finished");
+
+    const good = git(f.repo, "remote", "get-url", "origin");
+    git(f.repo, "remote", "set-url", "origin", join(f.dir, "gone.git"));
+    await f.sync.syncBoard(f.repoBoard.id);
+    let current = f.board.getBoard(f.repoBoard.id)!;
+    assert.match(current.integrationWarning, /git fetch origin failed.*gone\.git/s, "the warning carries git's own reason");
+    assert.equal(current.integrationError, "", "one failed fetch does not stop sync");
+    assert.equal(current.integrationSyncedAt, synced, "the last good sync time is kept");
+    f.board.setAutoPickup(f.repoBoard.id, true, 1, 5);
+    const waiting = f.board.createCard({ title: "Waiting", body: "", repo: f.repo });
+    f.board.setStatus(waiting.id, "ready");
+    assert.deepEqual(f.board.listAutoPickupCandidates().map(item => item.card.id), [waiting.id], "pickup keeps running during the grace period");
+
+    f.sync.fetchGraceMs = 0;
+    await f.sync.syncBoard(f.repoBoard.id);
+    current = f.board.getBoard(f.repoBoard.id)!;
+    assert.match(current.integrationError, /git fetch origin failed/);
+    assert.equal(current.integrationWarning, "");
+    assert.deepEqual(f.board.listAutoPickupCandidates().map(item => item.card.id), [], "a lasting failure pauses pickup");
+
+    git(f.repo, "remote", "set-url", "origin", good);
+    await f.sync.syncBoard(f.repoBoard.id);
+    current = f.board.getBoard(f.repoBoard.id)!;
+    assert.equal(current.integrationError, "");
+    assert.equal(current.integrationWarning, "");
+    assert.notEqual(current.integrationSyncedAt, synced);
+  } finally { f.cleanup(); }
+});
