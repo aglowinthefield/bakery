@@ -586,6 +586,12 @@ export function CardDetails({
                     <RunReport
                       report={runs[0].report}
                       runId={runs[0].id}
+                      addedFollowUps={boardCards.flatMap((item) => {
+                        const prefix = `follow-up:${runs[0].id}:`;
+                        return item.idempotencyKey?.startsWith(prefix)
+                          ? [Number(item.idempotencyKey.slice(prefix.length))]
+                          : [];
+                      })}
                       planCreated={
                         !!card.createdCardIds ||
                         boardCards.some((item) =>
@@ -1554,9 +1560,12 @@ function RunReport({
   planCreated,
   findingsOnly,
   onCopyError,
+  addedFollowUps,
 }: {
   report: string;
   runId: string;
+  /** Follow-up indexes that already have a Triage card, so a reload still shows them as added. */
+  addedFollowUps: number[];
   /** A card made from this card's plan already exists; a plan is turned into cards once per card. */
   planCreated: boolean;
   /** Creates one Triage card per subtask, dependencies wired, in order; resolves false when any failed (a retry skips cards already made). */
@@ -1579,6 +1588,8 @@ function RunReport({
     setPlanMade(false);
     setPlanFailed(false);
   }, [runId]);
+  const isAdded = (index: number) =>
+    added.includes(index) || addedFollowUps.includes(index);
   const plan = parsePlan(report);
   const items = followUps(report);
   useEffect(() => {
@@ -1695,7 +1706,7 @@ function RunReport({
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={added.includes(index)}
+                  disabled={isAdded(index)}
                   onClick={() =>
                     void onAddFollowUp(index, item.title, item.body).then(
                       (ok) => {
@@ -1704,7 +1715,7 @@ function RunReport({
                     )
                   }
                 >
-                  {added.includes(index) ? "In Triage" : "Add to Triage"}
+                  {isAdded(index) ? "In Triage" : "Add to Triage"}
                 </Button>
               </li>
             ))}
