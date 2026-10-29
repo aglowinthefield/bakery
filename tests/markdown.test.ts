@@ -73,3 +73,17 @@ test("deep nesting is bounded", () => {
   assert.doesNotThrow(() => parseMarkdown(">".repeat(5000) + " deep"));
   assert.doesNotThrow(() => parseMarkdown("*".repeat(5000) + "x" + "*".repeat(5000)));
 });
+
+test("parses GFM tables with alignment, escaped pipes and code spans", () => {
+  const blocks = parseMarkdown("Intro\n| A | B |\n|:--|--:|\n| `x|y` | a \\| b |\n| short |\n\nAfter");
+  assert.equal(blocks.length, 3);
+  const table = blocks[1];
+  assert.equal(table.type, "table");
+  if (table.type !== "table") return;
+  assert.deepEqual(table.align, ["left", "right"]);
+  assert.deepEqual(table.rows[0], [[{ type: "code", text: "x|y" }], [{ type: "text", text: "a | b" }]]);
+  assert.deepEqual(table.rows[1][1], []);
+  assert.equal(markdownToPlainText("| A | B |\n|---|---|\n| 1 | 2 |"), "A B 1 2");
+  // A lone pipe line without a delimiter row stays a paragraph.
+  assert.equal(parseMarkdown("a | b\nc | d")[0].type, "paragraph");
+});

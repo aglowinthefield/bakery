@@ -102,6 +102,32 @@ function renderBlocks(blocks: Block[]): ReactNode[] {
         );
       case "rule":
         return <hr key={index} />;
+      case "table": {
+        const cell = (children: Inline[], column: number, header: boolean) => {
+          const Cell = header ? "th" : "td";
+          return (
+            <Cell key={column} style={{ textAlign: block.align[column] ?? undefined }}>
+              {renderInline(children)}
+            </Cell>
+          );
+        };
+        return (
+          <div key={index} className="markdown-table">
+            <table>
+              <thead>
+                <tr>{block.header.map((c, i) => cell(c, i, true))}</tr>
+              </thead>
+              {block.rows.length > 0 && (
+                <tbody>
+                  {block.rows.map((row, r) => (
+                    <tr key={r}>{row.map((c, i) => cell(c, i, false))}</tr>
+                  ))}
+                </tbody>
+              )}
+            </table>
+          </div>
+        );
+      }
       case "list": {
         const items = block.items.map((item, itemIndex) => (
           <li
