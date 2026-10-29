@@ -396,8 +396,8 @@ test("github-pr: with a PR template and a semantic-PR check, Approve drafts from
     assert.equal(draft.templatePath, ".github/PULL_REQUEST_TEMPLATE.md");
     assert.deepEqual(draft.semantic?.scopes, ["web", "api", "deps"]);
     const args = drafter.args();
-    assert.match(args, /--tools\nread\n/, "the drafter can read skills but cannot act");
-    for (const flag of ["--no-skills", "--no-prompt-templates", "--no-context-files"]) assert.ok(!args.includes(flag), flag);
+    for (const flag of ["--no-tools", "--no-skills", "--no-extensions", "--no-context-files"]) assert.ok(args.includes(`${flag}\n`), flag);
+    assert.match(args, /--thinking\nlow\n/, "one fast turn, no extended thinking");
     assert.match(args, /type one of feat, fix, chore and scope, if any, one of web, api, deps/);
     assert.match(args, /<template>\nSummary[\s\S]*## Staging QA/);
     assert.match(args, /<card-title>\nAdd feature\n<\/card-title>/);
