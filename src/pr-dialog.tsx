@@ -41,10 +41,26 @@ export function PullRequestDialog({
   const [error, setError] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [progress, setProgress] = useState<{
+    startedAt: number;
+    steps: { at: number; text: string }[];
+  }>({ startedAt: 0, steps: [] });
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!open || draft || error) return;
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      api<typeof progress>(`/boards/${boardId}/cards/${card.id}/pr-draft`)
+        .then(setProgress)
+        .catch(() => {});
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [open, draft, error, boardId, card.id]);
   useEffect(() => {
     if (!open) return;
     let current = true;
     setDraft(null);
+    setProgress({ startedAt: 0, steps: [] });
     setError("");
     api<PullRequestDraft>(`/boards/${boardId}/cards/${card.id}/pr-draft`, {
       method: "POST",
@@ -83,8 +99,28 @@ export function PullRequestDialog({
           </div>
         )}
         {!draft && !error && (
-          <div role="status" className="mt-4 text-sm text-muted-foreground">
-            Drafting the pull request…
+          <div
+            role="status"
+            className="mt-4 grid gap-1 text-sm text-muted-foreground"
+          >
+            <div>
+              Drafting the pull request…
+              {progress.startedAt > 0 &&
+                ` ${Math.max(0, Math.round((now - progress.startedAt) / 1000))}s`}
+            </div>
+            <ul className="grid gap-0.5 font-mono text-xs">
+              {progress.steps.slice(-8).map((step, index, shown) => (
+                <li
+                  key={step.at + step.text}
+                  className={
+                    index === shown.length - 1 ? "text-foreground" : ""
+                  }
+                >
+                  +{Math.round((step.at - progress.startedAt) / 1000)}s{" "}
+                  {step.text}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {draft && (

@@ -102,6 +102,8 @@ export function CardDetails({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [prDialog, setPrDialog] = useState(false);
+  // A PR draft already started for this diff (before a close or refresh): the button reopens it.
+  const [draftStarted, setDraftStarted] = useState(false);
   const [reload, setReload] = useState(0);
   const refresh = () => {
     setReload((value) => value + 1);
@@ -209,6 +211,20 @@ export function CardDetails({
     };
   }, [boardId, cardId, loadedFingerprint]);
   const currentReview = review?.cardId === cardId ? review : null;
+  const reviewFingerprint = currentReview?.fingerprint;
+  useEffect(() => {
+    setDraftStarted(false);
+    if (!cardId || !reviewFingerprint || !boardId) return;
+    let current = true;
+    api<{ fingerprint: string | null }>(`/boards/${boardId}/cards/${cardId}/pr-draft`)
+      .then((job) => {
+        if (current) setDraftStarted(job.fingerprint === reviewFingerprint);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [boardId, cardId, reviewFingerprint]);
   const currentComments = comments.filter((item) => item.cardId === cardId);
   const reviewEntries = [...runs]
     .sort((a, b) => b.attempt - a.attempt)
@@ -220,7 +236,8 @@ export function CardDetails({
       ),
     }))
     .filter((item) => item.job || item.requested.length);
-  const hasReviews = reviewEntries.length > 0;
+  // The diff lives in this tab, so a card in review has it even when no agent review ever ran.
+  const hasReviews = reviewEntries.length > 0 || card?.status === "review";
   const hasAttempts = runs.length > 0;
   useEffect(() => {
     if (
@@ -505,8 +522,15 @@ export function CardDetails({
               {(
                 [
                   ["overview", "Overview"],
-                  ...(reviewEntries.length
-                    ? [["reviews", `Reviews (${reviewEntries.length})`]]
+                  ...(hasReviews
+                    ? [
+                        [
+                          "reviews",
+                          reviewEntries.length
+                            ? `Reviews (${reviewEntries.length})`
+                            : "Review",
+                        ],
+                      ]
                     : []),
                   ...(runs.length
                     ? [["attempts", `Attempts (${runs.length})`]]
@@ -586,6 +610,12 @@ export function CardDetails({
                     <RunReport
                       report={runs[0].report}
                       runId={runs[0].id}
+                      addedFollowUps={boardCards.flatMap((item) => {
+                        const prefix = `follow-up:${runs[0].id}:`;
+                        return item.idempotencyKey?.startsWith(prefix)
+                          ? [Number(item.idempotencyKey.slice(prefix.length))]
+                          : [];
+                      })}
                       planCreated={
                         !!card.createdCardIds ||
                         boardCards.some((item) =>
@@ -870,6 +900,7 @@ export function CardDetails({
                 disabled={
                   busy ||
                   !settings ||
+                  (card.blocked && !card.attempts) ||
                   (card.status === "review" &&
                     (approvalPending ||
                       card.reviewWait === "github" ||
@@ -881,6 +912,11 @@ export function CardDetails({
                         (item) =>
                           item.runId === runs[0]?.id && item.state === "draft",
                       )))
+                }
+                title={
+                  card.blocked && !card.attempts
+                    ? "Waiting on unfinished cards. Start this card after they are Done."
+                    : undefined
                 }
                 onClick={() => {
                   if (
@@ -1008,7 +1044,9 @@ export function CardDetails({
                 {integration === "github-pr" && card.prState === "OPEN"
                   ? `Approve and update PR #${card.prNumber}`
                   : integration === "github-pr"
-                    ? "Approve and open PR"
+                    ? draftStarted
+                      ? "Reopen PR draft"
+                      : "Approve and open PR"
                     : "Approve and merge into local main"}
               </Button>
             )}
@@ -1020,7 +1058,10 @@ export function CardDetails({
                 open={prDialog}
                 busy={busy}
                 submitError={error}
-                onOpenChange={setPrDialog}
+                onOpenChange={(open) => {
+                  setPrDialog(open);
+                  if (open) setDraftStarted(true);
+                }}
                 onSubmit={(title, body) => {
                   onConflict(null);
                   void action(() =>
@@ -1548,9 +1589,12 @@ function RunReport({
   planCreated,
   findingsOnly,
   onCopyError,
+  addedFollowUps,
 }: {
   report: string;
   runId: string;
+  /** Follow-up indexes that already have a Triage card, so a reload still shows them as added. */
+  addedFollowUps: number[];
   /** A card made from this card's plan already exists; a plan is turned into cards once per card. */
   planCreated: boolean;
   /** Creates one Triage card per subtask, dependencies wired, in order; resolves false when any failed (a retry skips cards already made). */
@@ -1573,6 +1617,8 @@ function RunReport({
     setPlanMade(false);
     setPlanFailed(false);
   }, [runId]);
+  const isAdded = (index: number) =>
+    added.includes(index) || addedFollowUps.includes(index);
   const plan = parsePlan(report);
   const items = followUps(report);
   useEffect(() => {
@@ -1689,7 +1735,7 @@ function RunReport({
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={added.includes(index)}
+                  disabled={isAdded(index)}
                   onClick={() =>
                     void onAddFollowUp(index, item.title, item.body).then(
                       (ok) => {
@@ -1698,7 +1744,7 @@ function RunReport({
                     )
                   }
                 >
-                  {added.includes(index) ? "In Triage" : "Add to Triage"}
+                  {isAdded(index) ? "In Triage" : "Add to Triage"}
                 </Button>
               </li>
             ))}

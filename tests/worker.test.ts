@@ -493,3 +493,21 @@ test("a local-mode card worktree starts from origin/main when local main is behi
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("starts queued during a drain persist and are taken once, oldest first", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-queue-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const board = new Board(path);
+    const a = board.createCard({ title: "A", body: "", repo: dir }), b = board.createCard({ title: "B", body: "", repo: dir });
+    assert.throws(() => board.queueStart(a.id), /Move this card to Ready/);
+    board.setStatus(a.id, "ready"); board.setStatus(b.id, "ready");
+    board.queueStart(b.id); board.queueStart(a.id); board.queueStart(b.id);
+    board.close();
+    const reopened = new Board(path);
+    assert.equal(reopened.isStartQueued(a.id), true);
+    assert.deepEqual(reopened.takeQueuedStarts(), [b.id, a.id]);
+    assert.deepEqual(reopened.takeQueuedStarts(), []);
+    reopened.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

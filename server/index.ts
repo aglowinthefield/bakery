@@ -14,6 +14,9 @@ import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { discuss, discussionPrompt } from "./discuss.js";
 import { draftPullRequest } from "./pr-draft.js";
+
+/** One PR draft job per card, kept after it settles so a closed or refreshed dialog rejoins it instead of starting over. */
+const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: number; steps: { at: number; text: string }[] }; result: Promise<unknown> }>();
 import { PullRequestFeed } from "./pull-request-feed.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
@@ -395,15 +398,28 @@ const server = createServer(async (req, res) => {
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
         if (req.method === "POST" && action === "start") {
           if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
+          // During a restart drain, remember the start and replay it once the new server is up.
+          if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
           send(res, 202, worker.start(item)); return;
         }
+        if (req.method === "GET" && action === "pr-draft") { const job = draftJobs.get(id); send(res, 200, { ...(job?.progress ?? { startedAt: 0, steps: [] }), fingerprint: job?.fingerprint ?? null }); return; }
         if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);
           if (repoBoard.integration !== "github-pr") throw new Error("This board merges locally; it opens no pull request");
           const diff = integration.review(item), run = board.listRuns(id)[0];
           if (typeof fingerprint !== "string" || diff.fingerprint !== fingerprint) throw new Error("Work changed since review; refresh the diff before approving");
-          const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
-          send(res, 200, await draftPullRequest({ card: item, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(item.repo, "draft")) })); return;
+          let job = draftJobs.get(id);
+          if (!job || job.fingerprint !== fingerprint) {
+            const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
+            const progress = { startedAt: Date.now(), steps: [] as { at: number; text: string }[] };
+            const onProgress = (text: string) => { progress.steps.push({ at: Date.now(), text }); if (progress.steps.length > 200) progress.steps.shift(); };
+            const result = draftPullRequest({ card: item, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(item.repo, "draft")), onProgress });
+            job = { fingerprint, progress, result };
+            draftJobs.set(id, job);
+            const started = job;
+            result.catch(() => { if (draftJobs.get(id) === started) draftJobs.delete(id); });
+          }
+          send(res, 200, await job.result); return;
         }
         if (req.method === "POST" && action === "approve") {
           const { fingerprint, title, body: prBody } = await body(req);
@@ -412,6 +428,7 @@ const server = createServer(async (req, res) => {
             if ((title !== undefined || prBody !== undefined) && (typeof title !== "string" || !title.trim() || title.length > 250 || typeof prBody !== "string" || prBody.length > 20_000))
               throw new Error("Pull request title (up to 250 characters) and body (up to 20,000) are required");
             const card = await integration.openPullRequest(item, fingerprint, github, typeof title === "string" ? { title, body: prBody as string } : undefined);
+            draftJobs.delete(id);
             void githubSync.syncBoard(repoBoard.id);
             send(res, 200, card); return;
           }
@@ -477,6 +494,12 @@ const server = createServer(async (req, res) => {
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
 server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
+  // Starts queued while the previous server drained for a restart.
+  for (const cardId of board.takeQueuedStarts()) {
+    const card = board.getCard(cardId);
+    if (!card || ["triage", "running", "done", "archived"].includes(card.status)) continue;
+    try { worker.start(card); } catch (error) { console.error(`Queued start for card ${cardId} failed: ${error instanceof Error ? error.message : error}`); }
+  }
   // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
   // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
   for (const item of board.listBoards().filter(item => item.githubMainProtected === null && item.remoteUrl))

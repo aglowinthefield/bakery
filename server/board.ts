@@ -113,6 +113,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'sprinkle_donut', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0, agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
@@ -245,6 +246,20 @@ export class Board {
       requeued=CASE WHEN interruptions=0 THEN 1 ELSE 0 END,
       details=CASE WHEN interruptions=0 THEN 'Server restarted during agent review; it will be reviewed again'
         ELSE 'Server restarted during agent review twice; inspect manually' END WHERE state='running'`).run(now());
+  }
+  /** Remember a run start asked for during a restart drain; the next server process replays it. */
+  queueStart(cardId: string) {
+    const card = this.getCard(cardId);
+    if (!card) throw new Error("Card not found");
+    if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
+    this.db.prepare("INSERT OR IGNORE INTO queued_starts(cardId, queuedAt) VALUES (?, ?)").run(cardId, now());
+  }
+  isStartQueued(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM queued_starts WHERE cardId=?").get(cardId); }
+  /** Returns queued card ids oldest first and empties the queue. */
+  takeQueuedStarts(): string[] {
+    const ids = (this.db.prepare("SELECT cardId FROM queued_starts ORDER BY queuedAt, rowid").all() as { cardId: string }[]).map(row => row.cardId);
+    this.db.exec("DELETE FROM queued_starts");
+    return ids;
   }
   close() { this.db.close(); }
   getSettings(): BakerySettings {
@@ -553,8 +568,8 @@ export class Board {
   }
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {
     const result: { card: Card; run: Run; board: RepoBoard }[] = [];
-    // Unattended review merges locally, so it never runs on a board that integrates through GitHub pull requests.
-    for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled && item.integration === "local")) {
+    // On a github-pr board the agent only reviews: AutoReview never merges there, and Approve still opens the PR.
+    for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled)) {
       for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
         const run = this.listRuns(card.id)[0];
         if (run && this.awaitsAutoReview(repoBoard, card.id, run)) result.push({ card, run, board: repoBoard });
@@ -564,7 +579,7 @@ export class Board {
   }
   /** The run finished after auto-review was enabled and nothing (a person, an earlier job) has handled it yet. */
   private awaitsAutoReview(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
-    return repoBoard.autoReviewEnabled && repoBoard.integration === "local" &&
+    return repoBoard.autoReviewEnabled &&
       run.status === "review" && !!run.finishedAt && !!repoBoard.autoReviewEnabledAt && run.finishedAt > repoBoard.autoReviewEnabledAt &&
       !(this.getAutoReviewJob(run.id)?.requeued === 0) && !this.getApproval(cardId) && !this.getMergeFailure(cardId) &&
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
@@ -575,6 +590,8 @@ export class Board {
     const run = this.listRuns(card.id)[0];
     if (run?.status !== "review") return null;
     if (repoBoard.integration === "github-pr") {
+      // Before a pull request exists, an agent review in progress or queued is the agent's turn.
+      if (!card.prState && (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run))) return "agent_review";
       if (card.prState === "MERGED") return "github";
       // A run newer than the pushed one (a CI fix, a rerun) waits for Approve to push it.
       if (card.prState !== "OPEN" || (!card.prOverrideUrl && card.prPushedRunId !== run.id)) return null;
