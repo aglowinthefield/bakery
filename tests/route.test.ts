@@ -8,6 +8,8 @@ const routes: Route[] = [
   { view: "logs", boardId: null, cardId: null },
   { view: "board", boardId: "b1", cardId: null },
   { view: "pulls", boardId: "b1", cardId: null },
+  { view: "visualizer", boardId: "b1", cardId: null },
+  { view: "visualizer", boardId: "b 1", cardId: null },
   { view: "board", boardId: "b 1", cardId: "c/2" },
 ];
 
@@ -21,4 +23,17 @@ test("unknown paths are not routes", () => {
   assert.equal(parseRoute("/nope"), null);
   assert.equal(parseRoute("/board"), null);
   assert.equal(parseRoute("/board/b1/card"), null);
+  assert.equal(parseRoute("/board/b1/visualizer/extra"), null);
+});
+
+test("the visualizer has its own path under the board", () => {
+  assert.equal(
+    formatRoute({ view: "visualizer", boardId: "b1", cardId: null }),
+    "/board/b1/visualizer",
+  );
+  assert.deepEqual(parseRoute("/board/b1/visualizer"), {
+    view: "visualizer",
+    boardId: "b1",
+    cardId: null,
+  });
 });
