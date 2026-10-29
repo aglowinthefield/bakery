@@ -289,7 +289,13 @@ export function CardDetails({
     try {
       const result = await fn();
       // Approve and similar calls return the changed card; show it now instead of after the next poll.
-      if (result && typeof result === "object" && (result as Card).id === cardId && "status" in result) onCardUpdated(result as Card);
+      if (
+        result &&
+        typeof result === "object" &&
+        (result as Card).id === cardId &&
+        "status" in result
+      )
+        onCardUpdated(result as Card);
       refresh();
       return true;
     } catch (err) {
