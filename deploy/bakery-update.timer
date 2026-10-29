@@ -3,7 +3,7 @@ Description=Check for Bakery updates
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=15min
+OnUnitActiveSec=2min
 
 [Install]
 WantedBy=timers.target

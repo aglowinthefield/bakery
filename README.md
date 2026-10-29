@@ -367,7 +367,7 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 `npm start` has no file watcher. `scripts/update.sh` pulls `origin/main`, installs, builds the UI, then sends the server `SIGUSR2`. The server refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`.
 
-`deploy/bakery-update.service` and `deploy/bakery-update.timer` run the script every 15 minutes. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
+`deploy/bakery-update.service` and `deploy/bakery-update.timer` run the script every 2 minutes. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
 
 ## Safety
 
