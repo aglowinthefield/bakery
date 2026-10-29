@@ -218,7 +218,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/cards" && req.method === "GET") {
       // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
-      send(res, 200, board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived")); return;
+      send(res, 200, worker.withLive(board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived"))); return;
     }
     if (path === "/api/stats" && req.method === "GET") {
       const params = new URL(req.url ?? "/", "http://localhost").searchParams;
@@ -379,7 +379,7 @@ const server = createServer(async (req, res) => {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       if (!id) {
-        if (req.method === "GET") { send(res, 200, originMain.annotate(repoBoard, board.listCards(repoBoard.repo))); return; }
+        if (req.method === "GET") { send(res, 200, worker.withLive(originMain.annotate(repoBoard, board.listCards(repoBoard.repo)))); return; }
         if (req.method === "POST") {
           const input = await body(req), card = fields(input), key = idempotencyKey(input.idempotencyKey);
           // A repeated key returns the board's existing card unchanged, whatever its status.

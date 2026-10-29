@@ -304,6 +304,17 @@ test("failing verification leaves the card in Review without calling a model or 
   } finally { item.close(); }
 });
 
+test("a failing verification command's stdout reaches the card message", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "echo 'TS2322: type mismatch in widget.ts'; exit 1");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await item.auto.tick();
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /failed \(1\): TS2322: type mismatch in widget\.ts/);
+  } finally { item.close(); }
+});
+
 test("uncommitted overlapping edits on main stop auto-review before verification or a model call", async () => {
   const item = fixture();
   try {

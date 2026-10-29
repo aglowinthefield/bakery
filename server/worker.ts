@@ -26,8 +26,13 @@ function providerFailure(error: unknown): string {
   return `Provider request failed${status ? ` (HTTP ${status})` : ""}`;
 }
 
+/** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
+export type LiveActivity = { tool: string; turn: number; since: string };
+
 export class Worker {
   private active = new Map<string, ChildProcess>();
+  /** In memory only, keyed by run id; cleared when the run ends. */
+  private live = new Map<string, LiveActivity>();
   private terminationReasons = new Map<string, string>();
   private draining = false;
   private idleWaiters: (() => void)[] = [];
@@ -85,9 +90,9 @@ export class Worker {
       : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action.";
     const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
     const reviewerPrompt = reviewerChanges.length ? `\n\nAn independent agent reviewer inspected the previous attempt and sent it back with these requested changes. Address each item and report any you could not resolve: ${JSON.stringify(reviewerChanges)}` : "";
-    const ciPrompt = ciFeedback?.source === "ci" && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix. Some checks are satisfied outside the code, by a label or a line in the pull request description. For this run you are authorized to change that pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} with \`gh pr edit\` (add or remove labels, edit the description) when the repository's own rules allow it, and to post a \`gh pr comment\` there explaining each such change and why the rules allow it. Do not push, merge, close it, or touch any other pull request; Bakery pushes your code changes. The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
+    const ciPrompt = ciFeedback?.source === "ci" && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix. Some checks are satisfied outside the code, by a label or a line in the pull request description. For this run you are authorized to change that pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} with \`gh pr edit\` (add or remove labels, edit the description) when the repository's own rules allow it, and to post a \`gh pr comment\` there explaining each such change and why the rules allow it. If a failure looks like a hang, timeout or flake rather than a code problem, re-run just the failed jobs once with \`gh run rerun <run-id> --failed\` (run ids are in the failure list or \`gh run list --branch\`) before changing code, and say so in your report; re-run each run at most once. Do not push, merge, close it, or touch any other pull request; Bakery pushes your code changes. The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
     const pushPrompt = ciFeedback?.source === "push" && !conflict ? `\n\nBakery tried to push this card's branch to GitHub, and the repository's pre-push hook refused it, so nothing was pushed. Make the hook pass: fix what it reports on the card branch (the commit it rejected is ${ciFeedback.headSha}), re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery pushes after the operator approves again. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
-    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, before each tool call or group of calls, write one plain sentence saying what you are checking or doing and why, and after a result that changes your plan, one sentence on what you learned. Keep each to a single sentence about intent and findings, not the command itself. At the end, state what changed, what you verified, and what remains. If there is work that should happen later but is not part of this card (a script to run, a migration to apply, a cleanup you noticed), list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
+    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, before each tool call or group of calls, write one plain sentence saying what you are checking or doing and why, and after a result that changes your plan, one sentence on what you learned. Keep each to a single sentence about intent and findings, not the command itself. At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
     // Handed to this run; a later run should not see the same failures again.
     if (ciPrompt || pushPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
     const phase = conflict ? "conflict" : "work";
@@ -228,6 +233,7 @@ export class Worker {
           if (event.type === "tool_execution_start" && typeof event.toolCallId === "string") {
             const name = typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName) ? event.toolName : "tool";
             tools.set(event.toolCallId, { name, finished: false, failed: false });
+            this.live.set(run.id, { tool: name, turn: turn || 1, since: new Date().toISOString() });
           }
           if (event.type === "tool_execution_end" && typeof event.toolCallId === "string") {
             const tool = tools.get(event.toolCallId);
@@ -264,9 +270,9 @@ export class Worker {
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
     const timer = setTimeout(() => this.terminate(run.id, child, "30-minute run timeout"), 30 * 60 * 1000);
-    child.on("error", (error) => { this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
+    child.on("error", (error) => { this.live.delete(run.id); this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
-      clearTimeout(timer); this.active.delete(run.id);
+      clearTimeout(timer); this.active.delete(run.id); this.live.delete(run.id);
       if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
       const reason = this.terminationReasons.get(run.id);
       this.terminationReasons.delete(run.id);
@@ -287,6 +293,15 @@ export class Worker {
     this.terminate(id, child, "manual stop");
   }
   get activeCount() { return this.active.size; }
+  /** Each card's live activity, or null for a card whose run is not in progress or has not used a tool yet. */
+  withLive<T extends { id: string }>(cards: T[]): (T & { live: LiveActivity | null })[] {
+    const byCard = new Map<string, LiveActivity>();
+    for (const [runId, live] of this.live) {
+      const run = this.active.has(runId) ? this.board.getRun(runId) : undefined;
+      if (run) byCard.set(run.cardId, live);
+    }
+    return cards.map(card => ({ ...card, live: byCard.get(card.id) ?? null }));
+  }
   /** Ids of the runs in progress. */
   get activeRunIds(): string[] { return [...this.active.keys()]; }
   /** Refuse new runs and resolve once every active Pi child has exited on its own. */

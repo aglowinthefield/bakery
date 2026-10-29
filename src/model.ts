@@ -170,6 +170,11 @@ export type Card = {
   startQueued?: boolean;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
+  /**
+   * What the running agent is doing now: its latest tool, the turn it ran in, and when that tool started (ISO time).
+   * Null when no run is in progress or it has not used a tool yet. Only the card lists carry it.
+   */
+  live?: { tool: string; turn: number; since: string } | null;
 } & UsageFields;
 export type CountKey = Status | "reviewWaiting";
 /** The `cardCounts` bucket a card falls in. */
@@ -193,10 +198,11 @@ export const quietAfterMs = 5 * 60_000;
 export function cardActivity(
   card: Card,
   now = Date.now(),
+  quietAfter = quietAfterMs,
 ): "working" | "waiting" | "quiet" | null {
   if (card.status === "running")
     return card.lastActivityAt &&
-      now - Date.parse(card.lastActivityAt) > quietAfterMs
+      now - Date.parse(card.lastActivityAt) > quietAfter
       ? "quiet"
       : "working";
   if (card.status === "review" && card.reviewWait)
