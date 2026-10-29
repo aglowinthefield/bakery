@@ -338,3 +338,75 @@ test("POST start while the server drains answers 202 queued and does not start a
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("card lists report the live tool and turn of a running card, and null once it finishes", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bakery-live-"));
+  const repo = join(home, "code", "alpha");
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q", repo]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
+  // Starts a turn and a tool, then holds until the test creates the release file, then settles.
+  const release = join(home, "release"), fakePi = join(home, "fake-pi");
+  const event = (value: unknown) => `echo '${JSON.stringify(value)}'`;
+  writeFileSync(fakePi, `#!/bin/sh
+${event({ type: "turn_start" })}
+${event({ type: "tool_execution_start", toolCallId: "a", toolName: "read" })}
+${event({ type: "tool_execution_start", toolCallId: "b", toolName: "bad name!" })}
+while [ ! -e '${release}' ]; do sleep 0.05; done
+${event({ type: "turn_end" })}
+${event({ type: "agent_settled", aborted: false })}
+`);
+  chmodSync(fakePi, 0o755);
+  const port = await freePort();
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stderr?.on("data", chunk => { output += chunk.toString(); });
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    async function request(path: string, method = "GET", input?: unknown) {
+      const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
+      return { status: response.status, data: await response.json() };
+    }
+    const deadline = Date.now() + 5000;
+    while (true) {
+      try { await fetch(`${url}/api/boards`); break; }
+      catch {
+        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    const board = (await request("/boards", "POST", { repo })).data;
+    const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Live", body: "" })).data;
+    const lists = async () => [
+      (await request("/cards")).data.find((item: { id: string }) => item.id === card.id),
+      (await request(`/boards/${board.id}/cards`)).data.find((item: { id: string }) => item.id === card.id),
+    ];
+    assert.equal((await request(`/boards/${board.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
+    for (const item of await lists()) assert.equal(item.live, null, "a card that has not run reports null");
+    assert.equal((await request(`/boards/${board.id}/cards/${card.id}/start`, "POST")).status, 202);
+    const until = Date.now() + 10_000;
+    let running = await lists();
+    while (running[0].live?.tool !== "tool" && Date.now() < until) { await new Promise(resolve => setTimeout(resolve, 50)); running = await lists(); }
+    for (const item of running) {
+      assert.equal(item.status, "running");
+      // The latest tool wins, and a name that fails the worker's check falls back to "tool".
+      assert.deepEqual([item.live?.tool, item.live?.turn], ["tool", 1]);
+      assert.ok(!Number.isNaN(Date.parse(item.live.since)));
+    }
+    writeFileSync(release, "");
+    const done = Date.now() + 10_000;
+    let finished = await lists();
+    while (finished[0].status === "running" && Date.now() < done) { await new Promise(resolve => setTimeout(resolve, 50)); finished = await lists(); }
+    for (const item of finished) { assert.equal(item.status, "review"); assert.equal(item.live, null); }
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise(resolve => child.once("close", resolve));
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
