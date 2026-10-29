@@ -8,7 +8,12 @@
     <script>
       try {
         const theme = localStorage.getItem("bakery-theme");
-        if (theme && theme !== "default" && /^[a-z-]+$/.test(theme)) document.documentElement.dataset.theme = theme;
+        if (theme && theme !== "default" && /^[a-z-]+$/.test(theme)) {
+          // "compline-system" has no palette; main.tsx tracks the OS after load.
+          document.documentElement.dataset.theme = theme === "compline-system"
+            ? (matchMedia("(prefers-color-scheme: light)").matches ? "compline-light" : "compline")
+            : theme;
+        }
         const density = localStorage.getItem("bakery-density");
         if (density === "compact" || density === "cozy") document.documentElement.dataset.density = density;
       } catch { /* Storage can be disabled. The database still supplies the theme. */ }

@@ -104,6 +104,7 @@ import {
 } from "./model.js";
 import { formatRoute, parseRoute, type RouteView } from "./route.js";
 import { Logs } from "./logs.js";
+import { applyTheme } from "./apply-theme.js";
 import { themeNames, themes } from "./themes.js";
 import { UpdateNotice } from "./update-notice.js";
 
@@ -834,7 +835,7 @@ export function App() {
       .catch((err) => setError(String(err)));
     void api<BakerySettings>("/settings")
       .then((next) => {
-        document.documentElement.dataset.theme = next.theme;
+        applyTheme(next.theme);
         cacheTheme(next.theme);
         applyDensity(next.density);
         setSettings(next);
@@ -1079,7 +1080,7 @@ export function App() {
     if (!settings) return;
     const previous = settings;
     setSettings({ ...settings, ...patch });
-    if (patch.theme) document.documentElement.dataset.theme = patch.theme;
+    if (patch.theme) applyTheme(patch.theme);
     if (patch.density) applyDensity(patch.density);
     void action(async () => {
       try {
@@ -1088,12 +1089,12 @@ export function App() {
           body: JSON.stringify(patch),
         });
         setSettings(saved);
-        document.documentElement.dataset.theme = saved.theme;
+        applyTheme(saved.theme);
         cacheTheme(saved.theme);
         applyDensity(saved.density);
       } catch (error) {
         setSettings(previous);
-        document.documentElement.dataset.theme = previous.theme;
+        applyTheme(previous.theme);
         applyDensity(previous.density);
         throw error;
       }
@@ -3278,7 +3279,11 @@ export function App() {
             setSelected(null);
           }}
           onRefresh={refresh}
-          onCardUpdated={(next) => setCards((previous) => previous.map((item) => (item.id === next.id ? next : item)))}
+          onCardUpdated={(next) =>
+            setCards((previous) =>
+              previous.map((item) => (item.id === next.id ? next : item)),
+            )
+          }
           onError={setError}
           onConflict={(conflict) =>
             setMergeConflicts((previous) =>
