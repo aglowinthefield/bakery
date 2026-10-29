@@ -198,10 +198,11 @@ export const quietAfterMs = 5 * 60_000;
 export function cardActivity(
   card: Card,
   now = Date.now(),
+  quietAfter = quietAfterMs,
 ): "working" | "waiting" | "quiet" | null {
   if (card.status === "running")
     return card.lastActivityAt &&
-      now - Date.parse(card.lastActivityAt) > quietAfterMs
+      now - Date.parse(card.lastActivityAt) > quietAfter
       ? "quiet"
       : "working";
   if (card.status === "review" && card.reviewWait)
