@@ -140,6 +140,7 @@ export function trimFailedLog(log: string, maxLines = 60, maxChars = 4000): stri
 
 /** Most automatic CI fix runs per card. After that a failing PR waits for the operator. */
 export const maxCiReworks = 3;
+const ciFixUnchanged = (head: string) => `The CI fix run made no change, so CI still fails at ${head.slice(0, 12)}. Read its report, then rerun the failed checks on GitHub or fix it in the card worktree.`;
 
 export class GitHub {
   constructor(private readonly ghBin = "gh", private readonly cwd?: string) {}
@@ -350,8 +351,8 @@ export class GitHubSync {
   private async settle(repoBoard: RepoBoard, card: Card, pr: PullRequest, repo: string): Promise<void> {
     const checks = checksState(pr);
     if (pr.state === "OPEN") {
-      if (await this.pushCiFix(card, pr)) return;
-      const ci = await this.sendBackFailingCi(card, pr, repo);
+      if (await this.pushCiFix(card, pr, repo)) return;
+      const ci = await this.sendBackFailingCi(this.board.getCard(card.id) ?? card, pr, repo);
       this.board.recordPullRequest(card.id, { ...pr, checks, error: ci.error, ciPending: ci.pending || !!ci.rework });
       if (ci.rework) {
         try { await ci.rework(); }
@@ -390,7 +391,9 @@ export class GitHubSync {
     if (card.ciReworkSha === head) {
       // Sent back, but the fix run could not start (the board was at its run limit, say): try again.
       if (this.board.getCiFeedback(card.id)) return this.startRework(card);
-      return card.ciReworks >= maxCiReworks ? { error: limit } : {};
+      if (card.ciReworks >= maxCiReworks) return { error: limit };
+      const run = this.board.listRuns(card.id)[0];
+      return run?.ciFix && run.status === "review" && card.prPushedRunId === run.id ? { error: ciFixUnchanged(head) } : {};
     }
     // Wait for checks still running, so the agent sees every failure at once, but not forever: a check that never
     // starts (a merge-queue-only check, say) must not hold back a failure that finished 10 minutes ago.
@@ -425,17 +428,25 @@ export class GitHubSync {
   /**
    * A CI fix run that reached Review is pushed to the PR without waiting for Approve: the operator chose to let
    * CI-only rounds run unattended. It still stops for review comments, and the PR still needs its merge review.
-   * Returns true when it pushed.
+   * A fix run that changed nothing is said once on the PR and left on the card, because the PR comment that sent
+   * it back promised a push. Returns true when it pushed.
    */
-  private async pushCiFix(card: Card, pr: PullRequest): Promise<boolean> {
+  private async pushCiFix(card: Card, pr: PullRequest, repo: string): Promise<boolean> {
     const run = this.board.listRuns(card.id)[0];
-    if (!this.autoApprove || card.prOverrideUrl || card.status !== "review" || run?.status !== "review" || !run.ciFix) return false;
-    if (this.board.hasRequestedChanges(card.id, run.id) || this.board.hasDraftReviewComments(card.id, run.id) || this.board.getApproval(card.id)) return false;
+    if (card.prOverrideUrl || card.status !== "review" || run?.status !== "review" || !run.ciFix || card.prPushedRunId === run.id) return false;
     const worktree = join(this.dataDir, "worktrees", card.id);
-    try {
-      // Already pushed, or the fix run changed nothing: nothing to send.
-      if (await git(worktree, "rev-parse", "HEAD") === pr.headRefOid && !(await git(worktree, "status", "--porcelain"))) return false;
-    } catch { return false; }
+    let unchanged: boolean;
+    try { unchanged = await git(worktree, "rev-parse", "HEAD") === pr.headRefOid && !(await git(worktree, "status", "--porcelain")); }
+    catch { return false; }
+    if (unchanged) {
+      // The PR already holds everything this run has, so the run counts as pushed and the card is the operator's turn.
+      this.board.recordPullRequestPush(card.id, run.id);
+      const report = (run.report ?? "").trim();
+      await commentOnPullRequest(this.github, repo, pr.number, `The automatic fix run for the CI failure at ${(pr.headRefOid ?? "").slice(0, 12)} made no change, so nothing was pushed. A person needs to decide whether to rerun the failed checks or fix it by hand.${report ? `\n\nThe agent's report:\n\n${report.slice(0, 3000).split("\n").map(line => `> ${line}`).join("\n")}` : ""}`);
+      return false;
+    }
+    if (!this.autoApprove) return false;
+    if (this.board.hasRequestedChanges(card.id, run.id) || this.board.hasDraftReviewComments(card.id, run.id) || this.board.getApproval(card.id)) return false;
     try {
       await this.autoApprove(card);
       return true;

@@ -896,6 +896,38 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
   } finally { f.cleanup(); }
 });
 
+test("github-pr: a CI fix run that changes nothing says so on the PR and the card, once", async () => {
+  const f = fixture();
+  const idlePi = join(f.dir, "pi-idle");
+  writeFileSync(idlePi, `#!/bin/sh\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(idlePi, 0o755);
+  const worker = new Worker(f.board, f.data, idlePi);
+  const integration = new Integration(f.board, f.data);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, true));
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    const done = new Date(Date.now() - 1000).toISOString();
+    const lint = { name: "lint", workflowName: "CI", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done, detailsUrl: "https://ci.example/lint" };
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [lint] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    await waitFor(() => f.board.getCard(card.id)!.status === "review");
+    assert.equal(f.board.listRuns(card.id)[0].ciFix, 1);
+
+    await sync.syncBoard(f.repoBoard.id);
+    const said = () => f.comments().filter(c => /made no change, so nothing was pushed/.test(c.body));
+    assert.equal(said().length, 1);
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), pushed, "nothing pushed");
+    assert.match(f.board.getCard(card.id)!.prError ?? "", /CI fix run made no change/);
+    await sync.syncBoard(f.repoBoard.id);
+    assert.equal(said().length, 1, "said once");
+    assert.match(f.board.getCard(card.id)!.prError ?? "", /CI fix run made no change/, "the reason stays on the card");
+  } finally { f.cleanup(); }
+});
+
 test("GitHub remote: a main that only accepts pull requests makes the board github-pr", async () => {
   const f = fixture(undefined, "default");
   try {
