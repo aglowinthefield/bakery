@@ -909,7 +909,30 @@ export function CardDetails({
                 Move to Triage
               </Button>
             )}
-            {card && ["ready", "failed", "review"].includes(card.status) && (
+            {card?.startQueued && (
+              <>
+                <span
+                  className="rounded border border-amber-500/50 px-2 py-1 text-xs text-amber-600"
+                  data-testid="start-queued-badge"
+                >
+                  Queued, starts after restart
+                </span>
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() =>
+                    action(() =>
+                      api(`/boards/${boardId}/cards/${card.id}/start`, {
+                        method: "DELETE",
+                      }),
+                    )
+                  }
+                >
+                  Cancel queued start
+                </Button>
+              </>
+            )}
+            {card && !card.startQueued && ["ready", "failed", "review"].includes(card.status) && (
               <Button
                 disabled={
                   busy ||

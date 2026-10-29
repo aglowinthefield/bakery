@@ -447,6 +447,7 @@ const server = createServer(async (req, res) => {
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
           send(res, 202, worker.start(item)); return;
         }
+        if (req.method === "DELETE" && action === "start") { send(res, 200, { cancelled: board.cancelQueuedStart(id) }); return; }
         if (req.method === "GET" && action === "pr-draft") { const job = draftJobs.get(id); send(res, 200, { ...(job?.progress ?? { startedAt: 0, steps: [] }), fingerprint: job?.fingerprint ?? null }); return; }
         if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);

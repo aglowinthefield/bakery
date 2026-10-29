@@ -534,7 +534,13 @@ test("starts queued during a drain persist and are taken once, oldest first", ()
     board.close();
     const reopened = new Board(path);
     assert.equal(reopened.isStartQueued(a.id), true);
-    assert.deepEqual(reopened.takeQueuedStarts(), [b.id, a.id]);
+    assert.equal(reopened.getCard(a.id)?.startQueued, true);
+    assert.equal(reopened.cancelQueuedStart(a.id), true);
+    assert.equal(reopened.cancelQueuedStart(a.id), false);
+    assert.equal(reopened.getCard(a.id)?.startQueued, false);
+    assert.deepEqual(reopened.takeQueuedStarts(), [b.id]);
+    reopened.queueStart(a.id);
+    assert.deepEqual(reopened.takeQueuedStarts(), [a.id]);
     assert.deepEqual(reopened.takeQueuedStarts(), []);
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
