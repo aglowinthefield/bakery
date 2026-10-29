@@ -886,6 +886,7 @@ export function CardDetails({
                   !settings ||
                   (card.status === "review" &&
                     (approvalPending ||
+                      card.reviewWait === "github" ||
                       autoJobs.some(
                         (item) =>
                           item.cardId === card.id && item.state === "running",

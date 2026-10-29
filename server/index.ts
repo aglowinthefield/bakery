@@ -367,7 +367,10 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
-        if (req.method === "POST" && action === "start") { send(res, 202, worker.start(item)); return; }
+        if (req.method === "POST" && action === "start") {
+          if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
+          send(res, 202, worker.start(item)); return;
+        }
         if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);
           if (repoBoard.integration !== "github-pr") throw new Error("This board merges locally; it opens no pull request");
