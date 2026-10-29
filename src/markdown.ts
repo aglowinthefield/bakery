@@ -53,7 +53,8 @@ function listMarker(line: string) {
   };
 }
 
-const tableDelimiter = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+const tableDelimiter =
+  /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
 
 // Splits a table row on unescaped pipes outside code spans.
 function splitRow(line: string): string[] {

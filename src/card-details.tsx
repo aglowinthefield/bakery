@@ -216,7 +216,9 @@ export function CardDetails({
     setDraftStarted(false);
     if (!cardId || !reviewFingerprint || !boardId) return;
     let current = true;
-    api<{ fingerprint: string | null }>(`/boards/${boardId}/cards/${cardId}/pr-draft`)
+    api<{ fingerprint: string | null }>(
+      `/boards/${boardId}/cards/${cardId}/pr-draft`,
+    )
       .then((job) => {
         if (current) setDraftStarted(job.fingerprint === reviewFingerprint);
       })
