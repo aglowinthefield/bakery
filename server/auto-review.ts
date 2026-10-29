@@ -139,7 +139,9 @@ export class AutoReview {
       if (!diff.files.length || diff.files.length > 40 || patch.length > 100_000) throw new Error("Diff is empty or too large for automatic review");
       if (diff.files.some(file => /^Binary files .+ differ$|^GIT binary patch|^(new|deleted) file mode 120000|^Submodule /m.test(file.patch))) throw new Error("Binary, symlink, or submodule changes require human review");
       if (!run.worktree) throw new Error("Card worktree is missing");
-      const blocked = this.integration.localConflicts(card);
+      // A pull-request board never merges locally, so uncommitted changes on local main are not in the way.
+      const pullRequests = this.board.integrationFor(card.repo) === "github-pr";
+      const blocked = pullRequests ? [] : this.integration.localConflicts(card);
       if (blocked.length) throw new Error(`Uncommitted changes on main overlap this card (${blocked.slice(0, 10).join(", ")}); commit or stash them, then approve`);
       // A failed verifier never spends review tokens. Its output is deliberately not persisted.
       this.board.setAutoReviewProgress(run.id, "Running the verification command before review…");
@@ -156,6 +158,14 @@ export class AutoReview {
         this.board.finishAutoReview(run.id, "needs_human", `Sent back to the implementer: ${verdict.reason}`, fingerprint, verdict.changes);
         try { this.sendBack(latest); console.log(`Auto-review sent card ${card.id} back to its implementer`); }
         catch (error) { console.error(`Auto-review could not restart card ${card.id}: ${error instanceof Error ? error.message : error}`); }
+        return;
+      }
+      if (verdict.verdict === "approve" && pullRequests) {
+        // Approve opens a pull request, which stays a human decision; the agent's verdict is advice.
+        const latest = this.board.getCard(card.id);
+        if (!latest || latest.title !== card.title || latest.body !== card.body) throw new Error("Card changed during agent review");
+        if (this.integration.review(latest).fingerprint !== fingerprint) throw new Error("Work changed during agent review");
+        this.board.finishAutoReview(run.id, "needs_human", `Agent approved: ${verdict.reason}`, fingerprint);
         return;
       }
       if (verdict.verdict !== "approve") throw new Error(`Agent requested ${verdict.verdict === "request_changes" ? "changes" : "human review"}: ${verdict.reason}${verdict.changes ? ` ${JSON.stringify(verdict.changes)}` : ""}`);
