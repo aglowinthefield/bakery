@@ -166,6 +166,8 @@ export type Card = {
   locallyMerged?: boolean;
   /** Set on Review cards that are not your turn yet; see `reviewWaitLabels`. */
   reviewWait?: ReviewWait | null;
+  /** A start was asked for during a restart drain and runs after the restart. */
+  startQueued?: boolean;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
 } & UsageFields;
