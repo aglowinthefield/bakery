@@ -61,6 +61,8 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   lastActivityAt: string | null;
   /** Set only for Review cards that are not your turn; null means a person is needed (or the card is not in Review). */
   reviewWait: ReviewWait | null;
+  /** A start was asked for during a restart drain and runs after the restart. */
+  startQueued: boolean;
   /** Done cards on a local board with a GitHub remote: is the merge on origin/main (last fetch)? */
   originMain?: "pushed" | "local" } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
@@ -69,7 +71,7 @@ export type CardRef = { id: string; title: string; status: CardStatus };
 const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
-type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
+type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
@@ -254,6 +256,8 @@ export class Board {
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     this.db.prepare("INSERT OR IGNORE INTO queued_starts(cardId, queuedAt) VALUES (?, ?)").run(cardId, now());
   }
+  /** Drops a start queued during a restart drain. Returns whether one was queued. */
+  cancelQueuedStart(cardId: string): boolean { return this.db.prepare("DELETE FROM queued_starts WHERE cardId=?").run(cardId).changes > 0; }
   isStartQueued(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM queued_starts WHERE cardId=?").get(cardId); }
   /** Returns queued card ids oldest first and empties the queue. */
   takeQueuedStarts(): string[] {
@@ -585,7 +589,7 @@ export class Board {
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
   }
   /** See `ReviewWait`. Anything this does not recognize as someone else's turn is the person's turn. */
-  private reviewWait(card: Omit<Card, "reviewWait">, repoBoard: RepoBoard | undefined): ReviewWait | null {
+  private reviewWait(card: Omit<Card, "reviewWait" | "startQueued">, repoBoard: RepoBoard | undefined): ReviewWait | null {
     if (card.status !== "review" || !repoBoard) return null;
     const run = this.listRuns(card.id)[0];
     if (run?.status !== "review") return null;
@@ -603,9 +607,10 @@ export class Board {
   }
   private toCards(rows: CardRow[]): Card[] {
     const boards = new Map(this.listBoards().map(item => [item.repo, item]));
+    const queued = new Set((this.db.prepare("SELECT cardId FROM queued_starts").all() as { cardId: string }[]).map(item => item.cardId));
     return rows.map(row => {
       const card = { ...row, createdCardIds: row.createdCardIds === null ? null : JSON.parse(row.createdCardIds) as string[], dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0, locallyMerged: row.locallyMerged !== 0, planOnly: row.planOnly !== 0 };
-      return { ...card, reviewWait: this.reviewWait(card, boards.get(card.repo)) };
+      return { ...card, reviewWait: this.reviewWait(card, boards.get(card.repo)), startQueued: queued.has(card.id) };
     });
   }
   autoReviewMergesToday(repo: string): number {
