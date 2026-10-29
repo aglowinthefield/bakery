@@ -51,7 +51,10 @@ export class Worker {
     const latestRun = this.board.listRuns(card.id)[0];
     if (latestRun && this.board.hasDraftReviewComments(card.id, latestRun.id)) throw new Error("Submit or remove draft review comments before running Pi again");
     const feedback = this.board.getFeedbackForRun(card.id);
-    const reviewerChanges = latestRun && !feedback.length ? this.board.getReviewerChanges(latestRun.id) : [];
+    // Requested changes belong to the last attempt that reached review. A run that failed or was interrupted after it
+    // (a rebase conflict, say) never addressed them, so they go to the next run too.
+    const lastReviewed = this.board.listRuns(card.id).find(run => run.status === "review");
+    const reviewerChanges = lastReviewed && !feedback.length ? this.board.getReviewerChanges(lastReviewed.id) : [];
     const ciFeedback = this.board.getCiFeedback(card.id);
     const mainTip = conflict ? git(root, "rev-parse", "main") : null;
     if (conflict && !existsSync(worktree)) throw new Error("Card worktree is missing; inspect and restore it before repairing the conflict");
