@@ -417,3 +417,19 @@ test("reviewer progress reports elapsed time, turns, tool counts and narration w
   assert.match(progress.text(95_000), /Now running the tests\.$/);
   assert.doesNotMatch(text, /SECRET/);
 });
+
+test("on a pull-request board an agent approval is advice: the card stays in Review with the verdict recorded", async () => {
+  const item = fixture();
+  try {
+    item.board.setIntegration(item.repoBoard.id, "github-pr");
+    item.board.setAutoReview(item.repoBoard.id, true, "test -f README.md");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await item.auto.tick();
+    const job = item.board.getAutoReviewJob(current.run.id);
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    assert.equal(job?.state, "needs_human");
+    assert.equal(job?.details, "Agent approved: Diff is small and correct");
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n", "local main is untouched");
+  } finally { item.close(); }
+});
