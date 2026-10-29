@@ -1,6 +1,11 @@
 import type { CSSProperties } from "react";
 import type { Board } from "./model.js";
-import { repoColors, repoIcons } from "./repo-appearance.js";
+import {
+  repoColors,
+  repoColorVar,
+  repoIcons,
+  repoTint,
+} from "./repo-appearance.js";
 
 export function RepoBadge({
   board,
@@ -13,14 +18,14 @@ export function RepoBadge({
     ? board.icon
     : repoIcons[0];
   const name = board.color in repoColors ? board.color : "violet";
-  const color = `var(--repo-${name}, ${repoColors[name]})`;
+  const color = repoColorVar(name);
   return (
     <span
       className="repo-badge grid size-8 shrink-0 place-items-center rounded-lg"
       style={
         {
           "--repo-color": color,
-          backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`,
+          backgroundColor: repoTint(color),
         } as CSSProperties
       }
     >
