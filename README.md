@@ -103,6 +103,7 @@ stateDiagram-v2
 - **Retries reuse the card's worktree and Pi session**, so Pi continues where it left off.
 - **Interrupted** cards can't be retried until you check the worktree and release the card. Bakery first confirms that the recorded PID is no longer running. A PID reused by an unrelated process also blocks release.
 - **Reopen** returns a Done card to Review when its work was left unmerged in the worktree. If the card was already merged, it returns to Ready.
+- **History** (Details tab, collapsed) lists every status change with its reason, plus agent-review verdicts and notes such as a failed restart after the reviewer sent a card back. Changes made before this existed show attempts and reviews only.
 - **Restore to Done** brings an archived card back. **Archive** only changes the lane. Runs, worktrees, branches, and history stay.
 - Only Done cards can be archived. To archive several at once, use **Select** in the Done lane.
 - **Drag a card** to move it to a lane its buttons could also reach: Triage ↔ Ready, an unrun card to Done, Ready or Failed to Running (this starts Pi and asks first if run confirmations are on), Done ↔ Archive. While you drag, valid lanes are outlined and the others fade. Review, Interrupted, and Reopen still go through the card's buttons, since they need a diff review or a worktree check.

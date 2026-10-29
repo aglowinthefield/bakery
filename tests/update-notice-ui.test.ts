@@ -31,6 +31,7 @@ async function openApp(status: Record<string, unknown>, onUpdate?: () => unknown
     if (/\/(runs|comments|auto-review)$/.test(path)) return route.fulfill({ json: [] });
     if (path.endsWith("/approval")) return route.fulfill({ json: { pending: false } });
     if (path.endsWith("/push-progress")) return route.fulfill({ json: null });
+    if (path.endsWith("/history")) return route.fulfill({ json: [] });
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
     if (path === "/api/status") statusServed();

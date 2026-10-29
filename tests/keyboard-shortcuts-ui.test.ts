@@ -77,6 +77,7 @@ test("keyboard shortcuts: n, j/k, ?, cmd+enter", async () => {
       if (path.endsWith("/approval"))
         return route.fulfill({ json: { pending: false } });
       if (path.endsWith("/push-progress")) return route.fulfill({ json: null });
+      if (path.endsWith("/history")) return route.fulfill({ json: [] });
       if (path === "/api/status") {
         await route.fulfill({ json: { draining: false, activeRuns: 0 } });
         return;
