@@ -1854,20 +1854,23 @@ function RunReport({
                       {isInScope(item) ? "In scope" : "Add to scope"}
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={isAdded(index)}
-                    onClick={() =>
-                      void onAddFollowUp(index, item.title, item.body).then(
-                        (ok) => {
-                          if (ok) setAdded((previous) => [...previous, index]);
-                        },
-                      )
-                    }
-                  >
-                    {isAdded(index) ? "In Triage" : "Add to Triage"}
-                  </Button>
+                  {!isInScope(item) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isAdded(index)}
+                      onClick={() =>
+                        void onAddFollowUp(index, item.title, item.body).then(
+                          (ok) => {
+                            if (ok)
+                              setAdded((previous) => [...previous, index]);
+                          },
+                        )
+                      }
+                    >
+                      {isAdded(index) ? "In Triage" : "Add to Triage"}
+                    </Button>
+                  )}
                 </span>
               </li>
             ))}
