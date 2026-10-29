@@ -272,6 +272,8 @@ export class Worker {
     this.terminate(id, child, "manual stop");
   }
   get activeCount() { return this.active.size; }
+  /** Ids of the runs in progress. */
+  get activeRunIds(): string[] { return [...this.active.keys()]; }
   /** Refuse new runs and resolve once every active Pi child has exited on its own. */
   drain(): Promise<void> {
     this.draining = true;
