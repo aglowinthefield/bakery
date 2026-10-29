@@ -94,6 +94,7 @@ export function reviewerVerdict(stream: string): ReviewerVerdict {
 
 export class AutoReview {
   private busy = false;
+  private currentCardId: string | null = null;
   private draining = false;
   private timer: ReturnType<typeof setInterval> | undefined;
   private reviewer: ChildProcess | undefined;
@@ -114,6 +115,8 @@ export class AutoReview {
     while (this.busy) await new Promise(resolve => setTimeout(resolve, 50));
   }
   get active(): boolean { return this.busy; }
+  /** The card being reviewed right now, if any. */
+  get activeCardId(): string | null { return this.busy ? this.currentCardId : null; }
   async tick(): Promise<void> {
     if (this.busy || this.draining) return;
     // This is the server's unconditional periodic tick, not an auto-review opt-in.
@@ -121,6 +124,7 @@ export class AutoReview {
     const candidate = this.board.listAutoReviewCandidates()[0];
     if (!candidate) return;
     this.busy = true;
+    this.currentCardId = candidate.card.id;
     try { await this.process(candidate.card, candidate.run, candidate.board); }
     finally { this.busy = false; }
   }

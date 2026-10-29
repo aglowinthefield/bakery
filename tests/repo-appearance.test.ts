@@ -12,7 +12,7 @@ test("repository icon and color picker updates navigation and heading after save
     const page = await browser.newPage();
     // These tests cover the board, not the Today landing page.
     await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
-    let board = { id: "board", repo: "/tmp/example", icon: "layout-grid", color: "violet", autoCollapseEmptySwimlanes: false };
+    let board = { id: "board", repo: "/tmp/example", icon: "sprinkle_donut", color: "violet", autoCollapseEmptySwimlanes: false };
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/boards/board" && route.request().method() === "PATCH") {
@@ -30,38 +30,38 @@ test("repository icon and color picker updates navigation and heading after save
       else if (path === "/api/status") await route.fulfill({ json: { draining: false, activeRuns: 0 } });
       else throw new Error(`Unexpected API request: ${path}`);
     });
-    const badges = page.locator("aside button[title='/tmp/example'] svg, header h1 .repo-badge svg");
+    const badges = page.locator("aside button[title='/tmp/example'] img, header h1 .repo-badge img");
     await page.goto(server.resolvedUrls!.local[0]);
     await badges.first().waitFor();
     assert.equal(await badges.count(), 2);
-    const initial = await badges.first().evaluate(el => el.innerHTML);
+    const initial = await badges.first().evaluate(el => el.getAttribute("src"));
     await page.getByRole("button", { name: "Edit /tmp/example" }).click();
-    await page.getByRole("button", { name: "Icon: rocket" }).click();
+    await page.getByRole("button", { name: "Icon: croissant" }).click();
     await page.getByRole("button", { name: "Color: coral" }).click();
     assert.equal(await page.getByRole("button", { name: "Save appearance" }).isEnabled(), true);
     await page.getByRole("button", { name: "Save appearance" }).click();
     await page.getByRole("button", { name: "Save appearance" }).waitFor({ state: "visible" });
-    await page.waitForFunction(() => document.querySelector("header h1 .repo-badge svg")?.parentElement && getComputedStyle(document.querySelector("header h1 .repo-badge svg")!.parentElement!).color === "rgb(251, 113, 133)");
-    assert.deepEqual([board.icon, board.color], ["rocket", "coral"]);
-    assert.notEqual(await badges.first().evaluate(el => el.innerHTML), initial);
-    assert.equal(await badges.first().evaluate(el => getComputedStyle(el.parentElement!).color), "rgb(251, 113, 133)");
+    await page.waitForFunction(() => document.querySelector("header h1 .repo-badge img")?.parentElement && getComputedStyle(document.querySelector("header h1 .repo-badge img")!.parentElement!).getPropertyValue("--repo-color").trim() === "#fb7185");
+    assert.deepEqual([board.icon, board.color], ["croissant", "coral"]);
+    assert.notEqual(await badges.first().evaluate(el => el.getAttribute("src")), initial);
+    assert.equal(await badges.first().evaluate(el => getComputedStyle(el.parentElement!).getPropertyValue("--repo-color").trim()), "#fb7185");
     await page.reload();
     await badges.first().waitFor();
     assert.equal(await badges.count(), 2);
-    assert.equal(await badges.last().evaluate(el => getComputedStyle(el.parentElement!).color), "rgb(251, 113, 133)");
-    assert.notEqual(await badges.last().evaluate(el => el.innerHTML), initial);
+    assert.equal(await badges.last().evaluate(el => getComputedStyle(el.parentElement!).getPropertyValue("--repo-color").trim()), "#fb7185");
+    assert.notEqual(await badges.last().evaluate(el => el.getAttribute("src")), initial);
     await page.getByRole("button", { name: "Edit /tmp/example" }).click();
-    await page.getByRole("button", { name: "Icon: ghost" }).click();
+    await page.getByRole("button", { name: "Icon: cupcake" }).click();
     await page.getByRole("button", { name: "Color: amber" }).click();
     await page.getByRole("combobox", { name: "Repository root" }).fill("/tmp/renamed");
     await page.getByRole("button", { name: "Save repository" }).click();
     await page.waitForFunction(() => document.querySelector("header h1")?.textContent?.includes("renamed"));
-    assert.deepEqual([board.repo, board.icon, board.color], ["/tmp/renamed", "ghost", "amber"]);
+    assert.deepEqual([board.repo, board.icon, board.color], ["/tmp/renamed", "cupcake", "amber"]);
     await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
-    assert.notEqual(await badges.last().evaluate(el => getComputedStyle(el.parentElement!).color), "rgb(251, 191, 36)");
+    assert.notEqual(await badges.last().evaluate(el => getComputedStyle(el.parentElement!).getPropertyValue("--repo-color").trim()), "#fbbf24");
     await page.reload();
     assert.equal(await page.getByRole("button", { name: "Edit /tmp/renamed" }).count(), 1);
-    assert.notEqual(await page.locator("header h1 .repo-badge svg").evaluate(el => el.innerHTML), initial);
+    assert.notEqual(await page.locator("header h1 .repo-badge img").evaluate(el => el.getAttribute("src")), initial);
     await page.close();
   } finally { await browser?.close(); await server.close(); }
 });

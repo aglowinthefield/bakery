@@ -25,7 +25,7 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority low|normal|high|urgent]
        bakery-cli conflicts [--board ID|PATH] [--json]
        bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--budget USD|off] [--board ID|PATH] [--yes]
 
-Set BAKERY_URL (or BAKERY_PORT) to use a different local server. --json prints full API data.
+Set BAKERY_URL (or BAKERY_PORT) to use a different server (non-loopback needs BAKERY_ALLOW_REMOTE=1). --json prints full API data.
 Without --board, commands use the board whose repository contains the current directory, or the only board.
 add is quick capture: the words after it become the title of a new Triage card.
 runs lists each attempt's tokens and cost ("—" when an older attempt has no record) and the card total,
@@ -74,8 +74,8 @@ function options(argv) {
 
 function serverUrl() {
   const url = new URL(process.env.BAKERY_URL ?? `http://127.0.0.1:${process.env.BAKERY_PORT ?? "4317"}`);
-  if (url.protocol !== "http:" || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
-    throw new Error("BAKERY_URL must be a loopback HTTP origin (for example http://127.0.0.1:4317)");
+  if (url.protocol !== "http:" || (process.env.BAKERY_ALLOW_REMOTE !== "1" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) || url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
+    throw new Error("BAKERY_URL must be a loopback HTTP origin (for example http://127.0.0.1:4317); set BAKERY_ALLOW_REMOTE=1 to allow another host");
   }
   return url;
 }

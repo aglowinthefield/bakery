@@ -17,7 +17,13 @@ export type Block =
   | { type: "code"; lang: string; text: string }
   | { type: "quote"; children: Block[] }
   | { type: "list"; ordered: boolean; start: number; items: ListItem[] }
-  | { type: "rule" };
+  | { type: "rule" }
+  | {
+      type: "table";
+      align: ("left" | "center" | "right" | null)[];
+      header: Inline[][];
+      rows: Inline[][][];
+    };
 
 const MAX_DEPTH = 8;
 
@@ -45,6 +51,50 @@ function listMarker(line: string) {
     width: indent.length + marker.length + gapWidth,
     content,
   };
+}
+
+const tableDelimiter = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+
+// Splits a table row on unescaped pipes outside code spans.
+function splitRow(line: string): string[] {
+  let text = line.trim();
+  if (text.startsWith("|")) text = text.slice(1);
+  const cells: string[] = [];
+  let cell = "";
+  let index = 0;
+  let closed = false;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === "\\" && text[index + 1] === "|") {
+      cell += "|";
+      index += 2;
+    } else if (character === "`") {
+      const run = /^`+/.exec(text.slice(index))![0];
+      const end = text.indexOf(run, index + run.length);
+      const stop = end >= 0 ? end + run.length : index + run.length;
+      cell += text.slice(index, stop);
+      index = stop;
+    } else if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+      index++;
+      closed = index >= text.length;
+    } else {
+      cell += character;
+      index++;
+    }
+  }
+  if (!closed) cells.push(cell.trim());
+  return cells;
+}
+
+function startsTable(lines: string[], index: number) {
+  const header = lines[index];
+  const delimiter = lines[index + 1];
+  if (delimiter === undefined || !header.includes("|")) return false;
+  if (!tableDelimiter.test(delimiter) || !delimiter.includes("-")) return false;
+  if (!delimiter.includes("|") && !header.trim().startsWith("|")) return false;
+  return splitRow(header).length === splitRow(delimiter).length;
 }
 
 function startsBlock(line: string, inParagraph: boolean) {
@@ -135,6 +185,33 @@ function parseBlocks(lines: string[], depth: number): Block[] {
       continue;
     }
 
+    if (startsTable(lines, index)) {
+      const align = splitRow(lines[index + 1]).map((cell) =>
+        cell.startsWith(":")
+          ? cell.endsWith(":")
+            ? ("center" as const)
+            : ("left" as const)
+          : cell.endsWith(":")
+            ? ("right" as const)
+            : null,
+      );
+      const fit = (cells: string[]) =>
+        align.map((_, column) => parseInline(cells[column] ?? "", depth));
+      const header = fit(splitRow(line));
+      index += 2;
+      const rows: Inline[][][] = [];
+      while (
+        index < lines.length &&
+        !isBlank(lines[index]) &&
+        !startsBlock(lines[index], true)
+      ) {
+        rows.push(fit(splitRow(lines[index])));
+        index++;
+      }
+      blocks.push({ type: "table", align, header, rows });
+      continue;
+    }
+
     const first = listMarker(line);
     if (first) {
       const items: ListItem[] = [];
@@ -212,7 +289,7 @@ function parseBlocks(lines: string[], depth: number): Block[] {
         index++;
         break;
       }
-      if (startsBlock(lines[index], true)) break;
+      if (startsBlock(lines[index], true) || startsTable(lines, index)) break;
       paragraph.push(lines[index].trim());
       index++;
     }
@@ -469,6 +546,10 @@ function blockText(blocks: Block[]): string[] {
         return blockText(block.children);
       case "list":
         return block.items.flatMap((item) => blockText(item.children));
+      case "table":
+        return [block.header, ...block.rows].map((row) =>
+          row.map(inlineText).join(" "),
+        );
       case "rule":
         return [];
     }

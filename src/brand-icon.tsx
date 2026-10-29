@@ -1,23 +1,7 @@
 import { useEffect, useState } from "react";
+import { repoIcons } from "./repo-appearance.js";
 
-export const brandIcons = [
-  "sprinkle_donut",
-  "baguette",
-  "bread_loaf",
-  "cake_slice",
-  "cherry_pie",
-  "choc_cookie",
-  "cinnamon_roll",
-  "croissant",
-  "cupcake",
-  "fried_egg",
-  "green_teapot",
-  "hot_coffee",
-  "iced_latte",
-  "jam_jar",
-  "milk_bottle",
-  "wheat_bundle",
-];
+const brandIcons: readonly string[] = repoIcons;
 
 const storageKey = "bakery-icon";
 

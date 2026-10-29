@@ -1,3 +1,4 @@
+import { repoIcons } from "../src/repo-appearance.js";
 import { execFile, execFileSync } from "node:child_process";
 import { command } from "./platform.js";
 import { existsSync } from "node:fs";
@@ -200,13 +201,16 @@ export class GitHub {
   }
 }
 
+// Bakery's repo is public, so GitHub can render the icons from main. Each comment gets a random one.
+const bakeryIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/bakery/main/public/icons/${repoIcons[Math.floor(Math.random() * repoIcons.length)]}.png`;
+
 /**
  * Bakery comments on its PRs at each turning point (sent back for CI, fix pushed, gave up, update pushed) so
  * reviewers can see what the automation did. A comment that fails to post never blocks the work; it is logged.
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${body}\n\n<sub>Posted by Bakery.</sub>`); }
+  try { await github.comment(repo, number, `${body}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 

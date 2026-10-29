@@ -3,7 +3,7 @@ import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, parsePriority } from "./board.js";
 import { buildStats } from "./stats.js";
@@ -46,6 +46,9 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
   card => worker.start(card),
   card => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true));
 const port = Number(process.env.BAKERY_PORT ?? 4317);
+// Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
+const bindHost = process.env.BAKERY_HOST || "127.0.0.1";
+const extraHosts = (process.env.BAKERY_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
 let modelCache: { models: string[]; at: number } | undefined, modelRequest: Promise<{ models: string[]; error?: string }> | undefined;
@@ -99,16 +102,29 @@ function repoRoot(value: unknown) {
   } catch { throw new Error(`Repository path is not an existing Git repository root: ${input}`); }
   return root;
 }
+function extraOrigin(origin: string): boolean {
+  try { const u = new URL(origin); return (u.protocol === "http:" || u.protocol === "https:") && extraHosts.includes(u.hostname.toLowerCase()); } catch { return false; }
+}
 const server = createServer(async (req, res) => {
   try {
     const host = req.headers.host?.split(":")[0];
-    if (host !== "127.0.0.1" && host !== "localhost" && host !== "bakery.localhost") { send(res, 403, { error: "Local access only" }); return; }
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "bakery.localhost" && !extraHosts.includes(host?.toLowerCase() ?? "")) { send(res, 403, { error: "Local access only" }); return; }
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (req.method !== "GET") {
       const origin = req.headers.origin;
-      if (origin && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
+      if (origin && !extraOrigin(origin) && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
-    if (path === "/api/status" && req.method === "GET") { send(res, 200, { draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0 }); return; }
+    if (path === "/api/status" && req.method === "GET") {
+      // The cards behind the runs still going, so the update notice can say what it is waiting for.
+      const cardIds = new Set<string>();
+      if (draining.on) {
+        for (const runId of worker.activeRunIds) { const run = board.getRun(runId); if (run) cardIds.add(run.cardId); }
+        if (autoReview.activeCardId) cardIds.add(autoReview.activeCardId);
+      }
+      const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0, cards });
+      return;
+    }
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
@@ -301,7 +317,7 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|close|discussion))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -368,6 +384,7 @@ const server = createServer(async (req, res) => {
         if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
         if (req.method === "POST" && action === "start") {
+          if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
           // During a restart drain, remember the start and replay it once the new server is up.
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
           send(res, 202, worker.start(item)); return;
@@ -392,6 +409,7 @@ const server = createServer(async (req, res) => {
           }
           send(res, 200, integration.approve(item, fingerprint)); return;
         }
+        if (req.method === "POST" && action === "create-plan") { send(res, 201, board.createPlanCards(id)); return; }
         if (req.method === "POST" && action === "accept-findings") {
           const { fingerprint } = await body(req);
           if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review before accepting findings");
@@ -448,7 +466,7 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
+server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
   // Starts queued while the previous server drained for a restart.
   for (const cardId of board.takeQueuedStarts()) {
     const card = board.getCard(cardId);
@@ -465,12 +483,19 @@ const draining = { on: false };
 const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
-process.on("message", (message: unknown) => {
-  if ((message as { type?: unknown } | null)?.type !== "drain") return;
+const startDrain = (onDrained: () => void) => {
+  if (draining.on) return;
   draining.on = true;
   autoPickup.shutdown();
   // Agent reviews count too: a restart would kill the reviewer mid-review.
   process.send?.({ type: "draining", activeRuns: worker.activeCount + (autoReview.active ? 1 : 0) });
-  void Promise.all([worker.drain(), autoReview.drain()]).then(() => process.send?.({ type: "drained" }));
+  void Promise.all([worker.drain(), autoReview.drain()]).then(onDrained);
+};
+process.on("message", (message: unknown) => {
+  if ((message as { type?: unknown } | null)?.type !== "drain") return;
+  startDrain(() => process.send?.({ type: "drained" }));
 });
+// Without the supervisor (npm start under systemd), SIGUSR2 drains and then exits so the service manager restarts
+// the server with whatever is on disk. scripts/update.sh sends it after pulling.
+process.on("SIGUSR2", () => { console.log("Update requested: draining active runs, then exiting."); startDrain(() => shutdown("SIGTERM")); });
 process.once("SIGINT", () => shutdown("SIGINT")); process.once("SIGTERM", () => shutdown("SIGTERM"));

@@ -27,7 +27,7 @@ test("a reviewed run with no diff shows its report as markdown findings and offe
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/accept-findings")) { accepted = route.request().postDataJSON(); return route.fulfill({ json: card("research", "Research card", "done") }); }
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", icon: "layout-grid", color: "violet", remoteUrl: "", integration: "local", autoCollapseEmptySwimlanes: false, verificationCommand: "" }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", icon: "sprinkle_donut", color: "violet", remoteUrl: "", integration: "local", autoCollapseEmptySwimlanes: false, verificationCommand: "" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card("research", "Research card", "review")],
       "/api/boards/board/conflicts": [],

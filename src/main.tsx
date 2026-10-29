@@ -65,7 +65,7 @@ import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
-import { appearanceIcons, RepoBadge } from "./repo-badge.js";
+import { RepoBadge } from "./repo-badge.js";
 import { needsYouStatuses, reviewOrder, Today } from "./today.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
@@ -104,6 +104,17 @@ import { UpdateNotice } from "./update-notice.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
+// The machine the server runs on: repositories and merges live on its disk.
+function ServerHost() {
+  const [host, setHost] = useState("");
+  useEffect(() => {
+    void api<{ hostname?: string }>("/status")
+      .then((status) => setHost(status.hostname ?? ""))
+      .catch(() => {});
+  }, []);
+  return <span data-testid="server-host">{host || "Bakery"}</span>;
+}
+
 function filterCards(cards: Card[], query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return cards;
@@ -486,7 +497,7 @@ export function App() {
   const [addingRepo, setAddingRepo] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [repoPath, setRepoPath] = useState("");
-  const [iconDraft, setIconDraft] = useState<RepoIcon>("layout-grid");
+  const [iconDraft, setIconDraft] = useState<RepoIcon>("sprinkle_donut");
   const [colorDraft, setColorDraft] = useState<RepoColor>("violet");
   const [repoCheck, setRepoCheck] = useState<{
     path: string;
@@ -975,6 +986,8 @@ export function App() {
       clearTimeout(timer);
     };
   }, [view, boardId, refreshKey, settings?.notifyOnReview]);
+  // An error belongs to the board it happened on, so switching board or view dismisses it.
+  useEffect(() => setError(""), [view, boardId]);
   const currentBoard = boards.find((item) => item.id === boardId);
   function editBoard(item: Board) {
     setError("");
@@ -1223,7 +1236,13 @@ export function App() {
   if (!settings && !error) return null;
   return (
     <div className="min-h-screen lg:flex">
-      <UpdateNotice />
+      <UpdateNotice
+        onOpenCard={(card) => {
+          const target = boards.find((item) => item.repo === card.repo);
+          if (target) openBoard(target.id);
+          setSelected(card.id);
+        }}
+      />
       {sidebarHidden && (
         <button
           aria-label="Show sidebar"
@@ -1404,8 +1423,8 @@ export function App() {
         </div>
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
           <div className="flex items-center gap-2 text-[length:var(--text-sidebar-meta)] text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-status-review" /> Local
-            only <span className="ml-auto font-mono">v0.1</span>
+            <span className="size-1.5 rounded-full bg-status-review" />{" "}
+            <ServerHost /> <span className="ml-auto font-mono">v0.1</span>
           </div>
         </div>
       </aside>
@@ -1476,7 +1495,7 @@ export function App() {
               Workspace / Board
             </div>
             <h1 className="flex items-center gap-3 text-[27px] font-semibold tracking-[-.05em]">
-              {currentBoard && <RepoBadge board={currentBoard} size={19} />}
+              {currentBoard && <RepoBadge board={currentBoard} />}
               {currentBoard
                 ? repoName(currentBoard.repo)
                 : "Choose a repository"}
@@ -1702,13 +1721,16 @@ export function App() {
               onClick={() => {
                 const target = currentBoard;
                 void action(async () => {
-                  const updated = await api<Board>(`/boards/${target.id}/settings`, {
-                    method: "PATCH",
-                    body: JSON.stringify({
-                      autoPickupEnabled: true,
-                      pickupConcurrency: target.pickupConcurrency,
-                    }),
-                  });
+                  const updated = await api<Board>(
+                    `/boards/${target.id}/settings`,
+                    {
+                      method: "PATCH",
+                      body: JSON.stringify({
+                        autoPickupEnabled: true,
+                        pickupConcurrency: target.pickupConcurrency,
+                      }),
+                    },
+                  );
                   updateBoard(updated);
                 });
               }}
@@ -1730,7 +1752,7 @@ export function App() {
         {error && (
           <div
             role="alert"
-            className="mx-6 mt-5 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive lg:mx-10"
+            className="fixed bottom-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-md border border-destructive/30 bg-background px-4 py-3 text-sm text-destructive shadow-lg"
           >
             <XCircle size={16} className="mt-0.5 shrink-0" />
             <div className="min-w-0 break-words">
@@ -2024,7 +2046,9 @@ export function App() {
                                 {markdownToPlainText(item.body) ||
                                   "No description yet."}
                               </p>
-                              {(item.runAgent || item.reviewAgent || item.planOnly) && (
+                              {(item.runAgent ||
+                                item.reviewAgent ||
+                                item.planOnly) && (
                                 <div className="mt-3 flex flex-wrap gap-1">
                                   {item.planOnly && (
                                     <span
@@ -2438,18 +2462,23 @@ export function App() {
                 aria-label="Repository icon"
               >
                 {repoIcons.map((name) => {
-                  const Icon = appearanceIcons[name];
                   return (
                     <button
                       key={name}
                       type="button"
-                      title={name.replaceAll("-", " ")}
-                      aria-label={`Icon: ${name.replaceAll("-", " ")}`}
+                      title={name.replaceAll("_", " ")}
+                      aria-label={`Icon: ${name.replaceAll("_", " ")}`}
                       aria-pressed={iconDraft === name}
                       onClick={() => setIconDraft(name)}
                       className={`grid size-9 place-items-center rounded-md border cursor-pointer ${iconDraft === name ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
                     >
-                      <Icon size={18} />
+                      <img
+                        src={`/icons/${name}.png`}
+                        width={20}
+                        height={20}
+                        alt=""
+                        className="object-contain"
+                      />
                     </button>
                   );
                 })}

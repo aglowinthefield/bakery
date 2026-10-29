@@ -1,0 +1,7 @@
+[Unit]
+Description=Update Bakery to origin/main
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/var/bakery
+ExecStart=/usr/bin/bash -lc 'eval "$(fnm env --shell bash)"; fnm use default >/dev/null; scripts/update.sh'

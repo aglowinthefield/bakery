@@ -124,6 +124,8 @@ export type Card = {
   repo: string;
   source: "manual";
   idempotencyKey?: string | null;
+  /** Ids of the cards made from this card's plan; null until the plan is used. */
+  createdCardIds?: string[] | null;
   status: Status;
   priority: Priority;
   createdAt: string;
@@ -201,6 +203,9 @@ export function cardActivity(
  */
 export function dropTargets(card: Card): Status[] {
   const unrun = !card.attempts;
+  // The server refuses to start a never-run card whose dependencies are unfinished.
+  if (card.status === "ready" && unrun && card.blocked)
+    return ["triage", "done"];
   switch (card.status) {
     case "triage":
       return unrun ? ["ready", "done"] : ["ready"];

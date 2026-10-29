@@ -259,7 +259,7 @@ test("existing boards gain default appearance without losing settings", () => {
     legacy.prepare("INSERT INTO boards(id, repo, autoCollapseEmptySwimlanes) VALUES (?, ?, 1)").run("old", dir);
     legacy.close();
     const board = new Board(path);
-    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes, board.getBoard("old")?.remoteUrl], ["layout-grid", "violet", true, ""]);
+    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes, board.getBoard("old")?.remoteUrl], ["sprinkle_donut", "violet", true, ""]);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -271,18 +271,18 @@ test("repository appearance is independent, survives restart, and stays with an 
     const board = new Board(path);
     const first = board.addRepo(join(dir, "first"));
     const second = board.addRepo(join(dir, "second"));
-    assert.equal(first.icon, "layout-grid");
+    assert.equal(first.icon, "sprinkle_donut");
     assert.equal(first.color, "violet");
-    assert.deepEqual([second.icon, second.color], ["layout-grid", "violet"]);
-    assert.deepEqual([board.setAppearance(first.id, "rocket", "coral").icon, board.getBoard(first.id)?.color], ["rocket", "coral"]);
-    assert.deepEqual([board.getBoard(second.id)?.icon, board.getBoard(second.id)?.color], ["layout-grid", "violet"]);
+    assert.deepEqual([second.icon, second.color], ["sprinkle_donut", "violet"]);
+    assert.deepEqual([board.setAppearance(first.id, "croissant", "coral").icon, board.getBoard(first.id)?.color], ["croissant", "coral"]);
+    assert.deepEqual([board.getBoard(second.id)?.icon, board.getBoard(second.id)?.color], ["sprinkle_donut", "violet"]);
     assert.equal(board.setRemoteUrl(first.id, "https://github.com/o/first").remoteUrl, "https://github.com/o/first");
     assert.throws(() => board.setRemoteUrl(first.id, "file:///etc/passwd"), /http/);
     assert.equal(board.getBoard(second.id)?.remoteUrl, "");
     board.archiveBoard(first.id);
     board.close();
     const reopened = new Board(path);
-    assert.deepEqual([reopened.addRepo(join(dir, "first")).icon, reopened.getBoard(first.id)?.color], ["rocket", "coral"]);
+    assert.deepEqual([reopened.addRepo(join(dir, "first")).icon, reopened.getBoard(first.id)?.color], ["croissant", "coral"]);
     assert.equal(reopened.getBoard(first.id)?.remoteUrl, "https://github.com/o/first");
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -547,6 +547,28 @@ test("a card whose latest report ends with a bakery-plan block is plan-only", ()
     const next = board.claim(card.id);
     board.recordReport(next.id, "Implemented it.");
     assert.equal(board.getCard(card.id)!.planOnly, false);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("creating cards from a plan records their ids and refuses a second set", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-plan-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const card = board.createCard({ title: "Plan it", body: "", repo: dir });
+    assert.throws(() => board.createPlanCards(card.id), /no plan report/);
+    board.setStatus(card.id, "ready");
+    const run = board.claim(card.id);
+    const plan = [{ id: "a", title: "First", body: "Do a" }, { id: "b", title: "Second", body: "Do b", dependsOn: ["a"] }];
+    board.recordReport(run.id, `Plan\n\n\`\`\`bakery-plan\n${JSON.stringify(plan)}\n\`\`\``);
+    board.finish(run.id, "review");
+    assert.equal(board.getCard(card.id)!.createdCardIds, null);
+    const done = board.createPlanCards(card.id);
+    assert.equal(done.createdCardIds?.length, 2);
+    const [first, second] = done.createdCardIds!.map(id => board.getCard(id)!);
+    assert.equal(first.title, "First");
+    assert.deepEqual(second.dependsOn, [first.id]);
+    assert.throws(() => board.createPlanCards(card.id), /already created/);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
