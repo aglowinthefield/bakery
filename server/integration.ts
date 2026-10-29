@@ -8,7 +8,7 @@ import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from 
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
-import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
+import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin, syncMainWithOrigin } from "./origin.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false): string {
   try {
@@ -473,13 +473,18 @@ export class Integration {
   /**
    * When the repository has an `origin`, fetch it and refuse to merge into a main that is behind origin/main, so a
    * card never lands on a stale main. Ahead is fine (local work not yet pushed). A failed fetch only warns.
+   * Behind main is brought level when that is safe (clean checkout, no rebase conflict). The review diff and its
+   * fingerprint were taken against the old main, so the operator still refreshes and approves again.
    */
   private requireMainCurrent(repo: string) {
     if (!hasOrigin(repo)) return;
     const warning = fetchOriginBestEffort(repo, this.fetchTimeoutMs);
     if (warning) { this.warnings.push(warning); this.warnings.splice(0, this.warnings.length - 20); console.warn(`${repo}: ${warning}`); }
     const state = compareWithOriginMain(repo);
-    const blocked = state && behindOriginMessage(repo, state);
+    if (!state) return;
+    const synced = syncMainWithOrigin(repo, state);
+    if (synced) throw new Error(`${synced}. Refresh the diff and approve again`);
+    const blocked = behindOriginMessage(repo, state);
     if (blocked) throw new Error(blocked);
   }
 
