@@ -26,8 +26,13 @@ function providerFailure(error: unknown): string {
   return `Provider request failed${status ? ` (HTTP ${status})` : ""}`;
 }
 
+/** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
+export type LiveActivity = { tool: string; turn: number; since: string };
+
 export class Worker {
   private active = new Map<string, ChildProcess>();
+  /** In memory only, keyed by run id; cleared when the run ends. */
+  private live = new Map<string, LiveActivity>();
   private terminationReasons = new Map<string, string>();
   private draining = false;
   private idleWaiters: (() => void)[] = [];
@@ -224,6 +229,7 @@ export class Worker {
           if (event.type === "tool_execution_start" && typeof event.toolCallId === "string") {
             const name = typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName) ? event.toolName : "tool";
             tools.set(event.toolCallId, { name, finished: false, failed: false });
+            this.live.set(run.id, { tool: name, turn: turn || 1, since: new Date().toISOString() });
           }
           if (event.type === "tool_execution_end" && typeof event.toolCallId === "string") {
             const tool = tools.get(event.toolCallId);
@@ -260,9 +266,9 @@ export class Worker {
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
     const timer = setTimeout(() => this.terminate(run.id, child, "30-minute run timeout"), 30 * 60 * 1000);
-    child.on("error", (error) => { this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
+    child.on("error", (error) => { this.live.delete(run.id); this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
-      clearTimeout(timer); this.active.delete(run.id);
+      clearTimeout(timer); this.active.delete(run.id); this.live.delete(run.id);
       if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
       const reason = this.terminationReasons.get(run.id);
       this.terminationReasons.delete(run.id);
@@ -283,6 +289,15 @@ export class Worker {
     this.terminate(id, child, "manual stop");
   }
   get activeCount() { return this.active.size; }
+  /** Each card's live activity, or null for a card whose run is not in progress or has not used a tool yet. */
+  withLive<T extends { id: string }>(cards: T[]): (T & { live: LiveActivity | null })[] {
+    const byCard = new Map<string, LiveActivity>();
+    for (const [runId, live] of this.live) {
+      const run = this.active.has(runId) ? this.board.getRun(runId) : undefined;
+      if (run) byCard.set(run.cardId, live);
+    }
+    return cards.map(card => ({ ...card, live: byCard.get(card.id) ?? null }));
+  }
   /** Ids of the runs in progress. */
   get activeRunIds(): string[] { return [...this.active.keys()]; }
   /** Refuse new runs and resolve once every active Pi child has exited on its own. */
