@@ -12,6 +12,8 @@ test("drop targets mirror the card's own move buttons", () => {
   assert.deepEqual(targets("triage"), ["ready", "done"]);
   assert.deepEqual(targets("ready"), ["triage", "running", "done"]);
   assert.deepEqual(targets("ready", 1), ["running"], "a card with runs can't go back to Triage or skip to Done");
+  assert.deepEqual(dropTargets({ ...card("x", "ready"), blocked: true } as unknown as Card), ["triage", "done"], "a never-run card waiting on dependencies can't start");
+  assert.deepEqual(dropTargets({ ...card("x", "ready", 1), blocked: true } as unknown as Card), ["running"], "a retry isn't gated");
   assert.deepEqual(targets("failed", 1), ["running"]);
   assert.deepEqual(targets("done", 1), ["archived"]);
   assert.deepEqual(targets("archived", 1), ["done"]);

@@ -870,6 +870,7 @@ export function CardDetails({
                 disabled={
                   busy ||
                   !settings ||
+                  (card.blocked && !card.attempts) ||
                   (card.status === "review" &&
                     (approvalPending ||
                       card.reviewWait === "github" ||
@@ -881,6 +882,11 @@ export function CardDetails({
                         (item) =>
                           item.runId === runs[0]?.id && item.state === "draft",
                       )))
+                }
+                title={
+                  card.blocked && !card.attempts
+                    ? "Waiting on unfinished cards. Start this card after they are Done."
+                    : undefined
                 }
                 onClick={() => {
                   if (

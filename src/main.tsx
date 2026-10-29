@@ -986,6 +986,8 @@ export function App() {
       clearTimeout(timer);
     };
   }, [view, boardId, refreshKey, settings?.notifyOnReview]);
+  // An error belongs to the board it happened on, so switching board or view dismisses it.
+  useEffect(() => setError(""), [view, boardId]);
   const currentBoard = boards.find((item) => item.id === boardId);
   function editBoard(item: Board) {
     setError("");
@@ -1750,7 +1752,7 @@ export function App() {
         {error && (
           <div
             role="alert"
-            className="mx-6 mt-5 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive lg:mx-10"
+            className="fixed bottom-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-md border border-destructive/30 bg-background px-4 py-3 text-sm text-destructive shadow-lg"
           >
             <XCircle size={16} className="mt-0.5 shrink-0" />
             <div className="min-w-0 break-words">
