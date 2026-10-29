@@ -1,4 +1,8 @@
 import * as THREE from "three";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import type { GraphEdge, VisualState } from "./graph.js";
 import type { Point } from "./layout.js";
 import type { Look } from "./look.js";
@@ -20,23 +24,71 @@ export type SceneNode = {
   priority: number;
 };
 
-/** Static drawing parameters per state. The look only chooses colors. */
-const stateStyle: Record<
-  VisualState,
-  { fill: number; glow: number; arc: number; dash: number }
-> = {
-  working: { fill: 0.4, glow: 0.8, arc: 0, dash: 0 },
-  quiet: { fill: 0.25, glow: 0.35, arc: 0, dash: 0 },
-  agent_review: { fill: 0.32, glow: 0.7, arc: 0, dash: 0 },
-  waiting: { fill: 0.08, glow: 0.3, arc: 1, dash: 0 },
-  needs_review: { fill: 0.25, glow: 0.7, arc: 0, dash: 0 },
-  failed: { fill: 0.4, glow: 0.6, arc: 0, dash: 0 },
-  interrupted: { fill: 0.15, glow: 0.2, arc: 0, dash: 1 },
-  done: { fill: 0.55, glow: 0.2, arc: 0, dash: 0 },
-  ready: { fill: 0.1, glow: 0.2, arc: 0, dash: 0 },
-  blocked: { fill: 0, glow: 0, arc: 0, dash: 1 },
-  triage: { fill: 0, glow: 0, arc: 0, dash: 0 },
+/** The glow setting: how strong bloom and halos are. */
+export type Glow = "off" | "soft" | "normal" | "full";
+export const glowLevels: Record<Glow, number> = {
+  off: 0,
+  soft: 0.35,
+  normal: 0.6,
+  full: 1,
 };
+
+const stateKeys = [
+  "fill",
+  "glow",
+  "pulse",
+  "breathe",
+  "orbit",
+  "spark",
+  "ring",
+  "arc",
+  "dash",
+  "flick",
+] as const;
+
+/**
+ * Drawing parameters per state; the look only chooses colors. `breathe` is how
+ * deep the core pulses at `pulse` rad/s, `spark` shows an orbiting spark at `orbit`
+ * rad/s (negative runs the other way), `ring` makes the ring breathe too, `arc` sweeps an arc, `dash`
+ * dashes the ring, `flick` flickers.
+ */
+// prettier-ignore
+const STATES: Record<VisualState, Record<(typeof stateKeys)[number], number>> = {
+  working:      { fill: 0.4, glow: 0.8, pulse: 3.2, breathe: 1, orbit: 2.2, spark: 1, ring: 0, arc: 0, dash: 0, flick: 0 },
+  quiet:        { fill: 0.25, glow: 0.35, pulse: 0.8, breathe: 0.6, orbit: 0.35, spark: 1, ring: 0, arc: 0, dash: 0, flick: 0 },
+  agent_review: { fill: 0.32, glow: 0.7, pulse: 2.4, breathe: 1, orbit: -1.6, spark: 1, ring: 0, arc: 0, dash: 0, flick: 0 },
+  waiting:      { fill: 0.08, glow: 0.3, pulse: 1, breathe: 0.4, orbit: 0, spark: 0, ring: 0, arc: 1, dash: 0, flick: 0 },
+  needs_review: { fill: 0.25, glow: 0.7, pulse: 1.8, breathe: 0.8, orbit: 0, spark: 0, ring: 0, arc: 0, dash: 0, flick: 0 },
+  failed:       { fill: 0.4, glow: 0.6, pulse: 1, breathe: 0.3, orbit: 0, spark: 0, ring: 0, arc: 0, dash: 0, flick: 1 },
+  interrupted:  { fill: 0.15, glow: 0.2, pulse: 1, breathe: 0, orbit: 0, spark: 0, ring: 0, arc: 0, dash: 1, flick: 0 },
+  done:         { fill: 0.55, glow: 0.2, pulse: 0, breathe: 0, orbit: 0, spark: 0, ring: 0, arc: 0, dash: 0, flick: 0 },
+  ready:        { fill: 0.1, glow: 0.2, pulse: 1.4, breathe: 1, orbit: 0, spark: 0, ring: 1, arc: 0, dash: 0, flick: 0 },
+  blocked:      { fill: 0, glow: 0, pulse: 1, breathe: 0, orbit: 0, spark: 0, ring: 0, arc: 0, dash: 1, flick: 0 },
+  triage:       { fill: 0, glow: 0, pulse: 1, breathe: 0, orbit: 0, spark: 0, ring: 0, arc: 0, dash: 0, flick: 0 },
+};
+
+/** The parameters that ease between states rather than switching. */
+const easedKeys = [
+  "fill",
+  "glow",
+  "pulse",
+  "breathe",
+  "orbit",
+  "spark",
+] as const;
+type Eased = Record<(typeof easedKeys)[number], number>;
+
+/** Dependents that pull particles down a satisfied edge. */
+const activeStates = new Set<VisualState>([
+  "working",
+  "agent_review",
+  "quiet",
+  "ready",
+]);
+
+const FLASH_SECONDS = 1.1;
+const BURST_SECONDS = 1.3;
+const BLOOM = { strength: 0.5, radius: 0.3, threshold: 0.35 };
 
 const RADIUS = 22;
 const SEGMENTS = 36;
@@ -49,9 +101,20 @@ const COMPACT_ZOOM = 0.55;
 const radiusOf = (priority: number) =>
   RADIUS * (1 + 0.1 * Math.max(0, priority));
 
-/** CSS colors are already display values; keep them as-is so the shaders do not shift them. */
-const setCss = (color: THREE.Color, css: string) =>
-  color.setStyle(css, THREE.LinearSRGBColorSpace);
+/** How far to ease toward a target in `dt` seconds at rate `k`. */
+const ease = (dt: number, k: number) => 1 - Math.exp(-dt * k);
+
+/**
+ * Where shader colors live. Light themes draw straight to the screen with CSS
+ * colors as display values, so blending matches the page. Dark themes add light
+ * in linear space, bloom it, and encode to sRGB at the end, so bright cores do not
+ * clip to white.
+ */
+const space = (light: boolean) =>
+  light ? THREE.LinearSRGBColorSpace : THREE.SRGBColorSpace;
+
+const setCss = (color: THREE.Color, css: string, light: boolean) =>
+  color.setStyle(css, space(light));
 
 /**
  * Dark themes add light onto the background. Light themes composite normally with
@@ -79,7 +142,21 @@ type NodeObject = {
   label: HTMLDivElement;
   title: HTMLDivElement;
   activity: HTMLDivElement;
+  /** Where the circle is drawn now; it slides toward `target`. */
   pos: Point | null;
+  /** Where the layout puts it. */
+  target: Point | null;
+  /** Grows from 0 to 1 when the node first appears. */
+  scale: number;
+  color: THREE.Color;
+  /** The CSS color last written to the activity line, to skip redundant writes. */
+  labelColor: string;
+  eased: Eased;
+  /** Scene clock time of the last status change, or -1. */
+  flashAt: number;
+  /** The orbiting spark's angle and the pulse's phase, advanced by their eased speeds each frame. */
+  phase: number;
+  beat: number;
 };
 
 type EdgeObject = {
@@ -88,6 +165,11 @@ type EdgeObject = {
   to: string;
   ribbon: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   arrow: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  color: THREE.Color;
+  /** Scene clock time the source finished, or -1. */
+  burstAt: number;
+  /** How far dashes and particles have moved along, in world units. */
+  shift: number;
 };
 
 function ribbonGeometry() {
@@ -136,10 +218,14 @@ export function webglAvailable(): boolean {
 
 /**
  * The graph drawn with an orthographic camera. World space has x to the right and
- * y downward, matching layout coordinates. It renders on demand, not every frame.
+ * y downward, matching layout coordinates. With motion it renders every frame
+ * while the tab is visible; with reduced motion it renders on demand and every
+ * change lands at once.
  */
 export class GraphScene {
   private renderer: THREE.WebGLRenderer;
+  private composer: EffectComposer;
+  private bloom: UnrealBloomPass;
   private scene = new THREE.Scene();
   private camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
   private grid: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
@@ -156,6 +242,12 @@ export class GraphScene {
   private observer: ResizeObserver;
   private cleanups: (() => void)[] = [];
   private tmp = new THREE.Color();
+  private stateColors = new Map<VisualState, THREE.Color>();
+  private motion = true;
+  private glow = glowLevels.normal;
+  /** Seconds of animation so far; it stops while the tab is hidden. */
+  private clock = 0;
+  private lastFrame = 0;
 
   constructor(
     private host: HTMLElement,
@@ -164,6 +256,16 @@ export class GraphScene {
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloom = new UnrealBloomPass(
+      new THREE.Vector2(1, 1),
+      BLOOM.strength,
+      BLOOM.radius,
+      BLOOM.threshold,
+    );
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
     this.renderer.domElement.className = "block h-full w-full";
     host.appendChild(this.renderer.domElement);
     this.camera.position.z = 5;
@@ -189,6 +291,16 @@ export class GraphScene {
     this.listen(host, "pointercancel", this.onPointerCancel);
     this.listen(host, "wheel", this.onWheel, { passive: false });
     this.listen(host, "dblclick", () => this.fit());
+    const onVisibility = () => {
+      if (!document.hidden) return this.requestRender();
+      cancelAnimationFrame(this.frame);
+      this.frame = 0;
+      this.lastFrame = 0;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    this.cleanups.push(() =>
+      document.removeEventListener("visibilitychange", onVisibility),
+    );
     this.resize();
   }
 
@@ -202,15 +314,43 @@ export class GraphScene {
     this.cleanups.push(() => target.removeEventListener(type, handler));
   }
 
+  /** False for `prefers-reduced-motion`: no orbit, particles, flicker or slides. */
+  setMotion(motion: boolean) {
+    this.motion = motion;
+    if (!motion) {
+      for (const node of this.nodes.values()) node.flashAt = -1;
+      for (const edge of this.edges.values()) edge.burstAt = -1;
+    }
+    this.requestRender();
+  }
+
+  /** Sets the glow strength: bloom in dark themes, and the halo around nodes. */
+  setGlow(glow: Glow) {
+    this.glow = glowLevels[glow];
+    this.requestRender();
+  }
+
   /** Applies theme colors and the light or dark blend mode. */
   setLook(look: Look) {
     this.look = look;
+    for (const [state, css] of Object.entries(look.colors))
+      this.stateColors.set(
+        state as VisualState,
+        setCss(new THREE.Color(), css, look.light),
+      );
     const uniforms = this.grid.material.uniforms;
-    setCss(uniforms.uBg.value, look.background);
-    setCss(uniforms.uGrid.value, look.grid);
+    setCss(uniforms.uBg.value, look.background, look.light);
+    setCss(uniforms.uGrid.value, look.grid, look.light);
     uniforms.uLight.value = look.light ? 1 : 0;
-    for (const node of this.nodes.values()) this.styleNode(node);
-    for (const edge of this.edges.values()) this.styleEdge(edge);
+    // A theme change switches color space, so colors jump rather than fade.
+    for (const node of this.nodes.values()) {
+      node.color.copy(this.stateColors.get(node.data.state) ?? node.color);
+      this.styleNode(node);
+    }
+    for (const edge of this.edges.values()) {
+      edge.color.copy(this.edgeColor(edge.from));
+      this.styleEdge(edge);
+    }
     this.labels.style.setProperty("--viz-bg", look.background);
     this.requestRender();
   }
@@ -223,11 +363,15 @@ export class GraphScene {
         this.disposeNode(node);
         this.nodes.delete(id);
       }
+    const finishedNow = new Set<string>();
     for (const data of nodes) {
       let node = this.nodes.get(data.id);
       if (!node) {
         node = this.createNode(data);
         this.nodes.set(data.id, node);
+      } else if (node.data.state !== data.state && this.motion) {
+        node.flashAt = this.clock;
+        if (data.state === "done") finishedNow.add(data.id);
       }
       node.data = data;
       node.title.textContent = data.title;
@@ -245,14 +389,32 @@ export class GraphScene {
       const key = `${edge.from}>${edge.to}`;
       if (!this.edges.has(key)) this.edges.set(key, this.createEdge(key, edge));
     }
-    for (const edge of this.edges.values()) this.styleEdge(edge);
+    for (const edge of this.edges.values()) {
+      if (finishedNow.has(edge.from)) edge.burstAt = this.clock;
+      this.styleEdge(edge);
+    }
     this.rebuildEdges();
     this.requestRender();
   }
 
-  /** Places nodes. Fits the view unless the user has already panned or zoomed. */
+  /**
+   * Places nodes. A moved node slides to its new place; a new one grows in at the
+   * dependency it hangs off, or in place. Fits the view unless the user has already
+   * panned or zoomed.
+   */
   setPositions(positions: Map<string, Point>) {
-    for (const [id, node] of this.nodes) node.pos = positions.get(id) ?? null;
+    for (const [id, node] of this.nodes) {
+      node.target = positions.get(id) ?? null;
+      if (!node.target) node.pos = null;
+      else if (!node.pos) {
+        const parent = this.edgeList
+          .filter((edge) => edge.to === id)
+          .map((edge) => this.nodes.get(edge.from)?.pos)
+          .find(Boolean);
+        node.pos = { ...(this.motion && parent ? parent : node.target) };
+      }
+      if (!this.motion) node.pos = node.target && { ...node.target };
+    }
     this.rebuildEdges();
     if (!this.userMoved) this.fit();
     else this.requestRender();
@@ -260,7 +422,7 @@ export class GraphScene {
 
   /** Frames every placed node. */
   fit() {
-    const placed = [...this.nodes.values()].filter((node) => node.pos);
+    const placed = [...this.nodes.values()].filter((node) => node.target);
     this.userMoved = false;
     if (!placed.length) return this.requestRender();
     const pad = 80;
@@ -268,7 +430,7 @@ export class GraphScene {
       maxX = -Infinity,
       minY = Infinity,
       maxY = -Infinity;
-    for (const { pos } of placed) {
+    for (const { target: pos } of placed) {
       if (!pos) continue;
       minX = Math.min(minX, pos.x - LABEL_WIDTH / 2);
       maxX = Math.max(maxX, pos.x + LABEL_WIDTH / 2);
@@ -299,6 +461,8 @@ export class GraphScene {
     this.edges.clear();
     this.grid.geometry.dispose();
     this.grid.material.dispose();
+    this.bloom.dispose();
+    this.composer.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
@@ -322,9 +486,19 @@ export class GraphScene {
         uAlpha: { value: 1 },
         uFill: { value: 0 },
         uGlow: { value: 0 },
+        uGlowK: { value: glowLevels.normal },
+        uTime: { value: 0 },
+        uSeed: { value: hash01(data.id) },
+        uBeat: { value: 0 },
+        uBreathe: { value: 0 },
+        uRingBreathe: { value: 0 },
+        uSpark: { value: 0 },
+        uPhase: { value: 0 },
+        uOrbit: { value: 0 },
         uArc: { value: 0 },
         uDash: { value: 0 },
-        uSeed: { value: hash01(data.id) },
+        uFlick: { value: 0 },
+        uFlash: { value: -1 },
       }),
     );
     mesh.renderOrder = 2;
@@ -347,7 +521,25 @@ export class GraphScene {
     activity.style.textShadow = shadow;
     label.append(title, activity);
     this.labels.appendChild(label);
-    return { data, mesh, label, title, activity, pos: null };
+    const style = STATES[data.state];
+    return {
+      data,
+      mesh,
+      label,
+      title,
+      activity,
+      pos: null,
+      target: null,
+      scale: this.motion ? 0 : 1,
+      color: (this.stateColors.get(data.state) ?? new THREE.Color()).clone(),
+      labelColor: "",
+      eased: Object.fromEntries(
+        easedKeys.map((key) => [key, style[key]]),
+      ) as Eased,
+      flashAt: -1,
+      phase: 0,
+      beat: 0,
+    };
   }
 
   private disposeNode(node: NodeObject) {
@@ -366,6 +558,9 @@ export class GraphScene {
         uLen: { value: 100 },
         uAlpha: { value: 1 },
         uDashed: { value: 0 },
+        uShift: { value: 0 },
+        uFlow: { value: 0 },
+        uBurst: { value: -1 },
       }),
     );
     const arrowGeometry = new THREE.BufferGeometry();
@@ -387,7 +582,16 @@ export class GraphScene {
       mesh.visible = false;
       this.scene.add(mesh);
     }
-    return { key, from: edge.from, to: edge.to, ribbon, arrow };
+    return {
+      key,
+      from: edge.from,
+      to: edge.to,
+      ribbon,
+      arrow,
+      color: this.edgeColor(edge.from).clone(),
+      burstAt: -1,
+      shift: 0,
+    };
   }
 
   private disposeEdge(edge: EdgeObject) {
@@ -398,19 +602,23 @@ export class GraphScene {
     }
   }
 
+  /** Sets what switches at once on a status or theme change; colors and sizes ease in `animate`. */
   private styleNode(node: NodeObject) {
     const look = this.look;
     if (!look) return;
-    const style = stateStyle[node.data.state];
+    const style = STATES[node.data.state];
     const u = node.mesh.material.uniforms;
-    setCss(u.uColor.value, look.colors[node.data.state]);
     u.uLight.value = look.light ? 1 : 0;
-    u.uFill.value = style.fill;
-    u.uGlow.value = style.glow;
     u.uArc.value = style.arc;
     u.uDash.value = style.dash;
+    u.uRingBreathe.value = style.ring;
     setBlend(node.mesh.material, look.light);
-    node.activity.style.color = look.colors[node.data.state];
+  }
+
+  /** The color an edge heads toward: its source's, or done's once satisfied. */
+  private edgeColor(from: string) {
+    const state = this.nodes.get(from)?.data.state ?? "triage";
+    return this.stateColors.get(state) ?? this.tmp.setRGB(0.5, 0.5, 0.5);
   }
 
   private styleEdge(edge: EdgeObject) {
@@ -418,11 +626,8 @@ export class GraphScene {
     const source = this.nodes.get(edge.from);
     if (!look || !source) return;
     const satisfied = source.data.state === "done";
-    const color = satisfied ? look.colors.done : look.colors[source.data.state];
     for (const mesh of [edge.ribbon, edge.arrow]) {
-      const u = mesh.material.uniforms;
-      setCss(u.uColor.value, color);
-      u.uLight.value = look.light ? 1 : 0;
+      mesh.material.uniforms.uLight.value = look.light ? 1 : 0;
       setBlend(mesh.material, look.light);
     }
     edge.ribbon.material.uniforms.uDashed.value = satisfied ? 0 : 1;
@@ -439,8 +644,8 @@ export class GraphScene {
       if (!visible || !a?.pos || !b?.pos) continue;
       this.shapeEdge(
         edge,
-        [a.pos.x + radiusOf(a.data.priority) + 5, a.pos.y],
-        [b.pos.x - radiusOf(b.data.priority) - 9, b.pos.y],
+        [a.pos.x + radiusOf(a.data.priority) * a.scale + 5, a.pos.y],
+        [b.pos.x - radiusOf(b.data.priority) * b.scale - 9, b.pos.y],
       );
     }
   }
@@ -518,6 +723,8 @@ export class GraphScene {
     const { clientWidth: w, clientHeight: h } = this.host;
     this.size = { w: Math.max(1, w), h: Math.max(1, h) };
     this.renderer.setSize(this.size.w, this.size.h, false);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(this.size.w, this.size.h);
     if (!this.userMoved) this.fit();
     else this.requestRender();
   }
@@ -536,12 +743,97 @@ export class GraphScene {
     };
   }
 
+  /** Schedules a frame. Nothing is scheduled while the tab is hidden. */
   private requestRender() {
-    if (this.disposed || this.frame) return;
-    this.frame = requestAnimationFrame(() => {
+    if (this.disposed || this.frame || document.hidden) return;
+    this.frame = requestAnimationFrame((time) => {
       this.frame = 0;
-      if (!this.disposed) this.draw();
+      if (this.disposed) return;
+      const dt = this.lastFrame
+        ? Math.min(0.1, (time - this.lastFrame) / 1000)
+        : 0;
+      this.lastFrame = time;
+      this.clock += dt;
+      this.animate(this.motion ? dt : Infinity);
+      this.draw();
+      if (this.motion) this.requestRender();
+      else this.lastFrame = 0;
     });
+  }
+
+  /**
+   * Moves every node, color and parameter toward its target. `dt` is the frame
+   * time in seconds; Infinity lands everything at once.
+   */
+  private animate(dt: number) {
+    const motion = this.motion;
+    const time = motion ? this.clock : 0;
+    let moved = false;
+    for (const node of this.nodes.values()) {
+      const style = STATES[node.data.state];
+      const color = this.stateColors.get(node.data.state);
+      if (color) node.color.lerp(color, ease(dt, 5));
+      for (const key of easedKeys)
+        node.eased[key] += (style[key] - node.eased[key]) * ease(dt, 5);
+      if (node.pos && node.target) {
+        const k = ease(dt, 4);
+        const dx = node.target.x - node.pos.x;
+        const dy = node.target.y - node.pos.y;
+        if (Math.abs(dx) + Math.abs(dy) > 0.01 || node.scale < 1) moved = true;
+        node.pos.x += dx * k;
+        node.pos.y += dy * k;
+        node.scale += (1 - node.scale) * ease(dt, 6);
+        if (node.scale > 0.999) node.scale = 1;
+      }
+      if (node.flashAt >= 0 && this.clock - node.flashAt > FLASH_SECONDS)
+        node.flashAt = -1;
+      const u = node.mesh.material.uniforms;
+      u.uColor.value.copy(node.color);
+      u.uTime.value = time;
+      u.uGlowK.value = this.glow;
+      u.uFill.value = node.eased.fill;
+      u.uGlow.value = node.eased.glow;
+      if (motion) node.beat += node.eased.pulse * dt;
+      u.uBeat.value = node.beat;
+      u.uBreathe.value = motion ? node.eased.breathe : 0;
+      if (motion) node.phase += node.eased.orbit * dt;
+      u.uOrbit.value = node.eased.orbit;
+      u.uPhase.value = node.phase;
+      u.uSpark.value = motion ? node.eased.spark : 0;
+      u.uFlick.value = motion ? style.flick : 0;
+      u.uFlash.value =
+        node.flashAt >= 0 ? (this.clock - node.flashAt) / FLASH_SECONDS : -1;
+      const css = `#${node.color.getHexString(space(!!this.look?.light))}`;
+      if (css !== node.labelColor) {
+        node.labelColor = css;
+        node.activity.style.color = css;
+      }
+    }
+    for (const edge of this.edges.values()) {
+      const source = this.nodes.get(edge.from)?.data.state;
+      const target = this.nodes.get(edge.to)?.data.state;
+      if (!source || !target) continue;
+      const satisfied = source === "done";
+      edge.color.lerp(this.edgeColor(edge.from), ease(dt, 5));
+      if (edge.burstAt >= 0 && this.clock - edge.burstAt > BURST_SECONDS)
+        edge.burstAt = -1;
+      const u = edge.ribbon.material.uniforms;
+      u.uColor.value.copy(edge.color);
+      edge.arrow.material.uniforms.uColor.value.copy(edge.color);
+      // Dashes crawl, and run faster out of a card that is being worked on.
+      const speed = satisfied
+        ? 55
+        : source === "working" || source === "agent_review"
+          ? 70
+          : 14;
+      if (motion) edge.shift += speed * dt;
+      u.uShift.value = edge.shift;
+      u.uFlow.value = motion && satisfied && activeStates.has(target) ? 1 : 0;
+      u.uBurst.value =
+        edge.burstAt >= 0 ? (this.clock - edge.burstAt) / BURST_SECONDS : -1;
+    }
+    if (moved) this.rebuildEdges();
+    this.bloom.strength = (BLOOM.strength * this.glow) / glowLevels.normal;
   }
 
   private draw() {
@@ -572,15 +864,20 @@ export class GraphScene {
       if (!node.pos) continue;
       const r = radiusOf(node.data.priority);
       node.mesh.position.set(node.pos.x, node.pos.y, 0);
-      node.mesh.scale.set(r * 4, r * 4, 1);
+      node.mesh.scale.set(r * 4 * node.scale, r * 4 * node.scale, 1);
       const s = this.toScreen(node.pos.x, node.pos.y + r * 1.5 + 5 / zoom);
       node.label.style.transform = `translate(${s.x - LABEL_WIDTH / 2}px, ${s.y}px)`;
       node.title.style.display = compact ? "none" : "";
     }
     if (this.look) {
-      this.renderer.setClearColor(setCss(this.tmp, this.look.background));
+      this.renderer.setClearColor(
+        setCss(this.tmp, this.look.background, this.look.light),
+      );
     }
-    this.renderer.render(this.scene, this.camera);
+    // Bloom only works by adding light, so light themes skip it.
+    this.bloom.enabled = this.glow > 0;
+    if (this.look && !this.look.light) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
   }
 
   // ───────────── pointer ─────────────
