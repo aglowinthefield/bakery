@@ -251,3 +251,113 @@ for (const reduced of [false, true])
       else assert.ok(steps > 6, `it slides through in-between positions (${steps})`);
     } finally { await page.close(); }
   });
+
+const opacityOf = (page: Page, id: string) =>
+  page.locator(`[data-viz-label="${id}"]`).evaluate((el) => Number(getComputedStyle(el).opacity));
+
+/** The screen point of a node's circle, just above its label. */
+const circle = async (page: Page, id: string) => {
+  const box = await labelBox(page, id);
+  return { x: box.x + box.width / 2, y: box.y - 22 * 0.9 };
+};
+
+const chainCards = [
+  card("root", "done"),
+  card("mid", "running", ["root"]),
+  card("leaf", "ready", ["mid"]),
+  card("side", "triage", ["root"]),
+  card("alone", "triage"),
+];
+
+test("hovering a card keeps its whole dependency chain and dims the rest", async () => {
+  const page = await open(chainCards);
+  try {
+    await ready(page, 5);
+    await page.waitForTimeout(300);
+    const at = await circle(page, "mid");
+    await page.mouse.move(at.x, at.y);
+    await page.waitForFunction(() => Number(getComputedStyle(document.querySelector('[data-viz-label="alone"]')!).opacity) < 0.3);
+    for (const id of ["root", "mid", "leaf"]) assert.equal(await opacityOf(page, id), 1, `${id} stays lit`);
+    for (const id of ["side", "alone"]) assert.ok((await opacityOf(page, id)) < 0.3, `${id} dims`);
+    await page.mouse.move(at.x, at.y + 150);
+    await page.waitForFunction(() => Number(getComputedStyle(document.querySelector('[data-viz-label="alone"]')!).opacity) === 1);
+  } finally { await page.close(); }
+});
+
+test("clicking a card opens its details without leaving the Visualizer, and Escape closes them", async () => {
+  const page = await open(chainCards);
+  try {
+    await ready(page, 5);
+    const at = await circle(page, "mid");
+    await page.mouse.click(at.x, at.y);
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText("mid card").first().waitFor();
+    assert.match(new URL(page.url()).pathname, /\/board\/board\/visualizer$/);
+    assert.equal(await page.locator("[data-visualizer-canvas]").count(), 1, "the graph is still mounted");
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    assert.equal(await page.locator("[data-visualizer-canvas]").count(), 1);
+  } finally { await page.close(); }
+});
+
+test("the header counts cards per state and the Done filter defaults to Relevant", async () => {
+  const page = await open([...chainCards, card("old", "done"), card("older", "archived")]);
+  try {
+    const count = (state: string) => page.locator(`[data-viz-count="${state}"] b`).textContent();
+    await page.locator('[data-viz-count="done"]').waitFor();
+    assert.equal(await count("done"), "3", "counts include Done cards the filter hides");
+    assert.equal(await count("working"), "1");
+    assert.equal(await count("ready"), "1");
+    assert.ok(await page.getByRole("list", { name: "Legend" }).getByText("Blocked").isVisible(), "the legend is shown");
+    const done = page.getByRole("group", { name: "Done cards" });
+    assert.equal(await done.getByRole("button", { name: "Relevant" }).getAttribute("aria-pressed"), "true");
+    await ready(page, 5);
+    await done.getByRole("button", { name: "All" }).click();
+    await ready(page, 7);
+    await done.getByRole("button", { name: "Hide" }).click();
+    await ready(page, 4);
+    assert.equal(await page.locator('[data-viz-label="root"]').count(), 0, "Hide drops Done cards even when something depends on them");
+    await page.reload();
+    assert.equal(await page.getByRole("group", { name: "Done cards" }).getByRole("button", { name: "Hide" }).getAttribute("aria-pressed"), "true", "the filter is remembered");
+  } finally { await page.close(); }
+});
+
+test("without WebGL the graph is plain SVG with state colors, labels, hover and click", async () => {
+  const noGl = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  try {
+    await noGl.addInitScript(`
+      const getContext = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type) {
+        return /webgl/.test(type) ? null : getContext.apply(this, arguments);
+      };
+    `);
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
+      "/api/boards/board/cards": chainCards,
+      "/api/boards/board/conflicts": [],
+    };
+    await noGl.route("**/api/**", route => route.fulfill({ json: data[new URL(route.request().url()).pathname] ?? [] }));
+    await noGl.goto(new URL("/board/board/visualizer", url).href);
+    await noGl.locator("[data-visualizer-svg] [data-viz-node]").first().waitFor();
+    assert.equal(await noGl.locator("[data-visualizer-canvas]").count(), 0, "no WebGL canvas");
+    assert.equal(await noGl.locator("[data-viz-node]").count(), 5);
+    assert.equal(await noGl.locator("[data-viz-edge]").count(), 3);
+    const mid = noGl.locator('[data-viz-node="mid"]');
+    assert.match((await mid.textContent())!, /mid card.*running · turn 2/);
+    const stroke = (id: string) => noGl.locator(`[data-viz-node="${id}"] circle`).getAttribute("stroke");
+    assert.notEqual(await stroke("mid"), await stroke("alone"), "states get different colors");
+    assert.equal(await noGl.locator("[data-visualizer-svg] animate, [data-visualizer-svg] animateTransform").count(), 0, "nothing animates");
+
+    await mid.hover();
+    await noGl.waitForFunction(() => document.querySelector('[data-viz-node="alone"]')!.getAttribute("opacity") !== "1");
+    assert.equal(await noGl.locator('[data-viz-node="leaf"]').getAttribute("opacity"), "1");
+    assert.notEqual(await noGl.locator('[data-viz-node="side"]').getAttribute("opacity"), "1");
+
+    await mid.click();
+    await noGl.getByRole("dialog").getByText("mid card").first().waitFor();
+    await noGl.keyboard.press("Escape");
+    await noGl.getByRole("dialog").waitFor({ state: "detached" });
+    assert.ok(await noGl.getByRole("group", { name: "Done cards" }).isVisible(), "header and filter are there too");
+  } finally { await noGl.close(); }
+});

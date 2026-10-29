@@ -1,8 +1,16 @@
 import ELK from "elkjs/lib/elk-api.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Card } from "../model.js";
-import { activityText, buildGraph, type LiveActivity } from "./graph.js";
-import { layoutGraph, layoutKey } from "./layout.js";
+import { Header, Legend, useLook } from "./chrome.js";
+import {
+  activityText,
+  buildGraph,
+  type DoneFilter,
+  type GraphEdge,
+  type LiveActivity,
+  stateCounts,
+} from "./graph.js";
+import { layoutGraph, layoutKey, type Point } from "./layout.js";
 import { readLook } from "./look.js";
 import {
   type Glow,
@@ -11,11 +19,18 @@ import {
   type SceneNode,
   webglAvailable,
 } from "./scene.js";
+import { SvgGraph } from "./svg-graph.js";
 
 const refreshMs = 15_000;
 /** While an agent's live tool is shown, its elapsed time ticks every second. */
 const liveRefreshMs = 1_000;
 const glowKey = "bakery-visualizer-glow";
+const doneKey = "bakery-visualizer-done";
+const doneFilters: DoneFilter[] = ["all", "relevant", "hide"];
+const readDone = (): DoneFilter => {
+  const saved = localStorage.getItem(doneKey);
+  return doneFilters.find((name) => name === saved) ?? "relevant";
+};
 const glowNames: Record<Glow, string> = {
   off: "Off",
   soft: "Soft",
@@ -49,7 +64,45 @@ const notice = (text: string) => (
   <p className="px-6 py-6 text-sm text-muted-foreground lg:px-10">{text}</p>
 );
 
-/** Per-board Visualizer: the dependency graph drawn with three.js. */
+/**
+ * Lays the graph out whenever its node or edge set changes. Node content
+ * (titles, states) does not trigger a layout, so the 2 s card poll leaves it be.
+ */
+function useLayout(graph: ReturnType<typeof buildGraph>) {
+  const [positions, setPositions] = useState<Map<string, Point> | null>(null);
+  const [failed, setFailed] = useState(false);
+  const key = layoutKey(
+    graph.nodes.map((node) => node.id),
+    graph.edges,
+  );
+  const graphRef = useRef(graph);
+  graphRef.current = graph;
+  useEffect(() => {
+    let stale = false;
+    const elk = createElk();
+    const { nodes, edges } = graphRef.current;
+    layoutGraph(
+      elk,
+      nodes.map((node) => node.id),
+      edges,
+    )
+      .then((next) => {
+        if (stale) return;
+        setFailed(false);
+        setPositions(next);
+      })
+      .catch(() => {
+        if (!stale) setFailed(true);
+      })
+      .finally(() => elk.terminateWorker());
+    return () => {
+      stale = true;
+    };
+  }, [key]);
+  return { positions, failed };
+}
+
+/** Per-board Visualizer: the dependency graph drawn with three.js, or as SVG without WebGL. */
 export function Visualizer({
   cards,
   loaded,
@@ -58,6 +111,7 @@ export function Visualizer({
   cards: Card[];
   /** False until the board's first fetch lands, so an unloaded board is not shown as empty. */
   loaded: boolean;
+  /** Opens the card's details over the Visualizer. */
   onOpenCard: (id: string) => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -70,41 +124,106 @@ export function Visualizer({
     );
     return () => clearInterval(timer);
   }, [live]);
-  const graph = useMemo(() => buildGraph(cards, { now }), [cards, now]);
+  const [done, setDone] = useState(readDone);
+  const [glFailed, setGlFailed] = useState(false);
+  const look = useLook();
+  const graph = useMemo(
+    () => buildGraph(cards, { done, now }),
+    [cards, done, now],
+  );
+  // Counts cover the whole board, so hiding Done cards does not hide their count.
+  const counts = useMemo(
+    () => stateCounts(buildGraph(cards, { done: "all", now }).nodes),
+    [cards, now],
+  );
+  const layout = useLayout(graph);
   if (!loaded) return notice("Loading cards…");
   if (!cards.length) return notice("No cards on this board yet.");
-  if (!webglAvailable())
-    return (
-      <div>
-        {notice(
-          "WebGL is not available in this browser, so the graph is shown as a list.",
-        )}
-        <CardList cards={cards} onOpenCard={onOpenCard} />
-      </div>
-    );
+  const svg = !webglAvailable() || glFailed;
+  const nodes = graph.nodes.map((node) => ({
+    id: node.id,
+    title: node.card.title,
+    activity: activityText(
+      node.card,
+      node.state,
+      cards,
+      now,
+      liveOf(node.card),
+    ),
+    state: node.state,
+    priority: node.card.priority ?? 0,
+  }));
   return (
-    <Canvas cards={cards} graph={graph} now={now} onOpenCard={onOpenCard} />
+    <div>
+      <Header
+        counts={counts}
+        look={look}
+        done={done}
+        onDone={(next) => {
+          setDone(next);
+          localStorage.setItem(doneKey, next);
+        }}
+      />
+      {layout.failed ? (
+        <div>
+          {notice("The graph could not be drawn, so it is shown as a list.")}
+          <CardList cards={cards} onOpenCard={onOpenCard} />
+        </div>
+      ) : (
+        <div
+          className="relative h-[calc(100vh-170px)] min-h-[360px] overflow-hidden"
+          aria-label="Card dependency graph"
+        >
+          {!nodes.length ? (
+            notice("No cards to show with this Done filter.")
+          ) : svg ? (
+            layout.positions && (
+              <SvgGraph
+                nodes={nodes}
+                edges={graph.edges}
+                positions={layout.positions}
+                look={look}
+                onOpenCard={onOpenCard}
+              />
+            )
+          ) : (
+            <Canvas
+              nodes={nodes}
+              edges={graph.edges}
+              positions={layout.positions}
+              onOpenCard={onOpenCard}
+              onFail={() => setGlFailed(true)}
+            />
+          )}
+          <Legend look={look} />
+        </div>
+      )}
+    </div>
   );
 }
 
 function Canvas({
-  cards,
-  graph,
-  now,
+  nodes,
+  edges,
+  positions,
   onOpenCard,
+  onFail,
 }: {
-  cards: Card[];
-  graph: ReturnType<typeof buildGraph>;
-  now: number;
+  nodes: SceneNode[];
+  edges: GraphEdge[];
+  positions: Map<string, Point> | null;
   onOpenCard: (id: string) => void;
+  /** The scene could not be created, so the caller draws SVG instead. */
+  onFail: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<GraphScene | null>(null);
   const openRef = useRef(onOpenCard);
   openRef.current = onOpenCard;
+  const failRef = useRef(onFail);
+  failRef.current = onFail;
   const [ready, setReady] = useState(false);
-  const [failed, setFailed] = useState(false);
   const [glow, setGlow] = useState(readGlow);
   const glowRef = useRef(glow);
   glowRef.current = glow;
@@ -118,7 +237,7 @@ function Canvas({
     try {
       scene = new GraphScene(host, labels, (id) => openRef.current(id));
     } catch {
-      setFailed(true);
+      failRef.current();
       return;
     }
     scene.setLook(readLook());
@@ -161,67 +280,21 @@ function Canvas({
     sceneRef.current?.setGlow(glow);
   }, [glow]);
 
+  useEffect(() => {
+    sceneRef.current?.setGlow(glow);
+  }, [glow]);
+
   // Node and label content follow every refresh; the layout below does not.
   useEffect(() => {
-    const scene = sceneRef.current;
-    if (!ready || !scene) return;
-    const nodes: SceneNode[] = graph.nodes.map((node) => ({
-      id: node.id,
-      title: node.card.title,
-      activity: activityText(
-        node.card,
-        node.state,
-        cards,
-        now,
-        liveOf(node.card),
-      ),
-      state: node.state,
-      priority: node.card.priority ?? 0,
-    }));
-    scene.setGraph(nodes, graph.edges);
-  }, [ready, graph, cards, now]);
+    if (ready) sceneRef.current?.setGraph(nodes, edges);
+  }, [ready, nodes, edges]);
 
-  // Re-layout only when the node or edge set changes.
-  const key = layoutKey(
-    graph.nodes.map((node) => node.id),
-    graph.edges,
-  );
-  const graphRef = useRef(graph);
-  graphRef.current = graph;
   useEffect(() => {
-    if (!ready) return;
-    let stale = false;
-    const elk = createElk();
-    const { nodes, edges } = graphRef.current;
-    layoutGraph(
-      elk,
-      nodes.map((node) => node.id),
-      edges,
-    )
-      .then((positions) => {
-        if (!stale) sceneRef.current?.setPositions(positions);
-      })
-      .catch(() => {
-        if (!stale) setFailed(true);
-      })
-      .finally(() => elk.terminateWorker());
-    return () => {
-      stale = true;
-    };
-  }, [ready, key]);
+    if (ready && positions) sceneRef.current?.setPositions(positions);
+  }, [ready, positions]);
 
-  if (failed)
-    return (
-      <div>
-        {notice("The graph could not be drawn, so it is shown as a list.")}
-        <CardList cards={cards} onOpenCard={onOpenCard} />
-      </div>
-    );
   return (
-    <div
-      className="relative h-[calc(100vh-125px)] min-h-[360px] overflow-hidden"
-      aria-label="Card dependency graph"
-    >
+    <>
       <div
         ref={hostRef}
         data-visualizer-canvas
@@ -238,7 +311,7 @@ function Canvas({
           localStorage.setItem(glowKey, next);
         }}
       />
-    </div>
+    </>
   );
 }
 
