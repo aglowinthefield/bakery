@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
-import { Integration } from "../server/integration.js";
+import { Integration, PushHookError } from "../server/integration.js";
 import { GitHub, GitHubSync, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 import { draftPullRequest, readPullRequestRules } from "../server/pr-draft.js";
@@ -512,6 +512,34 @@ test("github-pr: gh errors from creating the PR reach the card verbatim, and the
   } finally { f.cleanup(); }
 });
 
+test("github-pr: a refused push's hook output goes to the card's next run, which still waits for Approve", async () => {
+  const f = fixture();
+  const promptFile = join(f.dir, "prompt.txt");
+  const fixPi = join(f.dir, "pi-fix");
+  writeFileSync(fixPi, `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > "${promptFile}"\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fixPi, 0o755);
+  try {
+    const card = await reviewedCard(f);
+    writeFileSync(join(f.repo, ".git", "hooks", "pre-push"), "#!/bin/sh\necho 'Unused files (1)'\nexit 1\n");
+    chmodSync(join(f.repo, ".git", "hooks", "pre-push"), 0o755);
+    const error = await approve(f, card.id).catch((e: unknown) => e);
+    assert.ok(error instanceof PushHookError);
+    f.board.recordPushFailure(card.id, error.sha, error.output);
+    assert.equal(f.board.getCiFeedback(card.id)?.source, "push");
+    f.board.dropCiFeedback(card.id);
+    assert.ok(f.board.getCiFeedback(card.id), "a CI sync does not drop hook output");
+    const worker = new Worker(f.board, f.data, fixPi);
+    worker.start(f.board.getCard(card.id)!);
+    await waitFor(() => f.board.getCard(card.id)!.status === "review");
+    const prompt = readFileSync(promptFile, "utf8");
+    assert.match(prompt, /pre-push hook refused it/);
+    assert.match(prompt, /Unused files \(1\)/);
+    assert.doesNotMatch(prompt, /failed CI/);
+    assert.equal(f.board.listRuns(card.id)[0].ciFix, 0, "its result is not pushed without Approve");
+    assert.equal(f.board.getCiFeedback(card.id), undefined);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: a failing pre-push hook's stdout and stderr both reach the error, and push progress records each step and line", async () => {
   const f = fixture();
   try {
@@ -522,7 +550,7 @@ test("github-pr: a failing pre-push hook's stdout and stderr both reach the erro
     const integration = new Integration(f.board, f.data);
     const pending = integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
     assert.equal(integration.pushProgress(card.id)?.finishedAt, null, "progress exists while the push runs");
-    await assert.rejects(pending, (error: Error) => /^push failed: /.test(error.message) && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
+    await assert.rejects(pending, (error: Error) => error instanceof PushHookError && /^push failed: the repository's pre-push hook refused it\.\n\n/.test(error.message) && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
     const progress = integration.pushProgress(card.id)!;
     assert.match(progress.step, /^Pushing bakery\//, "the failed step is the push");
     assert.ok(progress.log.includes("SETTINGS_TAB_IDS  settingsTabs.ts:9:14"));

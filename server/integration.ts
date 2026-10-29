@@ -94,6 +94,15 @@ const progressLogLines = 400;
  * pre-push hook's own stdout is part of the push output, so a failure message carries everything it printed, not
  * only stderr. `\r` progress redraws replace the line they redraw.
  */
+/** A failed `git push`. `hookFailed` when a pre-push hook refused it, as opposed to the remote or the network. */
+export class PushError extends Error {
+  constructor(message: string, readonly output: string, readonly hookFailed: boolean) { super(message); }
+}
+/** A pre-push hook refused the push of `sha`, which Bakery had committed from the card's reviewed work. */
+export class PushHookError extends PushError {
+  constructor(error: PushError, readonly sha: string) { super(error.message, error.output, true); }
+}
+
 export function pushBranch(cwd: string, refspec: string, onLine: (line: string, replace: boolean) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["-C", cwd, "push", "--progress", "origin", refspec], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -122,7 +131,11 @@ export function pushBranch(cwd: string, refspec: string, onLine: (line: string, 
       if (code === 0) { resolve(); return; }
       const detail = output.filter(line => line.trim()).join("\n") || `git push exited with code ${code}`;
       // The end of the output names the failing check; keep it when the output is long.
-      reject(new Error(`push failed: ${detail.length > 6000 ? "…" + detail.slice(-6000) : detail}`));
+      // Git prints "! [rejected]" lines when the remote refuses and "fatal:" when it cannot connect. A hook failing
+      // prints neither: only the hook's own output, then "error: failed to push some refs".
+      const hookFailed = !output.some(line => /^\s*! \[|^(fatal|remote):/.test(line));
+      const body = (detail.length > 6000 ? "…" + detail.slice(-6000) : detail);
+      reject(new PushError(`push failed: ${hookFailed ? "the repository's pre-push hook refused it.\n\n" : ""}${body}`, detail, hookFailed));
     });
   });
 }
@@ -316,7 +329,8 @@ export class Integration {
       } else {
         step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
         // A plain push: if the branch on GitHub moved after the fetch, Git still refuses instead of overwriting it.
-        await push(worktree, `${candidate}:refs/heads/${branch}`);
+        try { await push(worktree, `${candidate}:refs/heads/${branch}`); }
+        catch (error) { throw error instanceof PushError && error.hookFailed ? new PushHookError(error, candidate) : error; }
       }
       step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
       const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";

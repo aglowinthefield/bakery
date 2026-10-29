@@ -139,6 +139,8 @@ export class Board {
     }
     // CI failures from a card's PR, waiting to be handed to the card's next run.
     this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
+    // 'ci' for a PR's failed checks, 'push' for a pre-push hook that refused the push.
+    if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
@@ -400,13 +402,21 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  /**
+   * A pre-push hook refused the push of `sha`: keep its output for the card's next run. Unlike CI rounds this is not
+   * counted or limited, because each round starts from an operator's Approve, and the fix waits for another one.
+   */
+  recordPushFailure(cardId: string, sha: string, output: string): void {
+    this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, 'push') ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt, source='push'")
+      .run(cardId, sha, output.slice(-20_000), now());
+  }
   /** Marks `headSha` as handled without sending the card back, e.g. once the rework limit is reached. */
   markCiHandled(cardId: string, headSha: string): void {
     this.db.prepare("UPDATE cards SET ciReworkSha=? WHERE id=?").run(headSha, cardId);
   }
   /** CI failures waiting for the card's next run. */
-  getCiFeedback(cardId: string): { headSha: string; failures: string } | undefined {
-    return this.db.prepare("SELECT headSha, failures FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string } | undefined;
+  getCiFeedback(cardId: string): { headSha: string; failures: string; source: "ci" | "push" } | undefined {
+    return this.db.prepare("SELECT headSha, failures, source FROM ci_feedback WHERE cardId=?").get(cardId) as { headSha: string; failures: string; source: "ci" | "push" } | undefined;
   }
   /**
    * The waiting failures went stale before a fix run took them (CI is re-running or passed). The round never ran,
@@ -415,14 +425,14 @@ export class Board {
   dropCiFeedback(cardId: string): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      if (this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId).changes)
+      if (this.db.prepare("DELETE FROM ci_feedback WHERE cardId=? AND source='ci'").run(cardId).changes)
         this.db.prepare("UPDATE cards SET ciReworks=MAX(ciReworks-1, 0), ciReworkSha=NULL WHERE id=?").run(cardId);
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  /** Marks a run as a CI fix run and hands it the waiting failures. */
-  startCiFix(cardId: string, runId: string): void {
-    this.db.prepare("UPDATE runs SET ciFix=1 WHERE id=?").run(runId);
+  /** Hands a run the waiting failures. A CI fix run is also marked, so its result is pushed without Approve; a hook fix waits for Approve. */
+  startCiFix(cardId: string, runId: string, source: "ci" | "push" = "ci"): void {
+    if (source === "ci") this.db.prepare("UPDATE runs SET ciFix=1 WHERE id=?").run(runId);
     this.clearCiFeedback(cardId);
   }
   clearCiFeedback(cardId: string): void { this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId); }
@@ -607,7 +617,7 @@ export class Board {
       // A run newer than the pushed one (a CI fix, a rerun) waits for Approve to push it.
       if (card.prState !== "OPEN" || (!card.prOverrideUrl && card.prPushedRunId !== run.id)) return null;
       if (card.prChecks !== "failing") return "github";
-      return card.prCiPending || this.getCiFeedback(card.id) ? "ci_fix" : null;
+      return card.prCiPending || this.getCiFeedback(card.id)?.source === "ci" ? "ci_fix" : null;
     }
     if (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run)) return "agent_review";
     return null;

@@ -5,10 +5,10 @@ import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync,
 import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
-import { Board, parsePriority } from "./board.js";
+import { Board, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
 import { Worker } from "./worker.js";
-import { Integration, IntegrationConflictError } from "./integration.js";
+import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
@@ -56,7 +56,27 @@ const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card),
-  card => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true));
+  card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true)));
+/**
+ * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
+ * as a new run, like failed CI, and the card (now running) is returned. If that run cannot start, the push error stands.
+ */
+async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promise<Card> {
+  try { return await push(); }
+  catch (error) {
+    if (!(error instanceof PushHookError)) throw error;
+    try {
+      board.recordPushFailure(card.id, error.sha, error.output);
+      const previous = board.listRuns(card.id)[0];
+      if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
+      worker.start(board.getCard(card.id)!);
+    } catch (startError) {
+      board.clearCiFeedback(card.id);
+      throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
+    }
+    return board.getCard(card.id)!;
+  }
+}
 const port = Number(process.env.BAKERY_PORT ?? 4317);
 // Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
 const bindHost = process.env.BAKERY_HOST || "127.0.0.1";
@@ -444,7 +464,7 @@ const server = createServer(async (req, res) => {
           if (repoBoard.integration === "github-pr") {
             if ((title !== undefined || prBody !== undefined) && (typeof title !== "string" || !title.trim() || title.length > 250 || typeof prBody !== "string" || prBody.length > 20_000))
               throw new Error("Pull request title (up to 250 characters) and body (up to 20,000) are required");
-            const card = await integration.openPullRequest(item, fingerprint, github, typeof title === "string" ? { title, body: prBody as string } : undefined);
+            const card = await sendBackRefusedPush(item, () => integration.openPullRequest(item, fingerprint, github, typeof title === "string" ? { title, body: prBody as string } : undefined));
             draftJobs.delete(id);
             void githubSync.syncBoard(repoBoard.id);
             send(res, 200, card); return;

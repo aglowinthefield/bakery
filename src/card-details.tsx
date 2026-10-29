@@ -216,7 +216,9 @@ export function CardDetails({
     setDraftStarted(false);
     if (!cardId || !reviewFingerprint || !boardId) return;
     let current = true;
-    api<{ fingerprint: string | null }>(`/boards/${boardId}/cards/${cardId}/pr-draft`)
+    api<{ fingerprint: string | null }>(
+      `/boards/${boardId}/cards/${cardId}/pr-draft`,
+    )
       .then((job) => {
         if (current) setDraftStarted(job.fingerprint === reviewFingerprint);
       })
@@ -1383,7 +1385,10 @@ function PullRequestLink({
           ` \u00b7 sent back for CI ${card.ciReworks} time${card.ciReworks === 1 ? "" : "s"}`}
       </div>
       {card.prError && (
-        <div role="status" className="mt-1 text-destructive">
+        <div
+          role="status"
+          className="mt-1 whitespace-pre-wrap text-destructive"
+        >
           {card.prError}
         </div>
       )}

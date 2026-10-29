@@ -95,7 +95,17 @@ export function PullRequestDialog({
         </DialogDescription>
         {error && (
           <div role="alert" className="mt-4 text-sm text-destructive">
-            {error}
+            {/* Push failures carry a summary line, then the hook's own output, whose line breaks matter. */}
+            {error.includes("\n") ? (
+              <>
+                <p className="font-medium">{error.split("\n")[0]}</p>
+                <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
+                  {error.split("\n").slice(1).join("\n").trim()}
+                </pre>
+              </>
+            ) : (
+              error
+            )}
           </div>
         )}
         {!draft && !error && (
