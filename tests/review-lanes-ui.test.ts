@@ -14,6 +14,8 @@ for (const integration of ["github-pr", "local"]) {
       agent: { status: "review", reviewWait: "agent_review" },
       fixing: { status: "review", reviewWait: "ci_fix" },
       github: { status: "review", reviewWait: "github" },
+      broke: { status: "failed" },
+      paused: { status: "interrupted" },
     };
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
@@ -31,7 +33,10 @@ for (const integration of ["github-pr", "local"]) {
     try {
       await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
       await page.getByRole("button", { name: /mine card/ }).waitFor();
-      const inLane = (name: string) => page.getByRole("region", { name: `${name} lane` }).getByRole("button", { name: / card/ }).evaluateAll(els => els.map(el => el.textContent?.match(/(mine|agent|fixing|github) card/)?.[1]));
+      const inLane = (name: string) => page.getByRole("region", { name: `${name} lane` }).getByRole("button", { name: / card/ }).evaluateAll(els => els.map(el => el.textContent?.match(/(mine|agent|fixing|github|broke|paused) card/)?.[1]));
+      assert.deepEqual((await inLane("Failed")).sort(), ["broke", "paused"], "failed and interrupted share one lane");
+      assert.equal(await page.getByRole("region", { name: "Interrupted lane" }).count(), 0);
+      assert.match(await page.getByRole("button", { name: /paused card/ }).innerText(), /Interrupted/);
       if (integration === "github-pr") {
         assert.deepEqual(await inLane("Review"), ["mine"]);
         assert.deepEqual((await inLane("Agent reviewing")).sort(), ["agent", "fixing"]);

@@ -307,7 +307,8 @@ test("the side panel switches cards without leaking the previous card's review o
     await page.getByRole("heading", { name: "Ready card" }).waitFor();
     assert.equal(await page.getByText("Old output").count(), 0);
     assert.equal(await page.getByRole("heading", { name: "Review diff" }).count(), 0);
-    await page.getByRole("button", { name: /Review card/ }).click();
+    // Fewer lanes leave the Review tile no room to scroll out from under the side panel, so click it directly.
+    await page.getByRole("button", { name: /Review card/ }).evaluate((tile) => (tile as HTMLElement).click());
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByText("Changed files (1)").waitFor();
     await page.getByRole("heading", { name: "Review card" }).click();

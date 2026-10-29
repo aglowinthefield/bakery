@@ -3,7 +3,7 @@ import { after, before, test } from "node:test";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 
-const statuses = ["triage", "ready", "running", "review", "failed", "interrupted", "done", "archived"];
+const statuses = ["triage", "ready", "running", "review", "failed", "done", "archived"];
 const labels: Record<string, string> = { archived: "Archive" };
 let server: ViteDevServer;
 let browser: Browser;

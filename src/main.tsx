@@ -183,12 +183,6 @@ const columns: Lane[] = [
   { id: "running", status: "running", label: "Running", icon: LoaderCircle },
   { id: "review", status: "review", label: "Review", icon: Eye },
   { id: "failed", status: "failed", label: "Failed", icon: CircleX },
-  {
-    id: "interrupted",
-    status: "interrupted",
-    label: "Interrupted",
-    icon: CirclePause,
-  },
   { id: "done", status: "done", label: "Done", icon: CircleCheck },
   { id: "archived", status: "archived", label: "Archive", icon: Archive },
 ];
@@ -211,11 +205,13 @@ const pullRequestLanes: Lane[] = columns.flatMap((lane) =>
     : [lane],
 );
 const laneOf = (card: Card, split: boolean): Lane["id"] =>
-  split && card.status === "review" && card.reviewWait
-    ? card.reviewWait === "github"
-      ? "waiting"
-      : "agent"
-    : card.status;
+  card.status === "interrupted"
+    ? "failed"
+    : split && card.status === "review" && card.reviewWait
+      ? card.reviewWait === "github"
+        ? "waiting"
+        : "agent"
+      : card.status;
 
 // The sidebar condenses the lanes into the stages you scan for. Done and Archive are left out;
 // Failed only appears when something failed or was interrupted.
@@ -3369,6 +3365,16 @@ function ActivityBadge({
   card: Card;
   activity: ReturnType<typeof cardActivity>;
 }) {
+  if (card.status === "interrupted")
+    return (
+      <span
+        data-testid="activity-badge"
+        className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+      >
+        <CirclePause size={10} aria-hidden />
+        Interrupted
+      </span>
+    );
   if (card.status === "review" && card.reviewWait)
     return (
       <span
