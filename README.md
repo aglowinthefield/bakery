@@ -23,6 +23,7 @@ flowchart LR
 - [Today](#today)
 - [Card lifecycle](#card-lifecycle)
 - [Dependencies](#dependencies)
+- [Visualizer](#visualizer)
 - [Reviewing and merging](#reviewing-and-merging)
 - [GitHub pull request mode](#github-pull-request-mode)
 - [Watching a run](#watching-a-run)
@@ -119,6 +120,16 @@ A card can depend on other cards on the same board. It doesn't start until every
 - If a card you depend on is gone from the database, Bakery drops that dependency on startup.
 - The API takes `dependsOn: [ids]` when creating a card, `POST /api/boards/:board/cards/:id/dependencies` with `{ "dependsOn": id }`, and `DELETE .../dependencies/:dependsOn`. Card JSON includes `dependsOn` and `blocked`.
 - Done means Bakery's own Done. If a card's work reaches `main` some other way, such as a squash-merged PR you `git pull`, Bakery doesn't notice, and a started card can't be marked Done by hand. Remove the dependency with `undepend` instead.
+
+## Visualizer
+
+**Visualizer** under a repository in the sidebar draws that board's cards as a dependency graph, with each card pointing at the cards that depend on it. Colors and motion show state: a working card pulses, a blocked one is dashed, a done one is solid.
+
+- Hover a card to trace its whole chain, upstream and downstream. Everything else dims.
+- Click a card to open its details over the graph, the same panel the board uses. Escape closes it. Drag to pan, scroll to zoom, `f` or double-click to fit.
+- The header counts cards per state and has the **Done** filter. **Relevant** (the default) keeps finished cards only while an unfinished card still depends on them. **All** and **Hide** do what they say. The legend sits in the corner of the graph.
+- Without WebGL, the graph is drawn as plain SVG from the same layout, with the same colors and labels but no animation.
+- The graph updates from the same 2 s card poll as the board. The **Glow** control only applies to the WebGL view.
 
 ## Reviewing and merging
 

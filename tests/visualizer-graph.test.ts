@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Card } from "../src/model.js";
-import { activityText, buildGraph, visualState } from "../src/visualizer/graph.js";
+import { activityText, buildGraph, dependencyChain, stateCounts, visualState } from "../src/visualizer/graph.js";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -83,4 +83,18 @@ test("a cycle and a self-dependency do not hang", () => {
   assert.equal(nodes.length, 2);
   assert.equal(edges.length, 2);
   assert.equal(activityText(cards[0], "blocked", cards, now), "blocked by 2");
+});
+
+test("a dependency chain holds every ancestor and descendant, and nothing on a side branch", () => {
+  //  a → b → c → d,  a → x,  y → c
+  const edges = [["a", "b"], ["b", "c"], ["c", "d"], ["a", "x"], ["y", "c"]].map(([from, to]) => ({ from, to }));
+  assert.deepEqual([...dependencyChain("c", edges)].sort(), ["a", "b", "c", "d", "y"]);
+  assert.deepEqual([...dependencyChain("x", edges)].sort(), ["a", "x"], "x sees its dependency, not a's other dependents");
+  assert.deepEqual([...dependencyChain("solo", edges)], ["solo"]);
+  assert.deepEqual([...dependencyChain("a", [{ from: "a", to: "b" }, { from: "b", to: "a" }])].sort(), ["a", "b"], "cycles end");
+});
+
+test("state counts list only the states in use", () => {
+  const { nodes } = buildGraph([card("a", { status: "done" }), card("b", { status: "done" }), card("c", { status: "ready" })], { done: "all", now });
+  assert.deepEqual(stateCounts(nodes), { done: 2, ready: 1 });
 });

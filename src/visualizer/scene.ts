@@ -3,7 +3,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import type { GraphEdge, VisualState } from "./graph.js";
+import { dependencyChain, type GraphEdge, type VisualState } from "./graph.js";
 import type { Point } from "./layout.js";
 import type { Look } from "./look.js";
 import {
@@ -86,6 +86,10 @@ const activeStates = new Set<VisualState>([
   "ready",
 ]);
 
+/** How visible a node or edge outside the hovered chain stays. */
+const DIM_NODE = 0.2;
+const DIM_EDGE = 0.12;
+
 const FLASH_SECONDS = 1.1;
 const BURST_SECONDS = 1.3;
 const BLOOM = { strength: 0.5, radius: 0.3, threshold: 0.35 };
@@ -152,6 +156,8 @@ type NodeObject = {
   /** The CSS color last written to the activity line, to skip redundant writes. */
   labelColor: string;
   eased: Eased;
+  /** 1 in focus, easing toward `DIM_NODE` while outside the hovered chain. */
+  alpha: number;
   /** Scene clock time of the last status change, or -1. */
   flashAt: number;
   /** The orbiting spark's angle and the pulse's phase, advanced by their eased speeds each frame. */
@@ -166,6 +172,8 @@ type EdgeObject = {
   ribbon: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   arrow: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   color: THREE.Color;
+  /** 1 in focus, easing toward `DIM_EDGE` while outside the hovered chain. */
+  alpha: number;
   /** Scene clock time the source finished, or -1. */
   burstAt: number;
   /** How far dashes and particles have moved along, in world units. */
@@ -232,6 +240,9 @@ export class GraphScene {
   private nodes = new Map<string, NodeObject>();
   private edges = new Map<string, EdgeObject>();
   private edgeList: GraphEdge[] = [];
+  /** The hovered node's dependency chain, or null when nothing is hovered. */
+  private hovered: string | null = null;
+  private chain: Set<string> | null = null;
   private look: Look | null = null;
   private view = { x: 0, y: 0, zoom: 1 };
   private size = { w: 1, h: 1 };
@@ -289,6 +300,7 @@ export class GraphScene {
     this.listen(host, "pointermove", this.onPointerMove);
     this.listen(host, "pointerup", this.onPointerUp);
     this.listen(host, "pointercancel", this.onPointerCancel);
+    this.listen(host, "pointerleave", () => this.setHover(null));
     this.listen(host, "wheel", this.onWheel, { passive: false });
     this.listen(host, "dblclick", () => this.fit());
     const onVisibility = () => {
@@ -393,7 +405,19 @@ export class GraphScene {
       if (finishedNow.has(edge.from)) edge.burstAt = this.clock;
       this.styleEdge(edge);
     }
+    if (this.hovered && !this.nodes.has(this.hovered)) this.hovered = null;
+    this.chain = this.hovered
+      ? dependencyChain(this.hovered, this.edgeList)
+      : null;
     this.rebuildEdges();
+    this.requestRender();
+  }
+
+  /** Traces a node's whole dependency chain and dims the rest; null clears it. */
+  private setHover(id: string | null) {
+    if (id === this.hovered) return;
+    this.hovered = id;
+    this.chain = id ? dependencyChain(id, this.edgeList) : null;
     this.requestRender();
   }
 
@@ -536,6 +560,7 @@ export class GraphScene {
       eased: Object.fromEntries(
         easedKeys.map((key) => [key, style[key]]),
       ) as Eased,
+      alpha: 1,
       flashAt: -1,
       phase: 0,
       beat: 0,
@@ -589,6 +614,7 @@ export class GraphScene {
       ribbon,
       arrow,
       color: this.edgeColor(edge.from).clone(),
+      alpha: 1,
       burstAt: -1,
       shift: 0,
     };
@@ -631,7 +657,6 @@ export class GraphScene {
       setBlend(mesh.material, look.light);
     }
     edge.ribbon.material.uniforms.uDashed.value = satisfied ? 0 : 1;
-    edge.arrow.material.uniforms.uAlpha.value = satisfied ? 0.7 : 0.9;
   }
 
   /** Recomputes every edge's curve from the current node positions. */
@@ -788,6 +813,12 @@ export class GraphScene {
       if (node.flashAt >= 0 && this.clock - node.flashAt > FLASH_SECONDS)
         node.flashAt = -1;
       const u = node.mesh.material.uniforms;
+      node.alpha +=
+        ((this.chain && !this.chain.has(node.data.id) ? DIM_NODE : 1) -
+          node.alpha) *
+        ease(dt, 8);
+      u.uAlpha.value = node.alpha;
+      node.label.style.opacity = node.alpha < 0.999 ? `${node.alpha}` : "";
       u.uColor.value.copy(node.color);
       u.uTime.value = time;
       u.uGlowK.value = this.glow;
@@ -815,11 +846,17 @@ export class GraphScene {
       if (!source || !target) continue;
       const satisfied = source === "done";
       edge.color.lerp(this.edgeColor(edge.from), ease(dt, 5));
+      const related =
+        !this.chain || (this.chain.has(edge.from) && this.chain.has(edge.to));
+      edge.alpha += ((related ? 1 : DIM_EDGE) - edge.alpha) * ease(dt, 8);
       if (edge.burstAt >= 0 && this.clock - edge.burstAt > BURST_SECONDS)
         edge.burstAt = -1;
       const u = edge.ribbon.material.uniforms;
       u.uColor.value.copy(edge.color);
+      u.uAlpha.value = edge.alpha;
       edge.arrow.material.uniforms.uColor.value.copy(edge.color);
+      edge.arrow.material.uniforms.uAlpha.value =
+        (satisfied ? 0.7 : 0.9) * edge.alpha;
       // Dashes crawl, and run faster out of a card that is being worked on.
       const speed = satisfied
         ? 55
@@ -926,7 +963,9 @@ export class GraphScene {
       return;
     }
     const p = this.local(event);
-    this.host.style.cursor = this.nodeAt(p.x, p.y) ? "pointer" : "grab";
+    const node = this.nodeAt(p.x, p.y);
+    this.host.style.cursor = node ? "pointer" : "grab";
+    this.setHover(node?.data.id ?? null);
   };
 
   private onPointerUp = (event: PointerEvent) => {

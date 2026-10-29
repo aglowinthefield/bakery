@@ -116,6 +116,37 @@ export function visibleCards(cards: Card[], done: DoneFilter = "relevant") {
   );
 }
 
+/**
+ * A node's whole dependency chain: `id`, everything it depends on directly or
+ * through others, and everything that depends on it the same way.
+ */
+export function dependencyChain(id: string, edges: GraphEdge[]): Set<string> {
+  const chain = new Set([id]);
+  const walk = (from: keyof GraphEdge, to: keyof GraphEdge) => {
+    const stack = [id];
+    while (stack.length) {
+      const current = stack.pop();
+      for (const edge of edges)
+        if (edge[from] === current && !chain.has(edge[to])) {
+          chain.add(edge[to]);
+          stack.push(edge[to]);
+        }
+    }
+  };
+  walk("to", "from");
+  walk("from", "to");
+  return chain;
+}
+
+/** How many nodes are in each drawing state; states with none are left out. */
+export function stateCounts(
+  nodes: GraphNode[],
+): Partial<Record<VisualState, number>> {
+  const counts: Partial<Record<VisualState, number>> = {};
+  for (const node of nodes) counts[node.state] = (counts[node.state] ?? 0) + 1;
+  return counts;
+}
+
 /** Nodes and dependency edges (dependency → dependent). Edges to cards that are missing or filtered out are dropped. */
 export function buildGraph(
   cards: Card[],

@@ -1565,10 +1565,7 @@ export function App() {
           <Visualizer
             cards={cards}
             loaded={loadedBoard === boardId}
-            onOpenCard={(id) => {
-              openBoard(boardId);
-              setSelected(id);
-            }}
+            onOpenCard={setSelected}
           />
         </main>
       )}
