@@ -3,7 +3,7 @@ import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, parsePriority } from "./board.js";
 import { buildStats } from "./stats.js";
@@ -122,7 +122,7 @@ const server = createServer(async (req, res) => {
         if (autoReview.activeCardId) cardIds.add(autoReview.activeCardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0, cards });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0, cards });
       return;
     }
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }

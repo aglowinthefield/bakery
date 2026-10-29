@@ -104,6 +104,17 @@ import { UpdateNotice } from "./update-notice.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
+// The machine the server runs on: repositories and merges live on its disk.
+function ServerHost() {
+  const [host, setHost] = useState("");
+  useEffect(() => {
+    void api<{ hostname?: string }>("/status")
+      .then((status) => setHost(status.hostname ?? ""))
+      .catch(() => {});
+  }, []);
+  return <span data-testid="server-host">{host || "Bakery"}</span>;
+}
+
 function filterCards(cards: Card[], query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return cards;
@@ -1410,8 +1421,8 @@ export function App() {
         </div>
         <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
           <div className="flex items-center gap-2 text-[length:var(--text-sidebar-meta)] text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-status-review" /> Local
-            only <span className="ml-auto font-mono">v0.1</span>
+            <span className="size-1.5 rounded-full bg-status-review" />{" "}
+            <ServerHost /> <span className="ml-auto font-mono">v0.1</span>
           </div>
         </div>
       </aside>
@@ -1708,13 +1719,16 @@ export function App() {
               onClick={() => {
                 const target = currentBoard;
                 void action(async () => {
-                  const updated = await api<Board>(`/boards/${target.id}/settings`, {
-                    method: "PATCH",
-                    body: JSON.stringify({
-                      autoPickupEnabled: true,
-                      pickupConcurrency: target.pickupConcurrency,
-                    }),
-                  });
+                  const updated = await api<Board>(
+                    `/boards/${target.id}/settings`,
+                    {
+                      method: "PATCH",
+                      body: JSON.stringify({
+                        autoPickupEnabled: true,
+                        pickupConcurrency: target.pickupConcurrency,
+                      }),
+                    },
+                  );
                   updateBoard(updated);
                 });
               }}
@@ -2030,7 +2044,9 @@ export function App() {
                                 {markdownToPlainText(item.body) ||
                                   "No description yet."}
                               </p>
-                              {(item.runAgent || item.reviewAgent || item.planOnly) && (
+                              {(item.runAgent ||
+                                item.reviewAgent ||
+                                item.planOnly) && (
                                 <div className="mt-3 flex flex-wrap gap-1">
                                   {item.planOnly && (
                                     <span
@@ -2454,7 +2470,13 @@ export function App() {
                       onClick={() => setIconDraft(name)}
                       className={`grid size-9 place-items-center rounded-md border cursor-pointer ${iconDraft === name ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
                     >
-                      <img src={`/icons/${name}.png`} width={20} height={20} alt="" className="object-contain" />
+                      <img
+                        src={`/icons/${name}.png`}
+                        width={20}
+                        height={20}
+                        alt=""
+                        className="object-contain"
+                      />
                     </button>
                   );
                 })}
