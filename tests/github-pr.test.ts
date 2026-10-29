@@ -1167,6 +1167,7 @@ test("github-pr: a manual start is refused while the card waits on GitHub CI", a
     try { assert.equal((after.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(card.id) as { n: number }).n, runs, "no new run started"); }
     finally { after.close(); }
   } finally { child?.kill(); f.cleanup(); }
+});
 
 test("sync: a failed fetch is a warning that keeps pickup running until it lasts past the grace period", async () => {
   const f = fixture();
