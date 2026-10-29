@@ -475,12 +475,19 @@ const draining = { on: false };
 const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
-process.on("message", (message: unknown) => {
-  if ((message as { type?: unknown } | null)?.type !== "drain") return;
+const startDrain = (onDrained: () => void) => {
+  if (draining.on) return;
   draining.on = true;
   autoPickup.shutdown();
   // Agent reviews count too: a restart would kill the reviewer mid-review.
   process.send?.({ type: "draining", activeRuns: worker.activeCount + (autoReview.active ? 1 : 0) });
-  void Promise.all([worker.drain(), autoReview.drain()]).then(() => process.send?.({ type: "drained" }));
+  void Promise.all([worker.drain(), autoReview.drain()]).then(onDrained);
+};
+process.on("message", (message: unknown) => {
+  if ((message as { type?: unknown } | null)?.type !== "drain") return;
+  startDrain(() => process.send?.({ type: "drained" }));
 });
+// Without the supervisor (npm start under systemd), SIGUSR2 drains and then exits so the service manager restarts
+// the server with whatever is on disk. scripts/update.sh sends it after pulling.
+process.on("SIGUSR2", () => { console.log("Update requested: draining active runs, then exiting."); startDrain(() => shutdown("SIGTERM")); });
 process.once("SIGINT", () => shutdown("SIGINT")); process.once("SIGTERM", () => shutdown("SIGTERM"));
