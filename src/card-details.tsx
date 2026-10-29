@@ -102,6 +102,8 @@ export function CardDetails({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [prDialog, setPrDialog] = useState(false);
+  // A PR draft already started for this diff (before a close or refresh): the button reopens it.
+  const [draftStarted, setDraftStarted] = useState(false);
   const [reload, setReload] = useState(0);
   const refresh = () => {
     setReload((value) => value + 1);
@@ -209,6 +211,20 @@ export function CardDetails({
     };
   }, [boardId, cardId, loadedFingerprint]);
   const currentReview = review?.cardId === cardId ? review : null;
+  const reviewFingerprint = currentReview?.fingerprint;
+  useEffect(() => {
+    setDraftStarted(false);
+    if (!cardId || !reviewFingerprint || !boardId) return;
+    let current = true;
+    api<{ fingerprint: string | null }>(`/boards/${boardId}/cards/${cardId}/pr-draft`)
+      .then((job) => {
+        if (current) setDraftStarted(job.fingerprint === reviewFingerprint);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [boardId, cardId, reviewFingerprint]);
   const currentComments = comments.filter((item) => item.cardId === cardId);
   const reviewEntries = [...runs]
     .sort((a, b) => b.attempt - a.attempt)
@@ -1020,7 +1036,9 @@ export function CardDetails({
                 {integration === "github-pr" && card.prState === "OPEN"
                   ? `Approve and update PR #${card.prNumber}`
                   : integration === "github-pr"
-                    ? "Approve and open PR"
+                    ? draftStarted
+                      ? "Reopen PR draft"
+                      : "Approve and open PR"
                     : "Approve and merge into local main"}
               </Button>
             )}
@@ -1032,7 +1050,10 @@ export function CardDetails({
                 open={prDialog}
                 busy={busy}
                 submitError={error}
-                onOpenChange={setPrDialog}
+                onOpenChange={(open) => {
+                  setPrDialog(open);
+                  if (open) setDraftStarted(true);
+                }}
                 onSubmit={(title, body) => {
                   onConflict(null);
                   void action(() =>
