@@ -46,6 +46,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       }
     }
     assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
+    // The Logs view: the server's own output, including a debug line for each failed request.
+    assert.equal((await request("/logs?after=x")).status, 400);
+    const logs = (await request("/logs")).data as { startedAt: string; entries: { seq: number; level: string; message: string }[] };
+    assert.ok(logs.entries.some(entry => entry.level === "info" && entry.message === `Bakery listening on http://127.0.0.1:${port}`));
+    assert.ok(logs.entries.some(entry => entry.level === "debug" && entry.message === "GET /api/logs?after=x -> 400: after must be a whole number"));
+    assert.deepEqual((await request(`/logs?after=${logs.entries.at(-1)!.seq}`)).data.entries, []);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Fal")).data, ["~/code/alpha/", "~/code/alpine/"]);
     assert.deepEqual((await request(`/path-suggestions?path=${encodeURIComponent(join(home, "code") + "/al")}`)).data, [alpha + "/", join(home, "code", "alpine") + "/"]);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Falpha%2F")).data, ["~/code/alpha/subfolder/"]);

@@ -19,6 +19,11 @@ import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
+import { LogBuffer } from "./logs.js";
+
+// The Logs view reads this process's console output from here.
+const logs = new LogBuffer();
+logs.captureConsole();
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -124,6 +129,11 @@ const server = createServer(async (req, res) => {
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
       send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0, cards });
       return;
+    }
+    if (path === "/api/logs" && req.method === "GET") {
+      const after = Number(new URL(req.url ?? "/", "http://localhost").searchParams.get("after") ?? 0);
+      if (!Number.isInteger(after) || after < 0) throw new Error("after must be a whole number");
+      send(res, 200, { startedAt: logs.startedAt, entries: logs.since(after) }); return;
     }
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
@@ -460,7 +470,9 @@ const server = createServer(async (req, res) => {
       return;
     }
     const message = error instanceof Error ? error.message : "Unknown error";
-    send(res, /not found/i.test(message) ? 404 : 400, { error: message });
+    const status = /not found/i.test(message) ? 404 : 400;
+    console.debug(`${req.method} ${req.url} -> ${status}: ${message}`);
+    send(res, status, { error: message });
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });

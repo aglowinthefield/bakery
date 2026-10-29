@@ -361,6 +361,8 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 `BAKERY_HOST` is the bind address (prefer the tailnet IP). `BAKERY_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `BAKERY_URL=http://mochi:4317 BAKERY_ALLOW_REMOTE=1 bakery-cli ...` reaches it. Repository paths and merges are on the server's disk.
 
+**Logs** in the sidebar (`g l`) shows the server's own console output: warnings, errors, and a debug line for each API request that fails. It keeps the last 2,000 lines in memory and starts empty after a restart. For older output, read the service manager's log, for example `journalctl --user -u bakery`.
+
 ### Keeping a hosted server up to date
 
 `npm start` has no file watcher. `scripts/update.sh` pulls `origin/main`, installs, builds the UI, then sends the server `SIGUSR2`. The server refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`.

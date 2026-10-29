@@ -30,6 +30,7 @@ import {
   Settings2,
   Sun,
   BarChart3,
+  ScrollText,
   Globe2,
   ExternalLink,
   Github,
@@ -98,7 +99,8 @@ import {
   type Status,
   waitingOn,
 } from "./model.js";
-import { formatRoute, parseRoute } from "./route.js";
+import { formatRoute, parseRoute, type RouteView } from "./route.js";
+import { Logs } from "./logs.js";
 import { themeNames, themes } from "./themes.js";
 import { UpdateNotice } from "./update-notice.js";
 
@@ -526,16 +528,16 @@ export function App() {
   /** The board whose cards `cards` holds; null until its first fetch lands, so an unloaded board is not shown as empty. */
   const [loadedBoard, setLoadedBoard] = useState<string | null>(null);
   // Today is the landing page until you pick a board; the last choice persists.
-  const [view, setView] = useState<"today" | "board" | "pulls" | "stats">(
-    () => {
-      if (initialRoute) return initialRoute.view;
-      const saved =
-        readTab("bakery-view") ?? localStorage.getItem("bakery-view");
-      return saved === "board" || saved === "pulls" || saved === "stats"
-        ? saved
-        : "today";
-    },
-  );
+  const [view, setView] = useState<RouteView>(() => {
+    if (initialRoute) return initialRoute.view;
+    const saved = readTab("bakery-view") ?? localStorage.getItem("bakery-view");
+    return saved === "board" ||
+      saved === "pulls" ||
+      saved === "stats" ||
+      saved === "logs"
+      ? saved
+      : "today";
+  });
   const [reposCollapsed, setReposCollapsed] = useState(
     () => localStorage.getItem("bakery-repos-collapsed") === "true",
   );
@@ -637,7 +639,7 @@ export function App() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const shortcutState = useRef({
     canCreate: false,
-    open: (_view: "today" | "board" | "pulls" | "stats") => {},
+    open: (_view: RouteView) => {},
     create: () => {},
   });
   const [leaderPending, setLeaderPending] = useState(false);
@@ -680,6 +682,7 @@ export function App() {
           b: "board",
           p: "pulls",
           s: "stats",
+          l: "logs",
         } as const;
         if (key in views) {
           event.preventDefault();
@@ -875,7 +878,7 @@ export function App() {
     canCreate: !!boardId && view === "board",
     open: (next) => {
       if (next === "today") openToday();
-      else if (next === "stats") openStats();
+      else if (next === "stats" || next === "logs") openPage(next);
       else if (boardId)
         next === "pulls" ? openPulls(boardId) : openBoard(boardId);
     },
@@ -888,9 +891,9 @@ export function App() {
     setView("pulls");
     localStorage.setItem("bakery-view", "pulls");
   };
-  const openStats = () => {
-    setView("stats");
-    localStorage.setItem("bakery-view", "stats");
+  const openPage = (page: "stats" | "logs") => {
+    setView(page);
+    localStorage.setItem("bakery-view", page);
     restoreCard.current = null;
     setSelected(null);
   };
@@ -1401,12 +1404,20 @@ export function App() {
             </Button>
           </div>
           <button
-            onClick={openStats}
+            onClick={() => openPage("stats")}
             aria-current={view === "stats" ? "page" : undefined}
             className={`mt-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50" : "hover:bg-accent/30"}`}
           >
             <BarChart3 size={16} aria-hidden="true" className="text-primary" />
             Statistics
+          </button>
+          <button
+            onClick={() => openPage("logs")}
+            aria-current={view === "logs" ? "page" : undefined}
+            className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "logs" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+          >
+            <ScrollText size={16} aria-hidden="true" className="text-primary" />
+            Logs
           </button>
           <Button
             variant="ghost"
@@ -1454,6 +1465,11 @@ export function App() {
           <Statistics boards={boards} />
         </main>
       )}
+      {view === "logs" && (
+        <main className="min-w-0 flex-1">
+          <Logs />
+        </main>
+      )}
       {view === "pulls" &&
         boardId &&
         currentBoard &&
@@ -1482,6 +1498,7 @@ export function App() {
         hidden={
           view === "today" ||
           view === "stats" ||
+          view === "logs" ||
           (view === "pulls" &&
             !!currentBoard &&
             supportsPullRequests(currentBoard))
@@ -3308,6 +3325,7 @@ const shortcutList: [string, string][] = [
   ["g b", "Go to Board"],
   ["g p", "Go to Pull requests"],
   ["g s", "Go to Statistics"],
+  ["g l", "Go to Logs"],
   ["⌘ Enter", "Create or save card in the form"],
   ["?", "Show or hide this cheat sheet"],
 ];

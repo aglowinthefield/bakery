@@ -5,6 +5,7 @@ import { formatRoute, parseRoute, type Route } from "../src/route.js";
 const routes: Route[] = [
   { view: "today", boardId: null, cardId: null },
   { view: "stats", boardId: null, cardId: null },
+  { view: "logs", boardId: null, cardId: null },
   { view: "board", boardId: "b1", cardId: null },
   { view: "pulls", boardId: "b1", cardId: null },
   { view: "board", boardId: "b 1", cardId: "c/2" },
