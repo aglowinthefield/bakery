@@ -70,7 +70,9 @@ import { needsYouStatuses, reviewOrder, Today } from "./today.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
+  repoColorVar,
   repoIcons,
+  repoTint,
   repoName,
   type RepoColor,
   type RepoIcon,
@@ -2460,6 +2462,8 @@ export function App() {
                 aria-label="Repository icon"
               >
                 {repoIcons.map((name) => {
+                  // Each tile previews the icon on the chosen color's badge background.
+                  const color = repoColorVar(colorDraft);
                   return (
                     <button
                       key={name}
@@ -2468,7 +2472,13 @@ export function App() {
                       aria-label={`Icon: ${name.replaceAll("_", " ")}`}
                       aria-pressed={iconDraft === name}
                       onClick={() => setIconDraft(name)}
-                      className={`grid size-9 place-items-center rounded-md border cursor-pointer ${iconDraft === name ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+                      style={{
+                        backgroundColor: repoTint(color),
+                        borderColor: iconDraft === name ? color : "transparent",
+                        boxShadow:
+                          iconDraft === name ? `0 0 0 1px ${color}` : undefined,
+                      }}
+                      className={`grid size-9 place-items-center rounded-md border cursor-pointer ${iconDraft === name ? "" : "opacity-70 hover:opacity-100"}`}
                     >
                       <img
                         src={`/icons/${name}.png`}
