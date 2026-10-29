@@ -367,7 +367,11 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
-        if (req.method === "POST" && action === "start") { send(res, 202, worker.start(item)); return; }
+        if (req.method === "POST" && action === "start") {
+          // During a restart drain, remember the start and replay it once the new server is up.
+          if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
+          send(res, 202, worker.start(item)); return;
+        }
         if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);
           if (repoBoard.integration !== "github-pr") throw new Error("This board merges locally; it opens no pull request");
@@ -445,6 +449,12 @@ const server = createServer(async (req, res) => {
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
 server.listen(port, "127.0.0.1", () => { console.log(`Bakery listening on http://127.0.0.1:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
+  // Starts queued while the previous server drained for a restart.
+  for (const cardId of board.takeQueuedStarts()) {
+    const card = board.getCard(cardId);
+    if (!card || ["triage", "running", "done", "archived"].includes(card.status)) continue;
+    try { worker.start(card); } catch (error) { console.error(`Queued start for card ${cardId} failed: ${error instanceof Error ? error.message : error}`); }
+  }
   // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
   // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
   for (const item of board.listBoards().filter(item => item.githubMainProtected === null && item.remoteUrl))
