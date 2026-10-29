@@ -361,11 +361,13 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 `BAKERY_HOST` is the bind address (prefer the tailnet IP). `BAKERY_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `BAKERY_URL=http://mochi:4317 BAKERY_ALLOW_REMOTE=1 bakery-cli ...` reaches it. Repository paths and merges are on the server's disk.
 
+**Logs** in the sidebar (`g l`) shows the server's own console output: warnings, errors, and a debug line for each API request that fails. It keeps the last 2,000 lines in memory and starts empty after a restart. For older output, read the service manager's log, for example `journalctl --user -u bakery`.
+
 ### Keeping a hosted server up to date
 
-`npm start` has no file watcher. `scripts/update.sh` pulls `origin/main`, installs, builds the UI, then sends the server `SIGUSR2`. The server refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`.
+`npm start` has no file watcher. `deploy/bakery-update.service` and `deploy/bakery-update.timer` run `scripts/update.sh` every 2 minutes, which only fetches `origin/main`. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
 
-`deploy/bakery-update.service` and `deploy/bakery-update.timer` run the script every 15 minutes. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
+When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. While no run or review is active, it installs pending updates by itself within 30 seconds. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
 
 ## Safety
 

@@ -26,7 +26,6 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let cards = [card("idea", "triage"), card("queued", "ready"), card("shipped", "done", 1), card("busy", "review", 1)];
     const requests: string[] = [];
     await page.route("**/api/**", async route => {
@@ -52,7 +51,7 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     const lane = (status: string) => page.locator(`section[data-status="${status}"]`);
     const tile = (name: string) => page.getByRole("button", { name: new RegExp(`${name} card`) });
     await tile("idea").waitFor();

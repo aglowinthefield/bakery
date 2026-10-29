@@ -8,8 +8,6 @@ test("Review notifications require opt-in and a newly observed status change", a
   await server.listen();
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   let notifyOnReview = false;
   let polls = 0;
   const statuses: Record<string, string> = { existing: "review", changing: "running" };
@@ -43,7 +41,7 @@ test("Review notifications require opt-in and a newly observed status change", a
   });
   const notices = () => page.evaluate(() => (window as unknown as { notices: { title: string; body: string }[] }).notices.map(({ title, body }) => ({ title, body })));
   try {
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await installNotifications();
     await page.getByRole("button", { name: /changing card/ }).waitFor();
     await page.getByRole("button", { name: "Settings" }).click();

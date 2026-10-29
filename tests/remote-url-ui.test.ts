@@ -10,8 +10,6 @@ test("remote repository link is saved in repository settings and listed below th
     await server.listen();
     browser = await chromium.launch();
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let board = { id: "board", repo: "/tmp/example", icon: "sprinkle_donut", color: "violet", remoteUrl: "", autoCollapseEmptySwimlanes: false, verificationCommand: "" };
     const patches: unknown[] = [];
     await page.route("**/api/**", async route => {
@@ -30,7 +28,7 @@ test("remote repository link is saved in repository settings and listed below th
       else if (path === "/api/status") await route.fulfill({ json: { draining: false, activeRuns: 0 } });
       else throw new Error(`Unexpected API request: ${path}`);
     });
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await page.locator("header h1").filter({ hasText: "example" }).waitFor();
     const link = page.locator("header").getByRole("link", { name: "Remote repository" });
     assert.equal(await link.count(), 0);

@@ -22,8 +22,6 @@ async function openAttempts() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"], viewport: { width: 390, height: 800 } });
   const page = await context.newPage();
-  // These tests cover the board, not the Today landing page.
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   await page.route("**/api/**", route => {
     const path = new URL(route.request().url()).pathname;
     const data = path === "/api/boards" ? [{ id: "board", repo: "/Users/example/projects/repo" }]
@@ -34,7 +32,7 @@ async function openAttempts() {
       : [];
     return route.fulfill({ json: data });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/`);
+  await page.goto(`http://127.0.0.1:${address.port}/board/board`);
   await page.getByRole("button", { name: /Copy a path/ }).click();
   await page.getByRole("tab", { name: /^Attempts/ }).click();
   await page.getByRole("heading", { name: "Attempts" }).waitFor();

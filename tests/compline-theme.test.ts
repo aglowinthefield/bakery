@@ -11,8 +11,6 @@ test("Settings switches between the preserved default and Compline after reload"
     await server.listen();
     browser = await chromium.launch();
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     let theme: "default" | "compline" = "default";
     let delaySettings = false;
     const settingsReady = new Promise<void>((resolve) => { releaseSettings = resolve; });
@@ -34,6 +32,8 @@ test("Settings switches between the preserved default and Compline after reload"
         await route.fulfill({ json: null });
       } else if (path.endsWith("/approval")) {
         await route.fulfill({ json: { pending: false } });
+      } else if (path.endsWith("/pr-draft")) {
+        await route.fulfill({ json: { startedAt: 0, steps: [], fingerprint: null } });
       } else if (path.endsWith("/review")) {
         await route.fulfill({ json: { fingerprint: "a".repeat(64), files: [{ path: "src/example.ts", patch: "@@ -1 +1 @@\n-old\n+new\n" }] } });
       } else if (path === "/api/status") {
@@ -42,7 +42,7 @@ test("Settings switches between the preserved default and Compline after reload"
         assert.fail(`Unexpected API request: ${path}`);
       }
     });
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await page.getByRole("button", { name: "Settings" }).click();
     const dialog = page.getByRole("dialog");
     assert.equal(await dialog.getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).isChecked(), true);
@@ -74,7 +74,7 @@ test("Settings switches between the preserved default and Compline after reload"
     assert.equal(await dialog.getByRole("radio", { name: "Compline" }).evaluate((el) => getComputedStyle(el).outlineColor), "rgb(180, 188, 196)");
     await dialog.getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(180, 196, 188)");
     const added = page.locator('[data-line][data-line-type="change-addition"]');
     const removed = page.locator('[data-line][data-line-type="change-deletion"]');

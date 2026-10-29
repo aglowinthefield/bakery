@@ -8,7 +8,6 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
   await server.listen();
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   const recent = new Date().toISOString(), stale = new Date(Date.now() - 12 * 60_000).toISOString();
   const cards: Record<string, Record<string, unknown>> = {
     mine: { status: "review", reviewWait: null },
@@ -33,7 +32,7 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
   const notices = () => page.evaluate(() => (window as unknown as { notices: string[] }).notices);
   const tile = (id: string) => page.getByRole("button", { name: new RegExp(`${id} card`) });
   try {
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await page.evaluate(`
       window.notices = [];
       window.Notification = class {

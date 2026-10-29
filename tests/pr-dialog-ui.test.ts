@@ -9,8 +9,6 @@ test("github-pr Approve shows the drafted PR, flags a title the semantic check r
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     const fingerprint = "a".repeat(64);
     const sent: { path: string; body: unknown }[] = [];
     await page.route("**/api/**", async route => {
@@ -33,9 +31,9 @@ test("github-pr Approve shows the drafted PR, flags a title the semantic check r
       if (!(path in data)) return route.fulfill({ json: [] });
       await route.fulfill({ json: data[path] });
     });
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await page.getByRole("button", { name: /Review card/ }).click();
-    await page.getByRole("tab", { name: /^Reviews/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.getByText("Changed files (1)").waitFor();
     await page.getByRole("button", { name: "Approve and open PR" }).click();
     const dialog = page.getByRole("dialog", { name: "Open pull request" });

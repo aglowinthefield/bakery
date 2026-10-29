@@ -20,7 +20,6 @@ const card = (id: string, title: string, status: string) =>
 
 test("a reviewed run with no diff shows its report as markdown findings and offers Accept findings instead of Approve", async () => {
   const page = await browser.newPage();
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
   const fingerprint = "a".repeat(64);
   let accepted: unknown = null;
   await page.route("**/api/**", async route => {
@@ -41,7 +40,7 @@ test("a reviewed run with no diff shows its report as markdown findings and offe
     await route.fulfill({ json: path in data ? data[path] : [] });
   });
   try {
-    await page.goto(url);
+    await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: /Research card/ }).click();
     const findings = page.getByRole("region", { name: "Findings" });
     await findings.waitFor();

@@ -2,52 +2,129 @@ import { useEffect, useState } from "react";
 import { api } from "./api.js";
 
 type WaitingCard = { id: string; title: string; repo: string };
-type Status = { draining: boolean; activeRuns: number; cards?: WaitingCard[] };
+type Updates = {
+  commits: { sha: string; subject: string }[];
+  installing: boolean;
+  error: string | null;
+};
+type Status = {
+  draining: boolean;
+  activeRuns: number;
+  cards?: WaitingCard[];
+  updates?: Updates | null;
+};
 
-// Bottom-left notice while the server waits for active runs to finish before it restarts to load merged code.
-export function UpdateNotice({ onOpenCard }: { onOpenCard?: (card: WaitingCard) => void }) {
+const runs = (count: number) => `${count} active run${count === 1 ? "" : "s"}`;
+
+// Bottom-left notice for server updates: the pending commits as a changelog with a button to install them, then
+// the wait for active runs to finish before the server restarts to load the new code.
+export function UpdateNotice({
+  onOpenCard,
+}: {
+  onOpenCard?: (card: WaitingCard) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [down, setDown] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
   useEffect(() => {
-    let wasDraining = false;
+    let restarting = false;
     const poll = () =>
       api<Status>("/status")
         .then((next) => {
-          wasDraining = next.draining;
+          restarting = next.draining || !!next.updates?.installing;
           setStatus(next);
           setDown(false);
         })
-        .catch(() => setDown(wasDraining));
+        .catch(() => setDown(restarting));
     void poll();
     const timer = setInterval(poll, 3000);
     return () => clearInterval(timer);
   }, []);
-  if (!down && !status?.draining) return null;
+  const updates = status?.updates;
+  const pending =
+    !down &&
+    !status?.draining &&
+    !updates?.installing &&
+    (updates?.commits.length ?? 0) > 0;
+  if (!down && !status?.draining && !updates?.installing && !pending)
+    return null;
+  const install = () => {
+    setRequestError(null);
+    api<Updates>("/update", { method: "POST" })
+      .then((next) =>
+        setStatus((previous) => previous && { ...previous, updates: next }),
+      )
+      .catch((error: Error) => setRequestError(error.message));
+  };
+  const count = updates?.commits.length ?? 0;
   const text = down
     ? "Restarting to load updates…"
-    : status!.activeRuns > 0
-      ? `Update ready. Waiting for ${status!.activeRuns} active run${status!.activeRuns === 1 ? "" : "s"} to finish. New runs are paused.`
-      : "Update ready. Restarting…";
-  const cards = down ? [] : (status?.cards ?? []);
+    : status!.draining
+      ? status!.activeRuns > 0
+        ? `Update ready. Waiting for ${runs(status!.activeRuns)} to finish. New runs are paused.`
+        : "Update ready. Restarting…"
+      : updates!.installing
+        ? "Installing update…"
+        : `${count} update${count === 1 ? "" : "s"} available`;
+  const cards = down || !status?.draining ? [] : (status.cards ?? []);
+  const expandable = pending || cards.length > 0;
+  const error = requestError ?? updates?.error;
   return (
     <div
       role="status"
-      className="fixed bottom-3 left-3 z-50 lg:bottom-20 max-w-64 rounded-md border border-border bg-card text-xs text-muted-foreground shadow-md"
+      className="fixed bottom-3 left-3 z-50 lg:bottom-20 max-w-72 rounded-md border border-border bg-card text-xs text-muted-foreground shadow-md"
     >
       <button
         type="button"
         data-testid="update-notice-toggle"
-        aria-expanded={cards.length > 0 ? open : undefined}
-        disabled={cards.length === 0}
+        aria-expanded={expandable ? open : undefined}
+        disabled={!expandable}
         onClick={() => setOpen((value) => !value)}
         className="w-full px-3 py-2 text-left enabled:cursor-pointer enabled:hover:text-foreground"
       >
         <span className="mr-2 inline-block size-1.5 animate-pulse rounded-full bg-status-review align-middle" />
         {text}
       </button>
+      {pending && error && (
+        <p className="border-t border-border px-3 py-2 whitespace-pre-wrap text-destructive">
+          Update failed: {error}
+        </p>
+      )}
+      {open && pending && (
+        <div
+          data-testid="update-notice-changelog"
+          className="border-t border-border"
+        >
+          <ul className="max-h-48 overflow-y-auto px-3 py-2">
+            {updates!.commits.map((commit) => (
+              <li key={commit.sha} className="truncate" title={commit.subject}>
+                <span className="mr-2 font-mono opacity-60">{commit.sha}</span>
+                {commit.subject}
+              </li>
+            ))}
+          </ul>
+          <div className="border-t border-border px-3 py-2">
+            <button
+              type="button"
+              onClick={install}
+              className="cursor-pointer rounded border border-border px-2 py-1 text-foreground hover:bg-accent"
+            >
+              Update and restart
+            </button>
+            <p className="mt-1">
+              {status!.activeRuns > 0
+                ? `Restarts after ${runs(status!.activeRuns)} finish.`
+                : "Installs by itself while nothing is running."}
+            </p>
+          </div>
+        </div>
+      )}
       {open && cards.length > 0 && (
-        <ul data-testid="update-notice-cards" className="border-t border-border px-1 py-1">
+        <ul
+          data-testid="update-notice-cards"
+          className="border-t border-border px-1 py-1"
+        >
           {cards.map((card) => (
             <li key={card.id}>
               <button

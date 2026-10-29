@@ -17,7 +17,8 @@ test("commands are untouched off Windows", () => {
 test("on Windows an npm .cmd shim runs its script under node", () => withDir(dir => {
   mkdirSync(join(dir, "node_modules", "pi", "dist"), { recursive: true });
   writeFileSync(join(dir, "node_modules", "pi", "dist", "cli.js"), "");
-  writeFileSync(join(dir, "pi.cmd"), '@ECHO off\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\pi\\dist\\cli.js" %*\r\n');
+  // Named in PATHEXT case: Windows matches extensions case-insensitively, but this test may run on a case-sensitive disk.
+  writeFileSync(join(dir, "pi.CMD"), '@ECHO off\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\pi\\dist\\cli.js" %*\r\n');
   const [file, args] = command("pi", ["--print", "a \"quoted\"\nprompt"], "win32", { PATH: dir, PATHEXT: ".EXE;.CMD" });
   assert.equal(file, process.execPath);
   assert.deepEqual(args, [join(dir, "node_modules", "pi", "dist", "cli.js"), "--print", "a \"quoted\"\nprompt"]);

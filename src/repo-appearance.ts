@@ -21,5 +21,13 @@ export const repoColors = {
 } as const;
 export type RepoColor = keyof typeof repoColors;
 
+/** Theme-aware CSS color for a repo color, falling back to the default hex. */
+export const repoColorVar = (name: RepoColor) =>
+  `var(--repo-${name}, ${repoColors[name]})`;
+
+/** The soft background a repo badge sits on. */
+export const repoTint = (color: string) =>
+  `color-mix(in srgb, ${color} 16%, transparent)`;
+
 /** Last folder of a repository path, whether the server is on POSIX or Windows. */
 export const repoName = (repo: string) => repo.split(/[\\/]/).filter(Boolean).at(-1) ?? repo;

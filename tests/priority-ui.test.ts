@@ -9,8 +9,6 @@ test("lanes sort by priority, non-Normal cards show a badge, and details can cha
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     const card = (id: string, priority: number) => ({ id, title: `${id} card`, body: "", repo: "/tmp/repo", source: "manual", status: "ready", priority,
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: 0, reviewRounds: 0, runAgent: "", reviewAgent: "" });
     // Server order is newest-first; the lane must regroup by priority and keep that order within a priority.
@@ -39,7 +37,7 @@ test("lanes sort by priority, non-Normal cards show a badge, and details can cha
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     const lane = page.locator('section[data-status="ready"]');
     await lane.getByRole("button", { name: /urgent card/ }).waitFor();
     const titles = await lane.getByRole("button", { name: / card/ }).evaluateAll(items => items.map(item => item.textContent ?? ""));

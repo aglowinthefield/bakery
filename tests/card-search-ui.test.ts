@@ -22,8 +22,6 @@ test("search filters cards by title, body, and ID prefix and clears", async () =
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    // These tests cover the board, not the Today landing page.
-    await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       const data: Record<string, unknown> = {
@@ -44,7 +42,7 @@ test("search filters cards by title, body, and ID prefix and clears", async () =
       assert.ok(path in data, `Unexpected API request: ${path}`);
       await route.fulfill({ json: data[path] });
     });
-    await page.goto(server.resolvedUrls!.local[0]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await page.getByRole("button", { name: "repo", exact: true }).click();
     const lanes = page.locator("section[data-status]");
     const shown = (title: string) => lanes.getByText(title, { exact: true });
