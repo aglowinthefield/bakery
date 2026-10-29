@@ -1223,7 +1223,13 @@ export function App() {
   if (!settings && !error) return null;
   return (
     <div className="min-h-screen lg:flex">
-      <UpdateNotice />
+      <UpdateNotice
+        onOpenCard={(card) => {
+          const target = boards.find((item) => item.repo === card.repo);
+          if (target) openBoard(target.id);
+          setSelected(card.id);
+        }}
+      />
       {sidebarHidden && (
         <button
           aria-label="Show sidebar"

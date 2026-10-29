@@ -108,7 +108,17 @@ const server = createServer(async (req, res) => {
       const origin = req.headers.origin;
       if (origin && !["http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
-    if (path === "/api/status" && req.method === "GET") { send(res, 200, { draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0 }); return; }
+    if (path === "/api/status" && req.method === "GET") {
+      // The cards behind the runs still going, so the update notice can say what it is waiting for.
+      const cardIds = new Set<string>();
+      if (draining.on) {
+        for (const runId of worker.activeRunIds) { const run = board.getRun(runId); if (run) cardIds.add(run.cardId); }
+        if (autoReview.activeCardId) cardIds.add(autoReview.activeCardId);
+      }
+      const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
+      send(res, 200, { draining: draining.on, activeRuns: draining.on ? worker.activeCount + (autoReview.active ? 1 : 0) : 0, cards });
+      return;
+    }
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
