@@ -2,7 +2,7 @@
 
 Bakery is a local kanban board that hands coding tasks to Pi agents, one Git worktree per card. Nothing reaches your `main` branch until you approve it.
 
-Bakery never pushes, opens PRs, deploys, or writes to an issue tracker.
+Bakery doesn't push, deploy, or write to an issue tracker unless you turn it on. PRs open only on GitHub pull request boards, and a board can opt in to pushing `main` after each local merge (see [Reviewing and merging](#reviewing-and-merging)).
 
 ```mermaid
 flowchart LR
@@ -149,6 +149,8 @@ flowchart TD
   E -->|no| H[Fast-forward main]
   H --> I[Done]
 ```
+
+In the repository's settings, **Push main to origin after merging** (local-merge boards, off by default) runs `git push origin main` after the fast-forward, for agent-reviewer merges too. If the push fails, the card stays Done and its History says why.
 
 - Manual approval doesn't run tests or CI, and doesn't push.
 - Your own uncommitted edits on `main` stay in place. Git refuses a merge that would overwrite them.
@@ -309,7 +311,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - Lanes without active cards can be collapsed. A board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
 - Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
-- Each repository can have an optional `http` or `https` remote link, such as its GitHub page. Set it with the pencil button next to the repository (Edit repository). It appears below the board heading. Bakery only links to it and never pushes there.
+- Each repository can have an optional `http` or `https` remote link, such as its GitHub page. Set it with the pencil button next to the repository (Edit repository). It appears below the board heading. The link itself is only a link; pushing is the separate opt-in setting below.
 
 ### Pi models
 

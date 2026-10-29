@@ -298,6 +298,10 @@ const server = createServer(async (req, res) => {
           "pickupDailyLimit" in input ? Number(input.pickupDailyLimit) : undefined,
           "pickupCostBudget" in input ? input.pickupCostBudget as number | null : undefined)); return;
       }
+      if ("pushMainAfterMerge" in input) {
+        if (Object.keys(input).length !== 1 || typeof input.pushMainAfterMerge !== "boolean") throw new Error("Update pushMainAfterMerge as a boolean, separately from other board settings");
+        send(res, 200, board.setPushMainAfterMerge(repoBoard.id, input.pushMainAfterMerge)); return;
+      }
       if ("autoReviewEnabled" in input || "verificationCommand" in input) {
         if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
         send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled, input.verificationCommand)); return;

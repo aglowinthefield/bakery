@@ -479,6 +479,19 @@ export class Integration {
     return this.board.acceptFindings(card.id, run.id);
   }
 
+  /** Marks the card Done, then pushes main when the board asks for it. A failed push never undoes the merge; it goes in the card's history. */
+  private completeAndPush(card: Card, runId: string, candidate: string, repo: string): Card {
+    const done = this.board.completeApproval(card.id, runId, candidate);
+    if (!this.board.boardForRepo(card.repo)?.pushMainAfterMerge) return done;
+    try {
+      execFileSync("git", ["-C", repo, "push", "origin", "main"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
+      this.board.noteCard(card.id, "Pushed main to origin after the merge");
+    } catch (error) {
+      const detail = (error as { stderr?: string }).stderr?.trim() || (error instanceof Error ? error.message : String(error));
+      this.board.noteCard(card.id, `Merged into local main, but pushing main to origin failed: ${detail.slice(0, 500)}. Push it yourself.`);
+    }
+    return done;
+  }
   approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const repoBoard = this.board.boardForRepo(card.repo);
@@ -511,7 +524,7 @@ export class Integration {
 
     if (approved.preparedHead && isAncestor(repo, approved.preparedHead, "main")) {
       if (git(repo, "rev-parse", "main") !== approved.preparedHead) throw new Error("Main changed after Bakery merged this card; inspect the result before closing it");
-      return this.board.completeApproval(card.id, run.id, approved.candidate);
+      return this.completeAndPush(card, run.id, approved.candidate, repo);
     }
     if (isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Bakery; inspect main before closing this card");
     const base = git(repo, "rev-parse", "main");
@@ -546,7 +559,7 @@ export class Integration {
       this.board.recordPreparedMerge(card.id, run.id, approved.candidate, merged);
       git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
       // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.
-      return this.board.completeApproval(card.id, run.id, approved.candidate);
+      return this.completeAndPush(card, run.id, approved.candidate, repo);
     } finally {
       // Only remove Bakery's temporary integration checkout. Keep the card worktree on every failure.
       try { git(repo, "worktree", "remove", "--force", scratch); } catch { /* Keep the original error; the scratch path is recoverable. */ }
