@@ -41,6 +41,16 @@ pub fn connection_page(url: &Url) -> bool {
     )
 }
 
+/// `tauri dev` serves the bundled page from a local dev server instead of the app protocol.
+pub fn dev_connection_page(dev_url: Option<&Url>, url: &Url) -> bool {
+    dev_url.is_some_and(|dev| {
+        url.origin() == dev.origin()
+            && matches!(url.path(), "/" | "/index.html")
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
+}
+
 pub fn browser_url(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
         && url.username().is_empty()
@@ -212,6 +222,32 @@ mod tests {
                 "allowed {address}"
             );
         }
+    }
+
+    #[test]
+    fn dev_connection_page_only_allows_the_dev_server_page() {
+        let dev = Url::parse("http://127.0.0.1:1430").unwrap();
+        for address in ["http://127.0.0.1:1430/", "http://127.0.0.1:1430/index.html"] {
+            assert!(
+                dev_connection_page(Some(&dev), &Url::parse(address).unwrap()),
+                "blocked {address}"
+            );
+        }
+        for address in [
+            "http://127.0.0.1:1431/",
+            "http://localhost:1430/",
+            "http://127.0.0.1:1430/remote.html",
+            "http://127.0.0.1:1430/?next=x",
+        ] {
+            assert!(
+                !dev_connection_page(Some(&dev), &Url::parse(address).unwrap()),
+                "allowed {address}"
+            );
+        }
+        assert!(!dev_connection_page(
+            None,
+            &Url::parse("http://127.0.0.1:1430/").unwrap()
+        ));
     }
 
     #[test]

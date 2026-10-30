@@ -174,13 +174,19 @@ fn main() {
         )
         .invoke_handler(tauri::generate_handler![saved_server, connect])
         .setup(|app| {
+            let dev_page = cfg!(debug_assertions)
+                .then(|| app.config().build.dev_url.clone())
+                .flatten();
             let connection =
                 WebviewWindowBuilder::new(app, "connection", WebviewUrl::App("index.html".into()))
                     .title("Connect to Bakery")
                     .inner_size(620.0, 620.0)
                     .min_inner_size(420.0, 560.0)
                     // The privileged window must never become a remote browser.
-                    .on_navigation(server::connection_page)
+                    .on_navigation(move |url| {
+                        server::connection_page(url)
+                            || server::dev_connection_page(dev_page.as_ref(), url)
+                    })
                     .on_new_window(|_, _| NewWindowResponse::Deny)
                     .build()?;
             let handle = app.handle().clone();
