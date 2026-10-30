@@ -341,6 +341,7 @@ A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-c
 - The server listens only on `127.0.0.1` and has no authentication. Don't expose it on a network.
 - Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, `BAKERY_PI_BIN` to use a different `pi` binary, and `BAKERY_WT_BIN` to use a different `wt` binary. Set `BAKERY_WT_BIN=` (empty) to turn off Worktrunk hooks.
 - On Windows, Bakery finds `pi`, `wt` and `gh` through `PATH` and `PATHEXT`, and runs npm's `pi.cmd` shim as `node cli.js`. Repository paths can be `C:\\code\\app` or `~\\code\\app`. Data lives in `%USERPROFILE%\\.local\\share\\bakery`. A run's **Stop** ends Pi but not any processes Pi started. An auto-review verification command runs under `cmd.exe`, so write it for that shell.
+- Files attached to cards and discussion messages live in `<data dir>/attachments/<card id>/`. Deleting an attachment removes its file. Archiving a card or removing its board keeps the files, because both can be undone; delete that directory yourself to reclaim the space.
 - Only one server can own a data directory, which it locks with `server.lock`. If the PID in the lock is no longer running, the next server takes over the lock.
 - **Stop** ends a run and marks it Failed. Runs time out after 30 minutes.
 
