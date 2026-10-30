@@ -11,7 +11,7 @@ The client targets macOS, Windows, and Linux. The Linux native build and smoke t
 3. For HTTP outside loopback, explicitly allow unencrypted HTTP. Use HTTPS if traffic is not already protected by your private network.
 4. Click **Connect**. The client checks `/api/status` and confirms that the root serves HTML before opening the server.
 
-The client remembers the last validated address. It does not automatically reconnect on launch. Use **Bakery > Connection settings** (`Cmd/Ctrl+,`) to switch servers, **Reload Bakery** (`Cmd/Ctrl+R`) to recover after a server restart, or **Open in browser** to leave the webview. External links, popup links, and HTTP(S) downloads open in your system browser. Custom URL schemes and blob downloads are not supported.
+The client remembers the last validated address. It does not automatically reconnect on launch. Press `Cmd/Ctrl+,` to open Settings, where **Server > Change server…** (or **Bakery > Connect to another server…**) switches servers, **Reload Bakery** (`Cmd/Ctrl+R`) to recover after a server restart, or **Open in browser** to leave the webview. External links, popup links, and HTTP(S) downloads open in your system browser. Custom URL schemes and blob downloads are not supported.
 
 The server must serve both the API and frontend at the same origin. On the server, build the web UI and run with `BAKERY_SERVE_UI=1`. For example, after replacing the example Tailnet address and hostname:
 
