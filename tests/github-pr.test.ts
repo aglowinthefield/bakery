@@ -535,6 +535,7 @@ test("github-pr: a refused push's hook output goes to the card's next run, which
     const prompt = readFileSync(promptFile, "utf8");
     assert.match(prompt, /pre-push hook refused it/);
     assert.match(prompt, /Unused files \(1\)/);
+    assert.match(prompt, /pushes this work through the repository's pre-push hook .* run the checks it runs before you finish/, "every github-pr run is told to run the hook's checks first");
     assert.doesNotMatch(prompt, /failed CI/);
     assert.equal(f.board.listRuns(card.id)[0].ciFix, 0, "its result is not pushed without Approve");
     assert.equal(f.board.getCiFeedback(card.id), undefined);

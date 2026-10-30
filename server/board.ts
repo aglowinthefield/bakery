@@ -118,6 +118,9 @@ export function chatTitle(message: string): string {
   return line.length > 80 ? `${line.slice(0, 79)}…` : line;
 }
 
+/** A run could not start because the repository already has as many runs as its auto-pickup concurrency allows. */
+export class RunLimitError extends Error {}
+
 export class Board {
   private db: DatabaseSync;
   constructor(path: string) {
@@ -482,6 +485,11 @@ export class Board {
     // ciFix is 1 for a CI fix and 2 for a conflict repair; both are pushed without Approve.
     if (source !== "push") this.db.prepare("UPDATE runs SET ciFix=? WHERE id=?").run(source === "conflict" ? 2 : 1, runId);
     this.clearCiFeedback(cardId);
+  }
+  /** Review cards whose refused push is waiting for a run slot to go back to the agent (see `Worker.startHookFix`). */
+  listWaitingHookFixes(): Card[] {
+    const ids = (this.db.prepare("SELECT cardId FROM ci_feedback WHERE source='push' ORDER BY createdAt").all() as { cardId: string }[]).map(row => row.cardId);
+    return ids.map(id => this.getCard(id)).filter((card): card is Card => card?.status === "review");
   }
   clearCiFeedback(cardId: string): void { this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId); }
   /** Review cards on a github-pr board, which the PR poller links and checks. */
@@ -1113,7 +1121,7 @@ export class Board {
         throw new Error("Agent review is in progress; wait for its result before running Pi again");
       const repoBoard = this.listBoards().find(item => item.repo === card.repo);
       if (repoBoard?.autoPickupEnabled && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
-        throw new Error(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
+        throw new RunLimitError(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
         (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
