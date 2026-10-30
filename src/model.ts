@@ -38,6 +38,8 @@ export type Board = {
   autoReviewEnabled: boolean;
   verificationCommand: string;
   autoReviewEnabledAt: string | null;
+  autoReviewMergeLimit?: number;
+  autoReviewMerges?: number;
   autoPickupEnabled: boolean;
   pickupConcurrency: number;
   pickupDailyLimit: number;
@@ -247,7 +249,7 @@ export function dropTargets(card: Card): Status[] {
     case "ready":
       return unrun ? ["triage", "running", "done"] : ["running"];
     case "failed":
-      return ["running"];
+      return ["ready", "running"];
     case "done":
       return ["archived"];
     case "archived":
