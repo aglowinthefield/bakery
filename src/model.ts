@@ -247,7 +247,7 @@ export function dropTargets(card: Card): Status[] {
     case "ready":
       return unrun ? ["triage", "running", "done"] : ["running"];
     case "failed":
-      return ["running"];
+      return ["ready", "running"];
     case "done":
       return ["archived"];
     case "archived":

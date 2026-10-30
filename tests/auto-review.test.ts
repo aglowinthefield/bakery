@@ -95,6 +95,18 @@ test("new opt-in reviews run a separate reviewer and verify before local merge",
   } finally { item.close(); }
 });
 
+test("a failed card can be set back to Ready", () => {
+  const item = fixture();
+  try {
+    const { card, worktree } = item.reviewedCard();
+    const failed = item.board.claim(card.id);
+    item.board.attach(failed.id, process.pid, worktree);
+    item.board.finish(failed.id, "failed", "Pi exited (143)");
+    assert.equal(item.board.getCard(card.id)?.status, "failed");
+    assert.equal(item.board.setStatus(card.id, "ready").status, "ready");
+  } finally { item.close(); }
+});
+
 test("the global tick reconciles a failed card merged outside Bakery without enabling auto-review", async () => {
   const item = fixture();
   try {

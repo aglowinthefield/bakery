@@ -918,7 +918,7 @@ export class Board {
       return this.getCard(id)!;
     }
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
-    this.explain(id, card.status === "done" ? "Reopened" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage");
+    this.explain(id, card.status === "done" ? "Reopened" : card.status === "failed" ? "Moved back to Ready after a failed run" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage");
     return this.getCard(id)!;
   }
   // Drops a Review card without merging. The run, worktree and branch stay, so Reopen can bring it back.

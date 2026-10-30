@@ -1300,7 +1300,7 @@ export function CardDetails({
                   Mark done
                 </Button>
               )}
-            {card?.status === "done" && (
+            {(card?.status === "done" || card?.status === "failed") && (
               <Button
                 variant="outline"
                 disabled={busy}
@@ -1313,7 +1313,7 @@ export function CardDetails({
                   )
                 }
               >
-                Reopen
+                {card.status === "failed" ? "Move to Ready" : "Reopen"}
               </Button>
             )}
             {card?.status === "review" && (
