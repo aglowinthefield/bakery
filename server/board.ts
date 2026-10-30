@@ -949,6 +949,33 @@ export class Board {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return unique.map(id => this.getCard(id)!);
   }
+  /**
+   * Deletes every attachment row of these archived cards, all or none, and returns what each card lost. The caller removes
+   * `<data dir>/attachments/<card id>/`; if that fails, the startup sweep removes the folders later because no row points to them.
+   * This cannot be undone, which is why it only takes archived cards.
+   */
+  purgeAttachments(repo: string, ids: string[]): { cardId: string; files: number; bytes: number }[] {
+    const unique = [...new Set(ids)];
+    if (!unique.length || unique.length > 500) throw new Error("Select between 1 and 500 cards");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of unique) {
+        const card = this.getCard(id);
+        if (!card || card.repo !== repo) throw new Error("Card not found on this board");
+        if (card.status !== "archived") throw new Error("Only archived cards can have their attachments purged");
+      }
+      const count = this.db.prepare("SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes FROM attachments WHERE cardId=?");
+      const remove = this.db.prepare("DELETE FROM attachments WHERE cardId=?");
+      const result = unique.map(id => {
+        const { files, bytes } = count.get(id) as { files: number; bytes: number };
+        remove.run(id);
+        if (files) this.explain(id, `Purged ${files} attachment${files === 1 ? "" : "s"} (${bytes} bytes); this cannot be undone`);
+        return { cardId: id, files: Number(files), bytes: Number(bytes) };
+      });
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   listDiscussion(cardId: string): DiscussionMessage[] {
     const attachments = this.listAttachments(cardId);
     return (this.db.prepare("SELECT * FROM discussion_messages WHERE cardId=? ORDER BY rowid").all(cardId) as Omit<DiscussionMessage, "attachments">[])

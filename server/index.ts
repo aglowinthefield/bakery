@@ -16,7 +16,7 @@ import { AutoPickup } from "./auto-pickup.js";
 import { discuss, discussionPrompt } from "./discuss.js";
 import { Chats } from "./chat.js";
 import { draftPullRequest } from "./pr-draft.js";
-import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
+import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
 
 /** One PR draft job per card, kept after it settles so a closed or refreshed dialog rejoins it instead of starting over. */
 const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: number; steps: { at: number; text: string }[] }; result: Promise<unknown> }>();
@@ -425,6 +425,16 @@ const server = createServer(async (req, res) => {
       const { cardIds } = await body(req);
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
+    }
+    const purgeRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/purge-attachments$/);
+    if (purgeRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(purgeRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      const { cardIds } = await body(req);
+      if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
+      const purged = board.purgeAttachments(repoBoard.repo, cardIds as string[]);
+      for (const item of purged) removeCardAttachmentFiles(dataDir, item.cardId);
+      send(res, 200, purged); return;
     }
     const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events))?)?$/);
     if (chatRoute) {

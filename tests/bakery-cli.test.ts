@@ -40,6 +40,7 @@ async function fixture(boards: object[] = [board]) {
       }
       data = ids.map(id => ({ ...cards.find(item => item.id === id), status: archive ? "archived" : "done" }));
     }
+    else if (path === `/api/boards/${board.id}/cards/purge-attachments` && req.method === "POST") data = (input as { cardIds: string[] }).cardIds.map(cardId => ({ cardId, files: 2, bytes: 10 }));
     else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
     else if (path === `/api/boards/${board.id}/cards/card-one/status` && req.method === "POST") data = { id: "card-one", status: (input as { status: string }).status };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|two)\/start$/.test(path) && req.method === "POST") data = { id: `run-${path.split("/")[5]}`, attempt: 2, status: "running" };
@@ -291,6 +292,17 @@ test("archive takes Done cards, restore brings one back, and refusals are report
       [`/api/boards/${board.id}/cards/archive`, { cardIds: ["card-done", "card-one"] }],
       [`/api/boards/${board.id}/cards/unarchive`, { cardIds: ["card-old"] }],
     ]);
+  } finally { await f.close(); }
+});
+
+test("purge-attachments needs --yes and reports what each card lost", async () => {
+  const f = await fixture();
+  try {
+    assert.match((await f.run("purge-attachments", "card-old")).stderr, /cannot be undone.*--yes/);
+    const purged = await f.run("purge-attachments", "card-old", "--yes");
+    assert.equal(purged.code, 0, purged.stderr);
+    assert.match(purged.stdout, /^card-old\tpurged 2 files, 10 bytes$/m);
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => [r.path, r.input]), [[`/api/boards/${board.id}/cards/purge-attachments`, { cardIds: ["card-old"] }]]);
   } finally { await f.close(); }
 });
 

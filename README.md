@@ -319,7 +319,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - Bakery expands `~`, stores the canonical Git root, and shows the absolute path.
 - To fix a board's path, edit the board. Its cards move only if none has run yet, because attempts keep their worktrees in the original repository.
 - **Remove repository** hides a board without deleting anything, attached files included. Add the same repository again to restore it.
-- Bakery never deletes cards, so a card's attached files stay in `<data dir>/attachments/<card>` until you delete the attachment. At startup Bakery removes files that no attachment points to, such as an upload cut off by a crash.
+- Bakery never deletes cards, so a card's attached files stay in `<data dir>/attachments/<card>` until you delete the attachment or purge an archived card's attachments (below). At startup Bakery removes files that no attachment points to, such as an upload cut off by a crash.
 - Any lane can be collapsed, even with active cards. Auto-collapse only applies to lanes without active cards, and a board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
 - Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
@@ -342,7 +342,7 @@ A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-c
 - The server listens only on `127.0.0.1` and has no authentication. Don't expose it on a network.
 - Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, `BAKERY_PI_BIN` to use a different `pi` binary, and `BAKERY_WT_BIN` to use a different `wt` binary. Set `BAKERY_WT_BIN=` (empty) to turn off Worktrunk hooks.
 - On Windows, Bakery finds `pi`, `wt` and `gh` through `PATH` and `PATHEXT`, and runs npm's `pi.cmd` shim as `node cli.js`. Repository paths can be `C:\\code\\app` or `~\\code\\app`. Data lives in `%USERPROFILE%\\.local\\share\\bakery`. A run's **Stop** ends Pi but not any processes Pi started. An auto-review verification command runs under `cmd.exe`, so write it for that shell.
-- Files attached to cards and discussion messages live in `<data dir>/attachments/<card id>/`. Deleting an attachment removes its file. Archiving a card or removing its board keeps the files, because both can be undone; delete that directory yourself to reclaim the space.
+- Files attached to cards and discussion messages live in `<data dir>/attachments/<card id>/`. Deleting an attachment removes its file. Archiving a card or removing its board keeps the files, because both can be undone. To reclaim the space, use **Purge attachments** on an archived card or `bakery-cli purge-attachments CARD_ID... --yes`. It deletes the card's folder and its attachment records, and it cannot be undone, even if you restore the card.
 - Only one server can own a data directory, which it locks with `server.lock`. If the PID in the lock is no longer running, the next server takes over the lock.
 - **Stop** ends a run and marks it Failed. Runs time out after 30 minutes.
 

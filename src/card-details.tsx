@@ -1370,6 +1370,27 @@ export function CardDetails({
                 Restore to Done
               </Button>
             )}
+            {card?.status === "archived" && (card.attachmentCount ?? 0) > 0 && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Permanently delete all attachments of this card from disk? This cannot be undone, even if you restore the card.",
+                    )
+                  )
+                    void action(() =>
+                      api(`/boards/${boardId}/cards/purge-attachments`, {
+                        method: "POST",
+                        body: JSON.stringify({ cardIds: [card.id] }),
+                      }),
+                    );
+                }}
+              >
+                Purge attachments
+              </Button>
+            )}
           </div>
           {card?.status === "interrupted" && (
             <div className="mt-4 rounded-lg border border-primary/30 bg-primary/10 p-3 text-xs text-primary">
