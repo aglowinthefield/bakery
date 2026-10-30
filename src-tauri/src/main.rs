@@ -111,7 +111,9 @@ fn allow_window_dragging(app: &tauri::AppHandle, url: &url::Url) -> Result<(), S
     let capability = tauri::ipc::CapabilityBuilder::new(format!("remote-drag-{}", origin))
         .remote(format!("{origin}/*"))
         .window("remote")
-        .permission("core:window:allow-start-dragging");
+        .permission("core:window:allow-start-dragging")
+        // Tauri's drag region zooms or restores the window on double-click through this one.
+        .permission("core:window:allow-toggle-maximize");
     app.add_capability(capability)
         .map_err(|error| error.to_string())
 }
