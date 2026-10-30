@@ -1460,17 +1460,17 @@ export function App() {
                         if (!open) openBoard(item.id);
                       }}
                       aria-expanded={open}
-                      className="flex w-full min-w-0 items-center gap-2.5 px-3 pb-0 pt-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
+                      className="flex w-full min-w-0 items-start gap-2.5 px-3 pb-0 pt-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
                       title={item.repo}
                     >
                       <RepoBadge board={item} />
-                      <span className="truncate text-[14px] font-medium text-foreground">
+                      <span className="truncate text-[14px] font-medium leading-4 text-foreground">
                         {repoName(item.repo)}
                       </span>
                     </button>
                     <ul
                       aria-label="Card counts"
-                      className="flex items-center gap-3 pb-1.5 pl-[3.375rem] pr-3"
+                      className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-[3.375rem] pr-3 mb-1.5"
                     >
                       {sidebarCounts.map((group) => {
                         const Icon = group.icon;
@@ -1565,7 +1565,9 @@ export function App() {
             className={`mt-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
             <BarChart3 size={16} aria-hidden="true" />
-            Statistics
+            <span className="text-[14px] font-medium text-foreground">
+              Statistics
+            </span>
           </button>
           <button
             onClick={() => openPage("logs")}
@@ -1573,7 +1575,9 @@ export function App() {
             className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "logs" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
             <ScrollText size={16} aria-hidden="true" />
-            Logs
+            <span className="text-[14px] font-medium text-foreground">
+              Logs
+            </span>
           </button>
           <Button
             variant="ghost"

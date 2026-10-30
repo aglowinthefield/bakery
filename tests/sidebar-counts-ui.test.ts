@@ -80,7 +80,7 @@ test("every repo in the sidebar shows one condensed row of backlog, in progress 
       repoBox &&
         navBox &&
         nameBox &&
-        navBox.y >= repoBox.y + repoBox.height - 4 &&
+        navBox.y >= nameBox.y + nameBox.height - 4 &&
         firstCount &&
         Math.abs(firstCount.x - nameBox.x) < 2,
       "counts sit on a row under the repo name",
