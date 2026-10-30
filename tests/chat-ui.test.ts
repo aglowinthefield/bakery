@@ -49,3 +49,43 @@ test("the Chat tab lists chats, shows tool calls, streams the live reply", async
     await server.close();
   }
 });
+
+test("the chat list shows each chat's topic, updates it live, and collapses to a rail", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    const named = { ...chat, title: "Why is card B still waiting after A finished yesterday?", topic: "" };
+    const other = { ...chat, id: "c2", title: "Please clean up the triage lane", topic: "Triage cleanup" };
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [named, other] });
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat: named, messages, live: null } });
+      if (path === "/api/boards/b1/chats/c1/events")
+        return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "chat", chat: { ...named, topic: "Card B waiting" } })}\n\n` });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const nav = page.getByRole("navigation", { name: "Chats" });
+    await nav.getByRole("button", { name: "Triage cleanup", exact: true }).waitFor();
+    await nav.getByRole("button", { name: "Card B waiting", exact: true }).waitFor();
+    assert.equal(await nav.getByRole("button", { name: "Card B waiting", exact: true }).getAttribute("title"), named.title, "the full first line is the tooltip");
+
+    await nav.getByRole("button", { name: "Collapse chat list" }).click();
+    assert.equal(await nav.getAttribute("data-collapsed"), "true");
+    assert.ok((await nav.boundingBox())!.width < 80, "collapsed to a narrow rail");
+    assert.equal(await nav.getByRole("button", { name: "Delete Triage cleanup" }).count(), 0);
+    await nav.getByRole("button", { name: "Triage cleanup", exact: true }).waitFor();
+    await page.reload();
+    await page.getByRole("button", { name: "Expand chat list" }).click();
+    assert.equal(await nav.getAttribute("data-collapsed"), null, "the choice survives a reload, and expanding restores the list");
+    assert.ok((await nav.boundingBox())!.width > 200);
+    await nav.getByRole("button", { name: "Delete Triage cleanup" }).waitFor({ state: "attached" });
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});

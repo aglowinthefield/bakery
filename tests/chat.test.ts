@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
-import { Chats, applyPiEvent, chatSystemPrompt, replyText, type ChatEvent } from "../server/chat.js";
+import { Chats, applyPiEvent, chatSystemPrompt, parseTopic, replyText, topicPrompt, writeTopic, type ChatEvent } from "../server/chat.js";
 import type { ChatPart } from "../server/board.js";
 
 function fixture() {
@@ -94,6 +95,77 @@ test("a failed or stopped turn leaves an error message and keeps what streamed",
     assert.deepEqual(board.listChatMessages(other.id).map(item => item.role), ["user", "error"]);
     assert.equal(board.listChatMessages(other.id)[1].body, "Stopped by the operator");
   } finally { done(); }
+});
+
+const reply = (text: string) => [
+  JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] } }),
+  JSON.stringify({ type: "agent_settled", aborted: false }),
+].join("\n");
+
+test("a topic reply is cut to a few plain words", () => {
+  assert.equal(parseTopic(reply("Flaky login test")), "Flaky login test");
+  assert.equal(parseTopic(reply('"Plan the auth refactor."\nextra line')), "Plan the auth refactor");
+  assert.equal(parseTopic(reply("Topic: one two three four five six seven eight")), "one two three four five six");
+  assert.ok(parseTopic(reply("Supercalifragilisticexpialidocious-and-more-and-more-and-more")).length <= 48);
+  assert.throws(() => parseTopic(reply('""')), /empty/);
+  assert.ok(topicPrompt("fix the build").includes("<message>\nfix the build\n</message>"));
+});
+
+test("writeTopic asks Pi for one tool-free turn and returns the topic", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-topic-"));
+  try {
+    writeFileSync(join(dir, "reply"), reply("Board cleanup"));
+    const pi = fakePi(dir, `echo "$@" > "${dir}/args"\ncat "${dir}/reply"`);
+    assert.equal(await writeTopic(pi, dir, ["--model", "m"], "please tidy the board"), "Board cleanup");
+    const args = readFileSync(join(dir, "args"), "utf8");
+    for (const flag of ["--no-session", "--no-tools", "--model m", "please tidy the board"]) assert.ok(args.includes(flag), flag);
+    await assert.rejects(writeTopic(fakePi(dir, "echo nope >&2\nexit 2"), dir, [], "x"), /Pi failed \(2\): nope/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the first message names the chat once, and a failed name is retried on the next message", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const pi = fakePi(dir, `echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'\necho '{"type":"agent_settled","aborted":false}'`);
+    const asked: string[] = [];
+    let fail = true;
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [],
+      topic: async (_repoBoard, message) => { asked.push(message); if (fail) throw new Error("no model"); return "Blocked cards"; } });
+    const warn = console.warn; console.warn = () => {};
+    const chat = board.createChat(repoBoard.id);
+    try {
+      let finished = settle(chats, chat.id);
+      chats.send(repoBoard, chat.id, "what is blocked?");
+      await finished;
+      assert.equal(board.getChat(chat.id)?.topic, "");
+      fail = false;
+      const named = new Promise<ChatEvent>(resolve => { const off = chats.subscribe(chat.id, event => { if (event.type === "chat") { off(); resolve(event); } }); });
+      finished = settle(chats, chat.id);
+      chats.send(repoBoard, chat.id, "and why?");
+      const event = await named; await finished;
+      assert.equal(event.type === "chat" && event.chat.topic, "Blocked cards");
+      assert.equal(board.getChat(chat.id)?.topic, "Blocked cards");
+      assert.equal(board.listChats(repoBoard.id)[0].topic, "Blocked cards");
+      finished = settle(chats, chat.id);
+      chats.send(repoBoard, chat.id, "thanks");
+      await finished;
+      assert.deepEqual(asked, ["what is blocked?", "and why?"], "a named chat is not named again");
+    } finally { console.warn = warn; }
+  } finally { done(); }
+});
+
+test("a database from before topics gains an empty topic on its chats", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-chat-"));
+  try {
+    const old = new DatabaseSync(join(dir, "board.sqlite"));
+    old.exec("CREATE TABLE chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); INSERT INTO chats VALUES ('c1', 'b1', 'Old chat', 't', 't')");
+    old.close();
+    const board = new Board(join(dir, "board.sqlite"));
+    try {
+      assert.equal(board.getChat("c1")?.topic, "");
+      assert.equal(board.setChatTopic("c1", "Old topic")?.topic, "Old topic");
+    } finally { board.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("deleting a chat removes its messages and its Pi session file", () => {
