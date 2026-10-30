@@ -1302,7 +1302,7 @@ test("github-pr: a manual start is refused while the card waits on GitHub CI", a
     await new Promise<void>(resolve => listener.close(() => resolve()));
     child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
       cwd: process.cwd(),
-      env: { ...process.env, HOME: f.dir, BAKERY_DATA_DIR: f.data, BAKERY_PORT: String(port), BAKERY_PI_BIN: f.fakePi },
+      env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: f.dir, BAKERY_DATA_DIR: f.data, BAKERY_PORT: String(port), BAKERY_PI_BIN: f.fakePi },
       stdio: "ignore",
     });
     const url = `http://127.0.0.1:${port}/api`;
