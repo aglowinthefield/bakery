@@ -129,7 +129,7 @@ export function UpdateNotice({
             <p className="mt-1">
               {status!.activeRuns > 0
                 ? `Restarts after ${runs(status!.activeRuns)} finish.`
-                : "Installs by itself while nothing is running."}
+                : "Nothing is running, so it restarts right away."}
             </p>
           </div>
         </div>
@@ -255,7 +255,7 @@ export function UpdatesPanel() {
             <p className="mt-2 text-xs text-muted-foreground">
               {status.activeRuns > 0
                 ? `Restarts after ${runs(status.activeRuns)} finish.`
-                : "Installs by itself while nothing is running."}
+                : "Nothing is running, so it restarts right away."}
             </p>
           </>
         )}
