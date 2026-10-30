@@ -616,8 +616,10 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "POST" && action === "close") { send(res, 200, board.closeReview(id)); return; }
         if (req.method === "POST" && action === "status") {
-          const { status } = await body(req);
+          const { status, withDependencies } = await body(req);
           if (status !== "triage" && status !== "ready" && status !== "done") throw new Error("Status must be triage, ready, or done");
+          // Drag-to-Ready also brings the Triage cards this one waits on; the reply lists every card that moved, this one first.
+          if (withDependencies === true && status === "ready") { send(res, 200, board.moveToReadyWithDependencies(id)); return; }
           send(res, 200, board.setStatus(id, status)); return;
         }
         if (req.method === "POST" && action === "stop") {

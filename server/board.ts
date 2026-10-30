@@ -929,7 +929,27 @@ export class Board {
     this.db.prepare("UPDATE cards SET title=?, body=?, priority=?, updatedAt=? WHERE id=?").run(input.title, input.body, parsePriority(input.priority ?? card.priority), now(), id);
     return this.getCard(id)!;
   }
-  setStatus(id: string, status: "triage" | "ready" | "done"): Card {
+  /**
+   * Moves a Triage card to Ready together with the Triage cards it waits on, following dependencies through Triage
+   * cards only; anything already Ready or further along stays put. One transaction, so the set never half-moves.
+   * Returns the card first, then the dependencies it brought, oldest first.
+   */
+  moveToReadyWithDependencies(id: string): Card[] {
+    const card = this.getCard(id);
+    if (!card) throw new Error("Card not found");
+    if (card.status !== "triage") return [this.setStatus(id, "ready")];
+    const dependencies = (this.db.prepare(`WITH RECURSIVE reach(id) AS (SELECT ? UNION SELECT d.dependsOn FROM card_dependencies d
+        JOIN reach ON d.cardId=reach.id JOIN cards parent ON parent.id=d.dependsOn WHERE parent.status='triage')
+      SELECT cards.id FROM reach JOIN cards ON cards.id=reach.id WHERE cards.id<>? ORDER BY cards.createdAt, cards.rowid`)
+      .all(id, id) as { id: string }[]).map(row => row.id);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const moved = [this.setStatus(id, "ready"), ...dependencies.map(dep => this.setStatus(dep, "ready", `Moved to Ready because "${card.title}" waits on it`))];
+      this.db.exec("COMMIT");
+      return moved;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  setStatus(id: string, status: "triage" | "ready" | "done", reason?: string): Card {
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
@@ -944,7 +964,7 @@ export class Board {
       return this.getCard(id)!;
     }
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
-    this.explain(id, card.status === "done" ? "Reopened" : card.status === "failed" ? "Moved back to Ready after a failed run" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage");
+    this.explain(id, reason ?? (card.status === "done" ? "Reopened" : card.status === "failed" ? "Moved back to Ready after a failed run" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage"));
     return this.getCard(id)!;
   }
   // Drops a Triage, Ready, Failed or Review card to Done without merging. Runs, worktree and branch stay, so Reopen can bring it back.
