@@ -40,6 +40,14 @@ npm run desktop:dev
 
 This runs only the desktop client. Start Bakery separately. In local development, connect to `http://127.0.0.1:5173`, where Vite proxies the API. The API-only development port is not a valid client destination.
 
+To work on the UI against a remote server's boards, run only Vite and point its API proxy at that server:
+
+```sh
+BAKERY_API_TARGET=http://bakery.example.ts.net:4317 npm run dev:ui
+```
+
+Connect the client to `http://127.0.0.1:5173`. UI edits hot-reload, while boards, cards, and agents come from the remote server. The remote server must list its hostname in `BAKERY_ALLOWED_HOSTS`. Stop `npm run dev` first, because both use port 5173.
+
 Build on each target operating system:
 
 ```sh
