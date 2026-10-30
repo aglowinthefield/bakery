@@ -347,3 +347,26 @@ test("create --after and depend/undepend manage card dependencies through the HT
     assert.match((await f.run("--help")).stdout, /--after CARD_ID/);
   } finally { await f.close(); }
 });
+
+test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", async () => {
+  const f = await fixture([{ ...board, repo: "/nonexistent/bakery-doctor", autoPickupError: "" }]);
+  try {
+    const result = await f.run("doctor");
+    assert.equal(result.code, 1, "a board whose repository is missing fails the run");
+    assert.match(result.stdout, /^PASS\tserver\thttp:\/\/127\.0\.0\.1:\d+ \(1 board\)/m);
+    assert.match(result.stdout, /^FAIL\tboard \/nonexistent\/bakery-doctor\trepository path does not exist/m);
+    assert.match(result.stdout, /\d+ passed, \d+ warnings, 1 failed$/m);
+    const json = JSON.parse((await f.run("doctor", "--json")).stdout);
+    assert.deepEqual(json.find((check: { name: string }) => check.name === "server").status, "pass");
+  } finally { await f.close(); }
+});
+
+test("doctor fails the server check when Bakery is not running", async () => {
+  const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: "http://127.0.0.1:1", BAKERY_PI_BIN: "bakery-no-such-pi" } });
+  let stdout = "";
+  for await (const chunk of child.stdout) stdout += chunk;
+  const code = await new Promise<number | null>(resolve => child.once("close", resolve));
+  assert.equal(code, 1);
+  assert.match(stdout, /^FAIL\tserver\tCannot reach Bakery/m);
+  assert.match(stdout, /^FAIL\tpi\tbakery-no-such-pi not found/m);
+});

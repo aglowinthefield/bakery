@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
+// Playwright only grants clipboard permissions in Chromium.
+process.env.BAKERY_TEST_BROWSER = "chromium";
+
 const worktree = "/Users/example/projects/a very long repository name/worktrees/attempt-with-an-exact-path";
 const otherWorktree = "/Users/example/projects/other/worktrees/previous";
 const failedWorktree = "/Users/example/.local/share/bakery/worktrees/failed-run";

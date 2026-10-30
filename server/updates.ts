@@ -1,4 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
+import { existsSync, renameSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 // Updates for a hosted Bakery checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
 // brought in so the UI can show a changelog, and installs it on request or by itself while nothing is running.
@@ -8,7 +10,7 @@ export type UpdateCommit = { sha: string; subject: string };
 export type UpdateState = { commits: UpdateCommit[]; installing: boolean; error: string | null };
 type Install = () => Promise<void>;
 
-/** Runs `scripts/update.sh install` (fast-forward, npm install, UI build) in `root`. */
+/** Runs `scripts/update.sh install` (fast-forward, npm install, UI build into dist-next) in `root`. */
 export const installScript = (root: string): Install => () => new Promise((done, fail) => {
   execFile("bash", ["scripts/update.sh", "install"], { cwd: root, timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 }, (error, _stdout, stderr) => {
     if (!error) return done();
@@ -80,4 +82,18 @@ export class Updates {
   private git(...args: string[]): string {
     return execFileSync("git", ["-C", this.root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   }
+}
+
+/**
+ * Moves the UI that `scripts/update.sh install` built into `dist-next` over `dist`. The install builds there so the
+ * draining server keeps serving the UI that matches its API; a new UI on the old server sends calls to routes the old
+ * server lacks, which answer 404 until the restart. Call once at startup, holding the data directory lock.
+ */
+export function promoteStagedUi(root: string): boolean {
+  const staged = join(root, "dist-next");
+  if (!existsSync(staged)) return false;
+  const dist = join(root, "dist");
+  rmSync(dist, { recursive: true, force: true });
+  renameSync(staged, dist);
+  return true;
 }

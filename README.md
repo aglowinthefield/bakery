@@ -278,6 +278,7 @@ The CLI talks to the running server's HTTP API, so it goes through the same chec
 
 ```sh
 npm run bakery -- add fix the flaky login test [--priority 80]
+npm run bakery -- doctor
 npm run bakery -- boards
 npm run bakery -- cards
 npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority -100..100|low|normal|high|urgent] [--after CARD_ID]...
@@ -298,6 +299,7 @@ npm run bakery -- board [--integration local|github-pr]
 npm run bakery -- pr CARD_ID [URL|off]
 ```
 
+- `doctor` runs setup checks and prints `PASS`, `WARN` or `FAIL` for each, then a count; it exits 1 if any check fails. It checks Node 24, git and its committer identity, `pi` and its model list, Worktrunk (optional), `gh` sign-in (a failure only on boards using GitHub pull requests), the data directory and its lock, whether the server answers, and each board's repository and integration or pickup errors. Against a non-loopback `BAKERY_URL` it checks only the server and boards, since tools and paths are on the server's machine. `--json` prints the checks.
 - `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body` and `--priority` as `create`.
 - Without `--board`, commands use the board whose repository contains your current directory. Outside every repository, they use the only board, or ask for `--board ID|PATH` if you have several. Add `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
@@ -383,7 +385,7 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 `npm start` has no file watcher. `deploy/bakery-update.service` and `deploy/bakery-update.timer` run `scripts/update.sh` every 2 minutes, which only fetches `origin/main`. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
 
-When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. While no run or review is active, it installs pending updates by itself within 30 seconds. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
+When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI into `dist-next`). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Until then it keeps serving the UI that matches its own API; the restarted server moves `dist-next` over `dist`. While no run or review is active, it installs pending updates by itself within 30 seconds. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
 
 ## Safety
 

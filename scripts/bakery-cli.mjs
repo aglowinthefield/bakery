@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
+import { doctor, report } from "./doctor.mjs";
 
 const usage = `bakery-cli — local Bakery API client
 
 Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|high|urgent] [--board ID|PATH] [--json]
+       bakery-cli doctor [--json]
        bakery-cli boards [--json]
        bakery-cli board [ID|PATH] [--integration local|github-pr] [--json]
        bakery-cli pr CARD_ID [URL|off] [--board ID|PATH] [--json]
@@ -26,6 +28,8 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|hi
        bakery-cli conflicts [--board ID|PATH] [--json]
        bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--budget USD|off] [--board ID|PATH] [--yes]
 
+doctor checks Node, git, pi, gh, worktrunk, the data directory, the server and each board, printing PASS, WARN or FAIL
+per check; it exits 1 if any check fails. Against a remote BAKERY_URL it checks only the server and boards.
 Set BAKERY_URL (or BAKERY_PORT) to use a different server (non-loopback needs BAKERY_ALLOW_REMOTE=1). --json prints full API data.
 Without --board, commands use the board whose repository contains the current directory, or the only board.
 add is quick capture: the words after it become the title of a new Triage card.
@@ -153,7 +157,7 @@ async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
-  const expected = { board: 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { doctor: 0, board: 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   const variadic = ["start", "archive", "add", "purge-attachments"];
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
   if (command === "board" && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
@@ -181,6 +185,13 @@ async function main() {
     if (!opts.yes) throw new Error(`Starting ${args.length === 1 ? "a run" : `${args.length} runs`} uses paid Pi. Repeat with --yes to confirm.`);
   }
   const origin = serverUrl();
+  if (command === "doctor") {
+    if (opts.board) throw new Error("--board is not valid with doctor");
+    const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards") });
+    print(checks, opts.json, report(checks));
+    if (checks.some(check => check.status === "fail")) process.exitCode = 1;
+    return;
+  }
   const boards = await request(origin, "/api/boards");
   if (command === "boards") {
     if (opts.board) throw new Error("--board is not valid with boards");
