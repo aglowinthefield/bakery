@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connect to Bakery</title>
+    <link rel="stylesheet" href="connection.css" />
+    <script src="connection.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icon.png" width="64" height="64" alt="" />
+        <h1>Bakery</h1>
+      </header>
+      <h2>Connect to your server</h2>
+      <p>
+        Your boards live on your Bakery server. This app opens them without
+        moving your repositories or agents.
+      </p>
+      <form>
+        <label for="address">Server address</label>
+        <input
+          id="address"
+          name="address"
+          type="url"
+          placeholder="https://bakery.example.ts.net"
+          required
+          autocomplete="url"
+          spellcheck="false"
+          autocapitalize="none"
+          aria-describedby="address-help"
+          disabled
+        />
+        <p id="address-help" class="help">
+          Use the full address, without a board path. Connect to your Tailnet
+          first if your server is private.
+        </p>
+        <label class="http-option"
+          ><input id="allow-http" type="checkbox" />Allow unencrypted HTTP on a
+          trusted network</label
+        >
+        <button type="submit" disabled>Connect</button>
+        <p id="error" role="alert" hidden></p>
+        <p id="status" role="status">Loading saved address…</p>
+      </form>
+      <footer>
+        Agents keep running when you close this app.<br />Use the Bakery menu to
+        change servers or reload.
+      </footer>
+    </main>
+  </body>
+</html>

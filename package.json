@@ -9,6 +9,9 @@
   "scripts": {
     "dev": "concurrently -k \"node scripts/dev-server.mjs\" \"BAKERY_VITE_PORT=15173 vite --host 127.0.0.1\"",
     "build": "npm run format:check && tsc -b && vite build",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "desktop:test": "cargo test --manifest-path src-tauri/Cargo.toml && node --test tests/desktop-ui.test.mjs",
     "start": "tsx server/index.ts",
     "test": "node --import tsx --import ./tests/setup.ts --test --test-concurrency=4 --test-force-exit --test-timeout=120000 tests/*.test.ts",
     "bakery": "node scripts/bakery-cli.mjs",
@@ -37,6 +40,7 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
     "@types/node": "^24.9.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
