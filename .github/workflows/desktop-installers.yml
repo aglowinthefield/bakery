@@ -75,7 +75,11 @@ jobs:
       - name: Verify macOS app signature and architecture
         if: runner.os == 'macOS'
         run: |
-          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Bakery.app"
+          mount=$(mktemp -d "$RUNNER_TEMP/bakery-dmg.XXXXXX")
+          hdiutil attach src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg \
+            -readonly -nobrowse -mountpoint "$mount"
+          trap 'hdiutil detach "$mount"' EXIT
+          app="$mount/Bakery.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           lipo -verify_arch arm64 "$app/Contents/MacOS/bakery-desktop"
 
