@@ -86,7 +86,7 @@ export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: stri
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
@@ -140,7 +140,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
+      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS discussion_messages (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, createdAt TEXT NOT NULL);
@@ -277,6 +277,20 @@ export class Board {
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
       for (const definition of usageDefinitions.split(", "))
         if (!columns.has(definition.split(" ")[0])) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+    // Older job tables reject 'pull_request' (an agent approval that opened a PR). SQLite cannot alter a CHECK, so
+    // rebuild the table from its current definition, which already lists every column added above, in order.
+    const jobSchema = (this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_review_jobs'").get() as { sql: string }).sql;
+    if (!jobSchema.includes("'pull_request'")) {
+      const rebuilt = jobSchema.replace(/^CREATE TABLE (?:"auto_review_jobs"|auto_review_jobs)/, "CREATE TABLE auto_review_jobs_new")
+        .replace("CHECK(state IN ('running','needs_human','merged'))", "CHECK(state IN ('running','needs_human','merged','pull_request'))");
+      if (!rebuilt.includes("'pull_request'") || !rebuilt.includes("auto_review_jobs_new")) throw new Error("Unrecognized auto_review_jobs schema; cannot add the pull_request state");
+      this.db.exec(`BEGIN IMMEDIATE;
+        ${rebuilt};
+        INSERT INTO auto_review_jobs_new SELECT * FROM auto_review_jobs;
+        DROP TABLE auto_review_jobs;
+        ALTER TABLE auto_review_jobs_new RENAME TO auto_review_jobs;
+        COMMIT;`);
+    }
     const approvalColumns = new Set((this.db.prepare("PRAGMA table_info(approvals)").all() as { name: string }[]).map(column => column.name));
     if (!approvalColumns.has("preparedHead")) this.db.exec("ALTER TABLE approvals ADD COLUMN preparedHead TEXT");
     if (!approvalColumns.has("merged")) this.db.exec("ALTER TABLE approvals ADD COLUMN merged INTEGER NOT NULL DEFAULT 0");
@@ -681,7 +695,7 @@ export class Board {
   }
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {
     const result: { card: Card; run: Run; board: RepoBoard }[] = [];
-    // On a github-pr board the agent only reviews: AutoReview never merges there, and Approve still opens the PR.
+    // On a github-pr board AutoReview never merges: an agent approval opens the PR, and GitHub decides the merge.
     for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled)) {
       for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
         const run = this.listRuns(card.id)[0];
@@ -752,7 +766,7 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  finishAutoReview(runId: string, state: "needs_human" | "merged", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
+  finishAutoReview(runId: string, state: "needs_human" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
     this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
       .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", runId);
   }

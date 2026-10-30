@@ -289,12 +289,14 @@ export class Integration {
   /**
    * Approve on a github-pr board: commit the reviewed work on `bakery/<id>`, push that branch to origin, and open
    * a PR (or reuse the open one). Nothing merges locally; the card stays in Review until the PR merges on GitHub.
-   * The operator's Approve is the authorization to push; the agent itself never pushes.
+   * The operator's Approve (or, with auto-review on, the agent reviewer's approval) authorizes the push; the
+   * implementing agent itself never pushes.
    * `draft` is the title and body the operator approved; without it the card title and body are used. A new PR's
    * title must pass the repository's semantic-PR check, when it has one, before anything is pushed.
-   * `automatic` marks a CI fix Bakery pushes without Approve, so the PR comment says no person reviewed it.
+   * `pushedBy` says who authorized the push, for the PR comment: the operator's Approve, an automatic CI fix, or
+   * the agent reviewer's approval on a board with auto-review on. Only "operator" means a person reviewed it.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, automatic = false): Promise<Card> {
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" = "operator"): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
@@ -333,7 +335,7 @@ export class Integration {
         catch (error) { throw error instanceof PushError && error.hookFailed ? new PushHookError(error, candidate) : error; }
       }
       step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
-      const why = automatic ? "a fix for the failing CI, pushed automatically without human review" : "changes the operator reviewed and approved in Bakery";
+      const why = { "operator": "changes the operator reviewed and approved in Bakery", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Bakery's agent reviewer approved, pushed automatically without human review" }[pushedBy];
       const pushed = state === "push" ? { sha: candidate, why } : null;
       const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body });
       this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
