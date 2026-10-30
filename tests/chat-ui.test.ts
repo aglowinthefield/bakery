@@ -24,6 +24,9 @@ test("the Chat tab lists chats, shows tool calls, streams the live reply", async
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/boards") return route.fulfill({ json: boards });
       if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/b1/chats" && route.request().method() === "POST") return route.fulfill({ json: { ...chat, id: "c2", title: "" } });
+      if (path === "/api/boards/b1/chats/c2") return route.fulfill({ json: { chat: { ...chat, id: "c2", title: "" }, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c2/events") return route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" });
       if (path === "/api/boards/b1/chats") return route.fulfill({ json: [chat] });
       if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat, messages, live: null } });
       if (path === "/api/boards/b1/chats/c1/events") {
@@ -44,6 +47,13 @@ test("the Chat tab lists chats, shows tool calls, streams the live reply", async
     await page.locator("[data-live='true']").getByText("now").waitFor();
     assert.equal(await page.getByRole("button", { name: "Stop" }).count(), 1, "a live reply offers Stop, not Send");
     assert.equal(await page.getByRole("button", { name: "Send" }).count(), 0);
+
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    const box = page.getByRole("textbox", { name: "Message the agent" });
+    await box.waitFor();
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Message the agent");
+    await page.keyboard.type("hello");
+    assert.equal(await box.inputValue(), "hello", "New chat leaves the message box focused for typing");
   } finally {
     await browser.close();
     await server.close();
