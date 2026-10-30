@@ -98,8 +98,13 @@ export class AutoReview {
   private draining = false;
   private timer: ReturnType<typeof setInterval> | undefined;
   private reviewer: ChildProcess | undefined;
-  /** `sendBack` starts the implementing agent again on a card the reviewer requested changes to. */
-  constructor(private board: Board, private integration: Integration, private piBin = "pi", private sendBack?: (card: Card) => unknown) {}
+  /**
+   * `sendBack` starts the implementing agent again on a card the reviewer requested changes to.
+   * `openPullRequest` pushes the approved work on a github-pr board and opens (or updates) its PR, returning the card
+   * afterwards. Without it, an agent approval on a github-pr board is only advice and Approve stays with a person.
+   */
+  constructor(private board: Board, private integration: Integration, private piBin = "pi", private sendBack?: (card: Card) => unknown,
+    private openPullRequest?: (card: Card, fingerprint: string) => Promise<Card>) {}
   start(): void {
     this.timer = setInterval(() => { void this.tick(); }, 5000);
     void this.tick();
@@ -169,8 +174,8 @@ export class AutoReview {
         }
         return;
       }
-      if (verdict.verdict === "approve" && pullRequests) {
-        // Approve opens a pull request, which stays a human decision; the agent's verdict is advice.
+      if (verdict.verdict === "approve" && pullRequests && !this.openPullRequest) {
+        // Nothing here can push, so opening the pull request stays a human decision; the agent's verdict is advice.
         const latest = this.board.getCard(card.id);
         if (!latest || latest.title !== card.title || latest.body !== card.body) throw new Error("Card changed during agent review");
         if (this.integration.review(latest).fingerprint !== fingerprint) throw new Error("Work changed during agent review");
@@ -183,6 +188,19 @@ export class AutoReview {
       const currentCard = this.board.getCard(card.id);
       if (!currentCard || currentCard.title !== card.title || currentCard.body !== card.body) throw new Error("Card changed during agent review");
       if (this.integration.review(currentCard).fingerprint !== fingerprint) throw new Error("Work changed during agent review");
+      if (pullRequests && this.openPullRequest) {
+        // The PR is where the work waits now: GitHub's checks and reviews decide the merge, and the card goes Done
+        // when the PR merges. Pushing runs the repository's pre-push hook; a refusal goes back to the implementer.
+        this.board.setAutoReviewProgress(run.id, "Agent approved; pushing the branch and opening the pull request…");
+        const opened = await this.openPullRequest(currentCard, fingerprint);
+        if (opened.prState === "OPEN" && opened.prPushedRunId === run.id && opened.prUrl) {
+          this.board.finishAutoReview(run.id, "pull_request", `${verdict.reason}\n\nOpened ${opened.prUrl}`, fingerprint);
+          console.log(`Auto-review opened ${opened.prUrl} for card ${card.id} in ${card.repo}`);
+        } else {
+          this.board.finishAutoReview(run.id, "needs_human", `Agent approved, but the push did not reach a pull request (the pre-push hook may have sent it back to the implementer): ${verdict.reason}`, fingerprint);
+        }
+        return;
+      }
       const result = this.integration.approve(currentCard, fingerprint, "auto", scratch => {
         try { execSync(current.verificationCommand, { cwd: scratch, timeout: 5 * 60_000, stdio: "ignore" }); }
         catch { throw new Error("Verification failed on the merged result; main was not updated"); }

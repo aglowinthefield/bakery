@@ -1967,11 +1967,13 @@ function ReviewHistory({
                   ? "checking"
                   : job.state === "merged"
                     ? "merged locally"
-                    : job.requeued
-                      ? "interrupted by a restart, queued again"
-                      : requestedChanges(job).length
-                        ? "sent back to the implementer"
-                        : "needs human review"}
+                    : job.state === "pull_request"
+                      ? "approved; pull request opened"
+                      : job.requeued
+                        ? "interrupted by a restart, queued again"
+                        : requestedChanges(job).length
+                          ? "sent back to the implementer"
+                          : "needs human review"}
               </strong>{" "}
               <AgentBadge
                 phase="Review"

@@ -55,7 +55,7 @@ export type Board = {
 export type AutoReviewJob = {
   cardId: string;
   runId: string;
-  state: "running" | "needs_human" | "merged";
+  state: "running" | "needs_human" | "merged" | "pull_request";
   details: string;
   fingerprint: string;
   startedAt: string;

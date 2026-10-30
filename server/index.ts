@@ -58,7 +58,20 @@ const chats = new Chats(board, {
 });
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
-const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", "to apply the agent reviewer's requested changes"));
+// On a github-pr board an agent approval opens the PR (drafted like the Approve dialog's), and the card waits on GitHub.
+const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", "to apply the agent reviewer's requested changes"),
+  async (card, fingerprint) => {
+    const run = board.listRuns(card.id)[0], diff = integration.review(card);
+    if (!run?.worktree || diff.fingerprint !== fingerprint) throw new Error("Work changed during agent review");
+    const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
+    const draft = await draftPullRequest({ card, run, worktree: run.worktree, patch, piBin, models: piModelArgs(board.agentModelFor(card.repo, "draft")) });
+    if (draft.problem) throw new Error(`Agent approved, but the pull request draft needs a person: ${draft.problem}. Use Approve and open PR`);
+    // Drafting can take minutes; turning auto-review off meanwhile still stops the push.
+    if (!board.boardForRepo(card.repo)?.autoReviewEnabled) throw new Error("Auto-review was disabled or its settings changed");
+    const opened = await sendBackRefusedPush(card, () => integration.openPullRequest(card, fingerprint, github, { title: draft.title, body: draft.body }, "agent-review"));
+    void githubSync.syncBoard(board.boardForRepo(card.repo)!.id);
+    return opened;
+  });
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
@@ -70,7 +83,7 @@ const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", "to fix failing CI on the pull request"),
-  card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true)));
+  card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, "ci-fix")));
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free

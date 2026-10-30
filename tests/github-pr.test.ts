@@ -903,7 +903,7 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
   const worker = new Worker(f.board, f.data, fixPi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, true));
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, "ci-fix"));
   try {
     const card = await reviewedCard(f);
     await approve(f, card.id);
@@ -947,7 +947,7 @@ test("github-pr: a CI fix run that changes nothing says so on the PR and the car
   const worker = new Worker(f.board, f.data, idlePi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, true));
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, "ci-fix"));
   try {
     const card = await reviewedCard(f);
     await approve(f, card.id);
@@ -993,7 +993,7 @@ test("github-pr: a small documentation conflict with main is repaired and pushed
   const worker = new Worker(f.board, f.data, repairPi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, true));
+    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, "ci-fix"));
   try {
     const { card, pr, pushed } = await conflictingPr(f, "docs/notes.md", "main\n");
     await sync.syncBoard(f.repoBoard.id);

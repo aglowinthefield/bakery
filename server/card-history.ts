@@ -27,6 +27,7 @@ export function cardHistory(card: Card, events: CardEvent[], runs: Run[], review
     if (review.state === "running") { entries.push({ at: review.startedAt, from: null, to: null, text: `Agent review${of} started`, detail: review.details || undefined }); continue; }
     const at = review.finishedAt ?? review.startedAt;
     if (review.state === "merged") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Bakery merged it`, detail: review.details || undefined }); continue; }
+    if (review.state === "pull_request") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Bakery opened its pull request`, detail: review.details || undefined }); continue; }
     const sentBack = review.details.startsWith("Sent back to the implementer: ");
     entries.push({
       at, from: null, to: null,

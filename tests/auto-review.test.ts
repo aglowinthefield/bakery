@@ -429,7 +429,7 @@ test("reviewer progress reports elapsed time, turns, tool counts and narration w
   assert.doesNotMatch(text, /SECRET/);
 });
 
-test("on a pull-request board an agent approval is advice: the card stays in Review with the verdict recorded", async () => {
+test("on a pull-request board an agent approval is advice when Bakery cannot push: the card stays in Review with the verdict recorded", async () => {
   const item = fixture();
   try {
     item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
@@ -444,4 +444,78 @@ test("on a pull-request board an agent approval is advice: the card stays in Rev
     assert.equal(job?.details, "Agent approved: Diff is small and correct");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n", "local main is untouched");
   } finally { item.close(); }
+});
+
+test("on a pull-request board an agent approval opens the pull request, and the card waits on GitHub", async () => {
+  const item = fixture();
+  try {
+    item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
+    item.board.setIntegration(item.repoBoard.id, "github-pr");
+    item.board.setAutoReview(item.repoBoard.id, true, "test -f README.md");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    const opened: { cardId: string; fingerprint: string }[] = [];
+    const auto = new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), undefined, async (card, fingerprint) => {
+      opened.push({ cardId: card.id, fingerprint });
+      item.board.recordPullRequest(card.id, { number: 7, url: "https://github.com/example/repo/pull/7", state: "OPEN" });
+      item.board.recordPullRequestPush(card.id, current.run.id);
+      return item.board.getCard(card.id)!;
+    });
+    await auto.tick();
+    const job = item.board.getAutoReviewJob(current.run.id), card = item.board.getCard(current.card.id)!;
+    assert.deepEqual(opened.map(entry => entry.cardId), [current.card.id]);
+    assert.match(opened[0].fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(job?.state, "pull_request");
+    assert.equal(job?.details, "Diff is small and correct\n\nOpened https://github.com/example/repo/pull/7");
+    assert.equal(card.status, "review");
+    assert.equal(card.reviewWait, "github", "the card waits for the pull request to merge, not for a person");
+    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n", "local main is untouched");
+    await auto.tick();
+    assert.equal(opened.length, 1, "the same run is not pushed twice");
+  } finally { item.close(); }
+});
+
+test("on a pull-request board a failed or refused push leaves the agent-approved card for a person", async () => {
+  const item = fixture();
+  try {
+    item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
+    item.board.setIntegration(item.repoBoard.id, "github-pr");
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const failing = item.reviewedCard();
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), undefined,
+      async () => { throw new Error("GitHub CLI unavailable"); }).tick();
+    assert.equal(item.board.getAutoReviewJob(failing.run.id)?.state, "needs_human");
+    assert.equal(item.board.getAutoReviewJob(failing.run.id)?.details, "GitHub CLI unavailable");
+    assert.equal(item.board.getCard(failing.card.id)?.reviewWait, null);
+    const refused = item.reviewedCard();
+    // A pre-push hook refusal sends the card back to the implementer and returns it without a pull request.
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), undefined,
+      async card => item.board.getCard(card.id)!).tick();
+    assert.equal(item.board.getAutoReviewJob(refused.run.id)?.state, "needs_human");
+    assert.match(item.board.getAutoReviewJob(refused.run.id)!.details, /^Agent approved, but the push did not reach a pull request/);
+  } finally { item.close(); }
+});
+
+test("an older auto-review table is rebuilt to accept the pull_request state without losing jobs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-schema-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    new Board(path).close();
+    const db = new DatabaseSync(path);
+    try {
+      const sql = (db.prepare("SELECT sql FROM sqlite_master WHERE name='auto_review_jobs'").get() as { sql: string }).sql;
+      db.exec(`DROP TABLE auto_review_jobs; ${sql.replace("'merged','pull_request'", "'merged'")}`);
+      db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,details,startedAt,agent) VALUES ('c','r','merged','kept','2024-01-01','Pi')").run();
+      assert.throws(() => db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt) VALUES ('c','r2','pull_request','2024-01-01')").run(), /CHECK/);
+    } finally { db.close(); }
+    const board = new Board(path);
+    try {
+      assert.equal(board.getAutoReviewJob("r")?.details, "kept");
+      assert.equal(board.getAutoReviewJob("r")?.agent, "Pi");
+    } finally { board.close(); }
+    const reopened = new DatabaseSync(path);
+    try { reopened.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt) VALUES ('c','r2','pull_request','2024-01-01')").run(); }
+    finally { reopened.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

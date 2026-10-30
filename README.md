@@ -188,7 +188,7 @@ To switch by hand, pick **GitHub pull requests** under Integration in the board'
 What changes in this mode:
 
 - **New card worktrees** start from a freshly fetched `origin/main`, not from the local checkout's `HEAD`.
-- **Approve and open PR** opens a dialog with a draft title and body to edit, then commits the reviewed changes on `bakery/<card>`, pushes that branch to `origin`, and runs `gh pr create` with them. Bakery appends a footer naming the card, plus the run summary. If the repository has a pull request template (`.github/PULL_REQUEST_TEMPLATE.md`, also at the root or in `docs/`) or a semantic-PR title check (an `amannn/action-semantic-pull-request` workflow, or `.github/semantic.yml`), Pi drafts the title and body from them, the card, the run output, and the diff. The drafting run has no tools and uses the board's review model. Otherwise the draft is the card title and description, and no agent runs. A title that fails the check's types or scopes is refused before anything is pushed. Nothing merges locally. If the branch already has an open PR, Approve pushes the new commits to it and leaves its title and body alone. `gh` errors appear on the card word for word. Pi is still told never to push or open PRs. Your Approve is the authorization. Bakery comments on the PR at each turning point: when it pushes an update (and whether a person approved it or it was an automatic CI fix), when it sends the card back for failing CI, and when it gives up after the fix-run limit. A CI fix run may also add or remove labels on its own PR, edit its description, and comment to explain why, for checks that a label or description line satisfies.
+- **Approve and open PR** opens a dialog with a draft title and body to edit, then commits the reviewed changes on `bakery/<card>`, pushes that branch to `origin`, and runs `gh pr create` with them. Bakery appends a footer naming the card, plus the run summary. If the repository has a pull request template (`.github/PULL_REQUEST_TEMPLATE.md`, also at the root or in `docs/`) or a semantic-PR title check (an `amannn/action-semantic-pull-request` workflow, or `.github/semantic.yml`), Pi drafts the title and body from them, the card, the run output, and the diff. The drafting run has no tools and uses the board's review model. Otherwise the draft is the card title and description, and no agent runs. A title that fails the check's types or scopes is refused before anything is pushed. Nothing merges locally. If the branch already has an open PR, Approve pushes the new commits to it and leaves its title and body alone. `gh` errors appear on the card word for word. Pi is still told never to push or open PRs. Your Approve is the authorization (or the agent reviewer's approval, with unattended review on). Bakery comments on the PR at each turning point: when it pushes an update (and whether a person approved it or it was an automatic CI fix), when it sends the card back for failing CI, and when it gives up after the fix-run limit. A CI fix run may also add or remove labels on its own PR, edit its description, and comment to explain why, for checks that a label or description line satisfies.
 - **Linking a PR.** Bakery finds a card's PR by its `bakery/<card>` branch. If your branch naming differs, attach the PR link on the card, or run `bakery-cli pr CARD_ID URL` (`off` clears it). A linked PR is only watched; Bakery doesn't push to it.
 - **Polling.** About once a minute per board, Bakery makes one `gh pr list` call for the board's Review cards:
   - **Open:** the card stays in Review and shows the PR number and checks state. The button becomes **Approve and update PR #N**, which pushes new reviewed work to that PR.
@@ -197,7 +197,8 @@ What changes in this mode:
   - **Closed without merging:** the card goes to Needs you with the reason.
 - **Cleanup.** After a card is Done, Bakery removes its worktree and local branch (with `wt remove` when Worktrunk is installed). Squash merges aren't ancestors of the branch, so the branch is force-deleted, but only after GitHub has confirmed the merge.
 - **Retries.** When you rerun a card whose committed branch is behind `origin/main` and hasn't been pushed, Bakery rebases it onto `origin/main` before Pi starts. If the rebase conflicts, the attempt goes to Needs you and the branch is left as it was. Cards in Review are never rebased, because that would change what you reviewed.
-- Auto-review and local merge detection are off for these boards.
+- **Unattended review.** With auto-review on, an agent approval does what Approve does: Bakery drafts the title and body the same way, pushes `bakery/<card>`, and opens the PR (or updates the open one). Its PR comment says the agent reviewer approved the push and no person reviewed it. The card then waits on GitHub and goes Done when the PR merges. If the draft needs a person (the title fails the semantic-PR check, or drafting fails), or the push or `gh` fails, the card stays in Review for you. A pre-push hook refusal goes back to the implementer, as it does after Approve. See [Unattended review](#unattended-review).
+- Local merge detection is off for these boards.
 
 ### Keeping local main current
 
@@ -252,7 +253,7 @@ The server starts Ready cards for you, highest priority first, then oldest first
 
 ### Unattended review
 
-Bakery reviews and merges finished cards without you.
+Bakery reviews and merges finished cards without you. On a [GitHub pull request](#github-pull-request-mode) board it opens the PR instead of merging, and GitHub decides the merge.
 
 ```mermaid
 flowchart LR
@@ -268,7 +269,7 @@ flowchart LR
 - It's set per repository. Open the repository's edit (pencil) dialog, enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
 - Bakery only considers runs that reach Review after you enable it. Cards already in Review don't merge.
 - Failed reviews aren't retried.
-- Turning the setting off stops a review in progress from merging.
+- Turning the setting off stops a review in progress from merging or opening a PR.
 - The verification command runs locally with your permissions.
 - The reviewer is a full Pi agent in the card's worktree, with the same tools, extensions, skills, and context files as a card run. It can read code and run builds or tests, and runs locally with your permissions. It's told not to change anything; if the work changes during review, the card is left for you.
 
