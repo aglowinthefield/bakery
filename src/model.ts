@@ -240,7 +240,9 @@ export function cardActivity(
       ? "quiet"
       : "working";
   if (card.status === "review" && card.reviewWait)
-    return card.reviewWait === "agent_review" && !card.reviewQueue ? "working" : "waiting";
+    return card.reviewWait === "agent_review" && !card.reviewQueue
+      ? "working"
+      : "waiting";
   return null;
 }
 /**
