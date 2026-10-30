@@ -318,7 +318,8 @@ npm run bakery -- pr CARD_ID [URL|off]
 
 - Bakery expands `~`, stores the canonical Git root, and shows the absolute path.
 - To fix a board's path, edit the board. Its cards move only if none has run yet, because attempts keep their worktrees in the original repository.
-- **Remove repository** hides a board without deleting anything. Add the same repository again to restore it.
+- **Remove repository** hides a board without deleting anything, attached files included. Add the same repository again to restore it.
+- Bakery never deletes cards, so a card's attached files stay in `<data dir>/attachments/<card>` until you delete the attachment. At startup Bakery removes files that no attachment points to, such as an upload cut off by a crash.
 - Any lane can be collapsed, even with active cards. Auto-collapse only applies to lanes without active cards, and a board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
 - Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.

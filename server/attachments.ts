@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, renameSync, rmSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -45,6 +45,31 @@ export async function storeUpload(req: IncomingMessage, target: string, limit = 
 
 export function removeAttachmentFiles(dataDir: string, item: Pick<Attachment, "cardId" | "id">) {
   rmSync(join(dataDir, "attachments", item.cardId, item.id), { recursive: true, force: true });
+}
+
+/**
+ * Removes attachment folders no row points to: an upload cut off by a crash (only a `.part` file), or one stored just
+ * before its row failed to insert. Run it at startup, before any upload can be in flight. Returns how many it removed.
+ *
+ * Nothing else deletes a card's files on purpose. Removing a board and archiving a card can both be undone, so their
+ * files stay, and cards are never deleted. If hard deletion of cards or boards is ever added, it must remove
+ * `<data dir>/attachments/<card>` along with the rows.
+ */
+export function sweepOrphanAttachments(dataDir: string, known: Pick<Attachment, "cardId" | "id">[]): number {
+  const root = join(dataDir, "attachments");
+  if (!existsSync(root)) return 0;
+  const keep = new Set(known.map(item => `${item.cardId}/${item.id}`));
+  let removed = 0;
+  for (const card of readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory())) {
+    const cardDir = join(root, card.name);
+    for (const item of readdirSync(cardDir, { withFileTypes: true }).filter(entry => entry.isDirectory())) {
+      if (keep.has(`${card.name}/${item.name}`)) continue;
+      rmSync(join(cardDir, item.name), { recursive: true, force: true });
+      removed++;
+    }
+    if (!readdirSync(cardDir).length) rmSync(cardDir, { recursive: true, force: true });
+  }
+  return removed;
 }
 
 /** The prompt lines that tell an agent where a card's files are. Empty when there are none. */

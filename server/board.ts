@@ -969,6 +969,9 @@ export class Board {
   listAttachments(cardId: string): Attachment[] {
     return this.db.prepare("SELECT * FROM attachments WHERE cardId=? ORDER BY createdAt, rowid").all(cardId) as Attachment[];
   }
+  allAttachmentKeys(): { cardId: string; id: string }[] {
+    return this.db.prepare("SELECT cardId, id FROM attachments").all() as { cardId: string; id: string }[];
+  }
   deleteAttachment(cardId: string, id: string) {
     this.db.prepare("DELETE FROM attachments WHERE cardId=? AND id=?").run(cardId, id);
   }
