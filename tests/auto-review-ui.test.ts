@@ -32,15 +32,16 @@ test("unattended review is configured per repository, not in global Settings", a
     });
     await page.goto(`http://127.0.0.1:${address.port}/board/first`);
     await page.getByRole("button", { name: "Settings" }).click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByText("Theme").waitFor();
-    assert.equal(await dialog.getByText("Unattended review").count(), 0);
-    assert.equal(await dialog.getByRole("textbox", { name: "Auto-review verification command" }).count(), 0);
-    await page.keyboard.press("Escape");
+    const settingsPage = page.locator("main:visible");
+    await settingsPage.getByText("Confirm before starting a run").waitFor();
+    assert.equal(await settingsPage.getByText("Unattended review").count(), 0);
+    assert.equal(await settingsPage.getByRole("textbox", { name: "Auto-review verification command" }).count(), 0);
+    await page.goBack();
 
     // The edit pencil lives on the open board's heading.
     await page.getByRole("button", { name: "Kanban" }).click();
     await page.getByRole("button", { name: "Edit /tmp/first/app" }).click();
+    const dialog = page.getByRole("dialog");
     await dialog.getByText("Unattended review").waitFor();
     assert.equal(await dialog.getByRole("textbox", { name: "Auto-review verification command" }).inputValue(), "npm test");
     await dialog.getByRole("button", { name: "Disable auto-review" }).waitFor();
