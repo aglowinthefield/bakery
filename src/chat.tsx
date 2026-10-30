@@ -78,6 +78,8 @@ export function ChatView({
     () => localStorage.getItem(railKey) === "collapsed",
   );
   const end = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
   const base = `/boards/${boardId}/chats`;
   const fail = (err: unknown) =>
     onError(err instanceof Error ? err.message : String(err));
@@ -168,11 +170,16 @@ export function ChatView({
     state.live?.parts.at(-1),
   ]);
 
+  useEffect(() => {
+    if (focusRequest > 0) input.current?.focus();
+  }, [focusRequest]);
+
   const create = async () => {
     try {
       const chat = await api<Chat>(base, { method: "POST", body: "{}" });
       setChats((previous) => [chat, ...(previous ?? [])]);
       setChatId(chat.id);
+      setFocusRequest((n) => n + 1);
     } catch (err) {
       fail(err);
     }
@@ -353,6 +360,7 @@ export function ChatView({
           }}
         >
           <textarea
+            ref={input}
             aria-label="Message the agent"
             value={draft}
             rows={3}
