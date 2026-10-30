@@ -53,6 +53,7 @@ import {
 } from "./components/ui/dialog";
 import "highlight.js/styles/github-dark.css";
 import "./style.css";
+import { FilePicker, formatSize, uploadAttachment } from "./attachments.js";
 import { api, date } from "./api.js";
 import {
   agentPhases,
@@ -3189,15 +3190,21 @@ export function App() {
           <CardForm
             key={editing?.id ?? "new"}
             initial={editing ?? undefined}
-            onSubmit={(value) =>
+            onSubmit={({ files, ...value }) =>
               action(async () => {
+                const owner = editing
+                  ? boards.find((item) => item.repo === editing.repo)?.id
+                  : boardId;
                 const saved = await api<Card>(
-                  `/boards/${editing ? boards.find((item) => item.repo === editing.repo)?.id : boardId}/cards${editing ? `/${editing.id}` : ""}`,
+                  `/boards/${owner}/cards${editing ? `/${editing.id}` : ""}`,
                   {
                     method: editing ? "PATCH" : "POST",
                     body: JSON.stringify(value),
                   },
                 );
+                // The card exists first; its files stream up one by one after.
+                for (const file of files)
+                  await uploadAttachment(owner!, saved.id, file);
                 setCreating(false);
                 setEditing(null);
                 setSelected(saved.id);
@@ -3512,6 +3519,7 @@ function CardForm({
     title: string;
     body: string;
     priority: Priority;
+    files: File[];
   }) => void;
   busy: boolean;
   initial?: Card;
@@ -3519,9 +3527,10 @@ function CardForm({
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
   const [priority, setPriority] = useState<Priority>(initial?.priority ?? 0);
+  const [files, setFiles] = useState<File[]>([]);
   function submit(event: FormEvent) {
     event.preventDefault();
-    onSubmit({ title, body, priority });
+    onSubmit({ title, body, priority, files });
   }
   const input =
     "w-full rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary";
@@ -3572,6 +3581,37 @@ function CardForm({
           ))}
         </select>
       </label>
+      {!initial && (
+        <div className="text-xs font-medium">
+          Attachments
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <FilePicker
+              onPick={(picked) =>
+                setFiles((previous) => [...previous, ...picked])
+              }
+            />
+            {files.map((file, index) => (
+              <span
+                key={index}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 font-normal"
+              >
+                {file.name} ({formatSize(file.size)})
+                <button
+                  type="button"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() =>
+                    setFiles((previous) =>
+                      previous.filter((_, i) => i !== index),
+                    )
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <p className="text-xs leading-5 text-muted-foreground">
         This card uses the selected repository. New cards start in Triage. Move
         one to Ready before starting a run. Creating or moving a card does not

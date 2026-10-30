@@ -63,6 +63,8 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   reviewWait: ReviewWait | null;
   /** A start was asked for during a restart drain and runs after the restart. */
   startQueued: boolean;
+  /** Files attached to the card, including those sent with discussion messages. */
+  attachmentCount: number;
   /** Done cards on a local board with a GitHub remote: is the merge on origin/main (last fetch)? */
   originMain?: "pushed" | "local" } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
@@ -72,7 +74,9 @@ const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
 type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
-export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string };
+/** A file on a card. `messageId` is set when it was sent with a discussion message. */
+export type Attachment = { id: string; cardId: string; messageId: string | null; name: string; type: string; size: number; createdAt: string };
+export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string; attachments: Attachment[] };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
@@ -84,6 +88,7 @@ const now = () => new Date().toISOString();
 export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string };
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COUNT(runs.id) AS attempts,
+  (SELECT COUNT(*) FROM attachments a WHERE a.cardId=cards.id) AS attachmentCount,
   (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds,
   COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
   COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent,
@@ -124,6 +129,9 @@ export class Board {
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS discussion_messages (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS discussion_messages_card ON discussion_messages(cardId, createdAt);
+      -- Files the operator attached to a card, or to one of its discussion messages (messageId). The bytes live on disk; see server/attachments.ts.
+      CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), messageId TEXT REFERENCES discussion_messages(id), name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS attachments_card ON attachments(cardId, createdAt);
       CREATE TABLE IF NOT EXISTS card_dependencies (cardId TEXT NOT NULL REFERENCES cards(id), dependsOn TEXT NOT NULL REFERENCES cards(id), PRIMARY KEY (cardId, dependsOn));
       CREATE INDEX IF NOT EXISTS card_dependencies_parent ON card_dependencies(dependsOn);
       DELETE FROM card_dependencies WHERE cardId NOT IN (SELECT id FROM cards) OR dependsOn NOT IN (SELECT id FROM cards);
@@ -912,12 +920,37 @@ export class Board {
     return unique.map(id => this.getCard(id)!);
   }
   listDiscussion(cardId: string): DiscussionMessage[] {
-    return this.db.prepare("SELECT * FROM discussion_messages WHERE cardId=? ORDER BY rowid").all(cardId) as DiscussionMessage[];
+    const attachments = this.listAttachments(cardId);
+    return (this.db.prepare("SELECT * FROM discussion_messages WHERE cardId=? ORDER BY rowid").all(cardId) as Omit<DiscussionMessage, "attachments">[])
+      .map(message => ({ ...message, attachments: attachments.filter(item => item.messageId === message.id) }));
   }
-  addDiscussionMessage(cardId: string, role: DiscussionMessage["role"], body: string): DiscussionMessage {
+  /** `attachmentIds` must be this card's attachments not yet sent with another message; they move onto the new message. */
+  addDiscussionMessage(cardId: string, role: DiscussionMessage["role"], body: string, attachmentIds: string[] = []): DiscussionMessage {
     const message = { id: randomUUID(), cardId, role, body, createdAt: now() };
-    this.db.prepare("INSERT INTO discussion_messages(id, cardId, role, body, createdAt) VALUES (?, ?, ?, ?, ?)").run(message.id, cardId, role, body, message.createdAt);
-    return message;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT INTO discussion_messages(id, cardId, role, body, createdAt) VALUES (?, ?, ?, ?, ?)").run(message.id, cardId, role, body, message.createdAt);
+      const link = this.db.prepare("UPDATE attachments SET messageId=? WHERE id=? AND cardId=? AND messageId IS NULL");
+      for (const id of new Set(attachmentIds))
+        if (Number(link.run(message.id, id, cardId).changes) !== 1) throw new Error(`Attachment ${id} is not an unsent file on this card`);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    return { ...message, attachments: this.listAttachments(cardId).filter(item => item.messageId === message.id) };
+  }
+  addAttachment(input: { id: string; cardId: string; name: string; type: string; size: number }): Attachment {
+    const attachment = { ...input, messageId: null, createdAt: now() };
+    this.db.prepare("INSERT INTO attachments(id, cardId, messageId, name, type, size, createdAt) VALUES (?, ?, NULL, ?, ?, ?, ?)")
+      .run(attachment.id, attachment.cardId, attachment.name, attachment.type, attachment.size, attachment.createdAt);
+    return attachment;
+  }
+  listAttachments(cardId: string): Attachment[] {
+    return this.db.prepare("SELECT * FROM attachments WHERE cardId=? ORDER BY createdAt, rowid").all(cardId) as Attachment[];
+  }
+  deleteAttachment(cardId: string, id: string) {
+    this.db.prepare("DELETE FROM attachments WHERE cardId=? AND id=?").run(cardId, id);
+  }
+  getAttachment(cardId: string, id: string): Attachment | undefined {
+    return this.db.prepare("SELECT * FROM attachments WHERE cardId=? AND id=?").get(cardId, id) as Attachment | undefined;
   }
   listReviewComments(cardId: string): ReviewComment[] {
     return this.db.prepare("SELECT * FROM review_comments WHERE cardId=? ORDER BY createdAt, id").all(cardId) as ReviewComment[];

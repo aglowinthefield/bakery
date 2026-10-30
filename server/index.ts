@@ -1,9 +1,10 @@
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { chmodSync, closeSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, closeSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
+import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
@@ -14,6 +15,7 @@ import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { discuss, discussionPrompt } from "./discuss.js";
 import { draftPullRequest } from "./pr-draft.js";
+import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, safeFileName, storeUpload } from "./attachments.js";
 
 /** One PR draft job per card, kept after it settles so a closed or refreshed dialog rejoins it instead of starting over. */
 const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: number; steps: { at: number; text: string }[] }; result: Promise<unknown> }>();
@@ -354,6 +356,37 @@ const server = createServer(async (req, res) => {
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.listMergeFailures(repoBoard.repo)); return;
     }
+    // Attachments stream as the raw request body (name in ?name=, type in Content-Type), never through JSON.
+    const attachmentRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/([\w-]+)\/attachments(?:\/([\w-]+))?$/);
+    if (attachmentRoute) {
+      const repoBoard = board.getBoard(attachmentRoute[1]), card = board.getCard(attachmentRoute[2]);
+      if (!repoBoard || card?.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
+      const attachmentId = attachmentRoute[3];
+      if (!attachmentId && req.method === "GET") { send(res, 200, board.listAttachments(card.id)); return; }
+      if (!attachmentId && req.method === "POST") {
+        const name = new URL(req.url ?? "/", "http://localhost").searchParams.get("name") ?? "";
+        if (!name.trim() || name.length > 255) throw new Error("Name the file with ?name= (up to 255 characters)");
+        const type = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase() || "application/octet-stream";
+        if (!/^[\w.+-]+\/[\w.+-]+$/.test(type)) throw new Error("Content-Type must be a media type such as image/png");
+        const id = randomUUID(), cleanName = safeFileName(name);
+        const size = await storeUpload(req, attachmentPath(dataDir, { cardId: card.id, id, name: cleanName }));
+        try { send(res, 201, board.addAttachment({ id, cardId: card.id, name: cleanName, type, size })); }
+        catch (error) { removeAttachmentFiles(dataDir, { cardId: card.id, id }); throw error; }
+        return;
+      }
+      const attachment = attachmentId ? board.getAttachment(card.id, attachmentId) : undefined;
+      if (!attachment) { send(res, 404, { error: "Attachment not found" }); return; }
+      if (req.method === "GET") {
+        const file = attachmentPath(dataDir, attachment);
+        if (!existsSync(file)) { send(res, 404, { error: "The attachment's file is missing from disk" }); return; }
+        // Only raster images render inline; anything else (SVG, HTML) downloads so an upload cannot run script on this origin.
+        const inline = /^image\/(png|jpeg|gif|webp)$/.test(attachment.type);
+        res.writeHead(200, { "Content-Type": inline ? attachment.type : "application/octet-stream", "Content-Length": attachment.size, "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`, "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox" });
+        createReadStream(file).on("error", () => res.destroy()).pipe(res);
+        return;
+      }
+      if (req.method === "DELETE") { board.deleteAttachment(card.id, attachment.id); removeAttachmentFiles(dataDir, attachment); send(res, 200, { ok: true }); return; }
+    }
     const commentRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/([\w-]+)\/comments\/([\w-]+)$/);
     if (commentRoute && req.method === "DELETE") {
       const repoBoard = board.getBoard(commentRoute[1]), card = board.getCard(commentRoute[2]);
@@ -407,13 +440,15 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "GET" && action === "discussion") { send(res, 200, { messages: board.listDiscussion(id), pending: discussing.has(id) }); return; }
         if (req.method === "POST" && action === "discussion") {
-          const { message } = await body(req);
-          if (typeof message !== "string" || !message.trim() || message.length > 4000) throw new Error("Write a message of up to 4000 characters");
+          const { message, attachmentIds = [] } = await body(req);
+          if (!Array.isArray(attachmentIds) || attachmentIds.length > 50 || !attachmentIds.every(value => typeof value === "string" && /^[\w-]+$/.test(value))) throw new Error("attachmentIds must be an array of attachment IDs");
+          if (typeof message !== "string" || (!message.trim() && !attachmentIds.length) || message.length > 4000) throw new Error("Write a message of up to 4000 characters, or attach a file");
           if (discussing.has(id)) throw new Error("The agent is still answering the previous message");
           const history = board.listDiscussion(id), run = board.listRuns(id)[0];
-          const saved = board.addDiscussionMessage(id, "user", message.trim());
+          const saved = board.addDiscussionMessage(id, "user", message.trim(), attachmentIds as string[]);
+          const files = attachmentsPrompt(dataDir, board.listAttachments(id));
           discussing.add(id);
-          void discuss({ prompt: discussionPrompt(item, run, history, message.trim()), cwd: run?.worktree ?? item.repo, piBin, models: piModelArgs(board.agentModelFor(item.repo, "work")) })
+          void discuss({ prompt: discussionPrompt(item, run, history, message.trim() || "(see the attached files)", files), cwd: run?.worktree ?? item.repo, piBin, models: piModelArgs(board.agentModelFor(item.repo, "work")) })
             .then(reply => board.addDiscussionMessage(id, "agent", reply), error => board.addDiscussionMessage(id, "error", error instanceof Error ? error.message : String(error)))
             .finally(() => discussing.delete(id));
           send(res, 202, saved); return;

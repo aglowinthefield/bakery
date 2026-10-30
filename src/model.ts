@@ -168,6 +168,8 @@ export type Card = {
   reviewWait?: ReviewWait | null;
   /** A start was asked for during a restart drain and runs after the restart. */
   startQueued?: boolean;
+  /** Files attached to the card; the Attachments section only fetches the list when this is above 0. */
+  attachmentCount?: number;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
   /**
@@ -260,6 +262,17 @@ export type Run = {
   report: string | null;
 } & UsageFields;
 
+/** A file attached to a card, or to one of its discussion messages (`messageId`). */
+export type Attachment = {
+  id: string;
+  cardId: string;
+  messageId: string | null;
+  name: string;
+  type: string;
+  size: number;
+  createdAt: string;
+};
+
 /** One message in a card's Discuss chat; "error" is a failed agent reply. */
 export type DiscussionMessage = {
   id: string;
@@ -267,4 +280,5 @@ export type DiscussionMessage = {
   role: "user" | "agent" | "error";
   body: string;
   createdAt: string;
+  attachments: Attachment[];
 };

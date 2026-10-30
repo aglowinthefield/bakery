@@ -10,6 +10,7 @@ import {
 import { api } from "./api.js";
 import { AgentBadge, AttemptList, CostBadge } from "./attempts.js";
 import { CardHistory, type CardHistoryEntry } from "./card-history.js";
+import { CardAttachments } from "./attachments.js";
 import { DiscussionPanel } from "./discussion.js";
 import { CardLinks, Markdown } from "./markdown-view.js";
 import { Button } from "./components/ui/button";
@@ -647,6 +648,18 @@ export function CardDetails({
                   <p className="mt-6 text-sm leading-6 text-foreground/80">
                     No description.
                   </p>
+                )}
+                {card && (
+                  <CardAttachments
+                    key={card.id}
+                    boardId={boardId}
+                    cardId={card.id}
+                    count={card.attachmentCount ?? 0}
+                    onError={(message) => {
+                      setError(message);
+                      onError(message);
+                    }}
+                  />
                 )}
                 {card &&
                   ["review", "done", "archived"].includes(card.status) &&
