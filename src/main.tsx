@@ -129,6 +129,20 @@ function ServerHost() {
   return <span data-testid="server-host">{host || "Bakery"}</span>;
 }
 
+/** Count of cards created outside this UI that the operator has not seen yet. */
+function NewCardsBadge({ count }: { count: number }) {
+  const label = `${count} new ${count === 1 ? "card" : "cards"}`;
+  return (
+    <span
+      role="status"
+      aria-label={label}
+      title={label}
+      className="ml-auto mr-2 shrink-0 rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
+    >
+      {count}
+    </span>
+  );
+}
 function filterCards(cards: Card[], query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return cards;
@@ -1045,6 +1059,34 @@ export function App() {
       clearTimeout(timer);
     };
   }, [view, boardId, refreshKey, settings?.notifyOnReview]);
+  // Opening the Kanban view marks the board's new cards seen and highlights just those cards for this visit. Cards
+  // that arrive while the view is open are marked and highlighted the same way. Leaving the view drops the highlight.
+  const [newCardIds, setNewCardIds] = useState<Set<string>>(new Set());
+  const boardHasNew =
+    (boards.find((item) => item.id === boardId)?.newCards ?? 0) > 0;
+  useEffect(() => setNewCardIds(new Set()), [view, boardId]);
+  useEffect(() => {
+    if (view !== "board" || !boardId || !boardHasNew) return;
+    let current = true;
+    api<{ cardIds: string[] }>(`/boards/${boardId}/cards-seen`, {
+      method: "POST",
+    }).then(
+      ({ cardIds }) => {
+        if (current)
+          setBoards((previous) =>
+            previous.map((item) =>
+              item.id === boardId ? { ...item, newCards: 0 } : item,
+            ),
+          );
+        if (current && cardIds.length)
+          setNewCardIds((previous) => new Set([...previous, ...cardIds]));
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [view, boardId, boardHasNew]);
   // An error belongs to the board it happened on, so switching board or view dismisses it.
   useEffect(() => setError(""), [view, boardId]);
   const currentBoard = boards.find((item) => item.id === boardId);
@@ -1402,6 +1444,9 @@ export function App() {
                       <RepoBadge board={item} />
                       <span className="truncate">{repoName(item.repo)}</span>
                     </button>
+                    {!open && !!item.newCards && (
+                      <NewCardsBadge count={item.newCards} />
+                    )}
                     <ul
                       aria-label="Card counts"
                       className="flex shrink-0 items-center justify-end gap-2 pr-3"
@@ -1449,6 +1494,9 @@ export function App() {
                       className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${active ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <Kanban size={13} aria-hidden="true" /> Kanban
+                      {!!item.newCards && (
+                        <NewCardsBadge count={item.newCards} />
+                      )}
                     </button>
                   )}
                   {open && supportsPullRequests(item) && (
@@ -1543,7 +1591,7 @@ export function App() {
               action(() =>
                 api(`/boards/${board.id}/cards`, {
                   method: "POST",
-                  body: JSON.stringify({ title, body: "" }),
+                  body: JSON.stringify({ title, body: "", origin: "ui" }),
                 }),
               )
             }
@@ -2318,6 +2366,12 @@ export function App() {
                               key={item.id}
                               onClick={() => {
                                 setSelected(item.id);
+                                setNewCardIds((previous) => {
+                                  if (!previous.has(item.id)) return previous;
+                                  const next = new Set(previous);
+                                  next.delete(item.id);
+                                  return next;
+                                });
                               }}
                               draggable={!busy && targets.length > 0}
                               onDragStart={(event) => {
@@ -2330,6 +2384,7 @@ export function App() {
                               }}
                               onDragEnd={endDrag}
                               data-card-tile={item.status}
+                              data-new={newCardIds.has(item.id) || undefined}
                               data-stripe={
                                 needsYourReview(item)
                                   ? "review"
@@ -2344,8 +2399,13 @@ export function App() {
                               data-dragging={
                                 dragging?.card.id === item.id || undefined
                               }
-                              className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50`}
+                              className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50 data-[new]:border-primary data-[new]:ring-2 data-[new]:ring-primary/60`}
                             >
+                              {newCardIds.has(item.id) && (
+                                <span className="mb-1 inline-block rounded-full bg-primary px-2 py-px text-[10px] font-semibold uppercase tracking-[.1em] text-primary-foreground">
+                                  New
+                                </span>
+                              )}
                               {content}
                             </button>
                           );
@@ -3334,7 +3394,9 @@ export function App() {
                   `/boards/${owner}/cards${editing ? `/${editing.id}` : ""}`,
                   {
                     method: editing ? "PATCH" : "POST",
-                    body: JSON.stringify(value),
+                    body: JSON.stringify(
+                      editing ? value : { ...value, origin: "ui" },
+                    ),
                   },
                 );
                 // The card exists first; its files stream up one by one after.

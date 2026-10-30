@@ -90,6 +90,8 @@ export type AutoReviewJob = { cardId: string; runId: string; state: "running" | 
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
+/** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
+export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
 /** A status change (fromStatus/toStatus set) or a note (both null), with why it happened. */
 export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string };
@@ -171,6 +173,8 @@ export class Board {
       this.db.exec("UPDATE cards SET priority = CASE priority WHEN -1 THEN -10 WHEN 1 THEN 50 WHEN 2 THEN 100 ELSE priority END; PRAGMA user_version = 1");
     }
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
+    // "ui" for cards the operator wrote in the board UI; "api" for the CLI, chat, agents, scripts and plans.
+    if (!cardColumns.has("origin")) this.db.exec("ALTER TABLE cards ADD COLUMN origin TEXT NOT NULL DEFAULT 'api'");
     for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     if (!cardColumns.has("prPushedRunId")) {
@@ -242,6 +246,12 @@ export class Board {
     if (!boardColumns.has("integrationChosen")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationChosen INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("githubMainProtected")) this.db.exec("ALTER TABLE boards ADD COLUMN githubMainProtected INTEGER");
     if (!boardColumns.has("integrationNote")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationNote TEXT NOT NULL DEFAULT ''");
+    // Cards created after this time, anywhere but the board's own UI, count as new until the operator opens the board.
+    // Existing boards start from the upgrade, so cards made before it never show as new.
+    if (!boardColumns.has("cardsSeenAt")) {
+      this.db.exec("ALTER TABLE boards ADD COLUMN cardsSeenAt TEXT");
+      this.db.prepare("UPDATE boards SET cardsSeenAt=?").run(now());
+    }
 
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
@@ -366,7 +376,7 @@ export class Board {
       return this.getBoard(existing.id)!;
     }
     const id = randomUUID();
-    this.db.prepare("INSERT INTO boards(id, repo) VALUES (?, ?)").run(id, repo);
+    this.db.prepare("INSERT INTO boards(id, repo, cardsSeenAt) VALUES (?, ?, ?)").run(id, repo, now());
     return this.getBoard(id)!;
   }
   setAppearance(id: string, icon: string, color: string): RepoBoard {
@@ -810,6 +820,22 @@ export class Board {
     if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status IN ('running', 'interrupted') LIMIT 1").get(board.repo)) throw new Error("Resolve running or interrupted cards before removing this board");
     this.db.prepare("UPDATE boards SET archived=1 WHERE id=?").run(id);
   }
+  /** Per repo, how many cards created outside the board UI the operator has not seen yet. Archived cards are left out. */
+  newCardCounts(): Record<string, number> {
+    const rows = this.db.prepare(`SELECT cards.repo AS repo, COUNT(*) AS count FROM cards JOIN boards ON boards.repo=cards.repo
+      WHERE cards.origin!='ui' AND cards.status!='archived' AND cards.createdAt > COALESCE(boards.cardsSeenAt, '') GROUP BY cards.repo`).all() as { repo: string; count: number }[];
+    return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
+  }
+  /** Marks the board's new cards seen and returns their ids, so the UI can point them out for this visit. */
+  markCardsSeen(id: string): string[] {
+    const repoBoard = this.getBoard(id);
+    if (!repoBoard) throw new Error("Board not found");
+    const rows = this.db.prepare(`SELECT cards.id AS id, cards.createdAt AS createdAt FROM cards JOIN boards ON boards.repo=cards.repo
+      WHERE boards.id=? AND cards.origin!='ui' AND cards.status!='archived' AND cards.createdAt > COALESCE(boards.cardsSeenAt, '') ORDER BY cards.createdAt`).all(id) as { id: string; createdAt: string }[];
+    // Move the marker to the newest card seen, not to now, so a card created during this request still counts later.
+    if (rows.length) this.db.prepare("UPDATE boards SET cardsSeenAt=? WHERE id=? AND COALESCE(cardsSeenAt, '') < ?").run(rows.at(-1)!.createdAt, id, rows.at(-1)!.createdAt);
+    return rows.map(row => row.id);
+  }
   /** Cards per board and status. `review` counts only Review cards that need you; `reviewWaiting` counts the rest. */
   cardCounts(): Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> {
     const counts: Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> = {};
@@ -882,7 +908,7 @@ export class Board {
     return row && this.getCard(row.id);
   }
   /** `dependsOn` lists cards on the same board that must be Done before this one starts. */
-  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[] }): Card {
+  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin }): Card {
     const key = input.idempotencyKey ?? null;
     if (key !== null && (!key.trim() || key.length > 200)) throw new Error("Idempotency key must be 1 to 200 characters");
     const existing = key === null ? undefined : this.getCardByIdempotencyKey(input.repo, key);
@@ -891,8 +917,8 @@ export class Board {
     this.addRepo(input.repo);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?)")
-        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0));
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, origin) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0), input.origin ?? "api");
       for (const parent of new Set(input.dependsOn ?? [])) {
         this.checkDependency(this.getCard(id)!, parent);
         this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);

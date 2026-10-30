@@ -249,7 +249,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/repository-root" && req.method === "GET") {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
-    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {} }))); return; }
+    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
       // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
@@ -387,6 +387,12 @@ const server = createServer(async (req, res) => {
       if (repoBoard.integration === "github-pr") void githubSync.syncBoard(repoBoard.id);
       send(res, 200, { main }); return;
     }
+    // Opening the Kanban view: marks the board's new cards seen and returns their ids for the visit's highlight.
+    const seenRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards-seen$/);
+    if (seenRoute && req.method === "POST") {
+      if (!board.getBoard(seenRoute[1])) { send(res, 404, { error: "Board not found" }); return; }
+      send(res, 200, { cardIds: board.markCardsSeen(seenRoute[1]) }); return;
+    }
     const conflictsRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflicts$/);
     if (conflictsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(conflictsRoute[1]);
@@ -494,7 +500,7 @@ const server = createServer(async (req, res) => {
           // A repeated key returns the board's existing card unchanged, whatever its status.
           const existing = key === null ? undefined : board.getCardByIdempotencyKey(repoBoard.repo, key);
           if (existing) { send(res, 200, existing); return; }
-          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn) })); return;
+          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn), origin: input.origin === "ui" ? "ui" : "api" })); return;
         }
       } else {
         const item = board.getCard(id);
