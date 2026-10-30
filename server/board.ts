@@ -138,7 +138,7 @@ export class Board {
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, unseen INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', ${usageDefinitions}, UNIQUE(cardId, attempt));
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'sprinkle_donut', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0, agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
@@ -176,8 +176,9 @@ export class Board {
       this.db.exec("UPDATE cards SET priority = CASE priority WHEN -1 THEN -10 WHEN 1 THEN 50 WHEN 2 THEN 100 ELSE priority END; PRAGMA user_version = 1");
     }
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
-    // "ui" for cards the operator wrote in the board UI; "api" for the CLI, chat, agents, scripts and plans.
-    if (!cardColumns.has("origin")) this.db.exec("ALTER TABLE cards ADD COLUMN origin TEXT NOT NULL DEFAULT 'api'");
+    // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
+    // Cards that exist before this column are not new, and a card made in the board UI never is.
+    if (!cardColumns.has("unseen")) this.db.exec("ALTER TABLE cards ADD COLUMN unseen INTEGER NOT NULL DEFAULT 0");
     for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     if (!cardColumns.has("prPushedRunId")) {
@@ -251,12 +252,6 @@ export class Board {
     if (!boardColumns.has("integrationChosen")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationChosen INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("githubMainProtected")) this.db.exec("ALTER TABLE boards ADD COLUMN githubMainProtected INTEGER");
     if (!boardColumns.has("integrationNote")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationNote TEXT NOT NULL DEFAULT ''");
-    // Cards created after this time, anywhere but the board's own UI, count as new until the operator opens the board.
-    // Existing boards start from the upgrade, so cards made before it never show as new.
-    if (!boardColumns.has("cardsSeenAt")) {
-      this.db.exec("ALTER TABLE boards ADD COLUMN cardsSeenAt TEXT");
-      this.db.prepare("UPDATE boards SET cardsSeenAt=?").run(now());
-    }
 
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
@@ -381,7 +376,7 @@ export class Board {
       return this.getBoard(existing.id)!;
     }
     const id = randomUUID();
-    this.db.prepare("INSERT INTO boards(id, repo, cardsSeenAt) VALUES (?, ?, ?)").run(id, repo, now());
+    this.db.prepare("INSERT INTO boards(id, repo) VALUES (?, ?)").run(id, repo);
     return this.getBoard(id)!;
   }
   setAppearance(id: string, icon: string, color: string): RepoBoard {
@@ -854,19 +849,18 @@ export class Board {
   }
   /** Per repo, how many cards created outside the board UI the operator has not seen yet. Archived cards are left out. */
   newCardCounts(): Record<string, number> {
-    const rows = this.db.prepare(`SELECT cards.repo AS repo, COUNT(*) AS count FROM cards JOIN boards ON boards.repo=cards.repo
-      WHERE cards.origin!='ui' AND cards.status!='archived' AND cards.createdAt > COALESCE(boards.cardsSeenAt, '') GROUP BY cards.repo`).all() as { repo: string; count: number }[];
+    const rows = this.db.prepare("SELECT repo, COUNT(*) AS count FROM cards WHERE unseen=1 AND status!='archived' GROUP BY repo").all() as { repo: string; count: number }[];
     return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
   }
-  /** Marks the board's new cards seen and returns their ids, so the UI can point them out for this visit. */
-  markCardsSeen(id: string): string[] {
+  /**
+   * Marks seen the board's new cards among `cardIds` (the ones the operator's screen has loaded) and returns them,
+   * so the UI can point them out for this visit. Other new cards, such as one created after that screen loaded, stay new.
+   */
+  markCardsSeen(id: string, cardIds: string[]): string[] {
     const repoBoard = this.getBoard(id);
     if (!repoBoard) throw new Error("Board not found");
-    const rows = this.db.prepare(`SELECT cards.id AS id, cards.createdAt AS createdAt FROM cards JOIN boards ON boards.repo=cards.repo
-      WHERE boards.id=? AND cards.origin!='ui' AND cards.status!='archived' AND cards.createdAt > COALESCE(boards.cardsSeenAt, '') ORDER BY cards.createdAt`).all(id) as { id: string; createdAt: string }[];
-    // Move the marker to the newest card seen, not to now, so a card created during this request still counts later.
-    if (rows.length) this.db.prepare("UPDATE boards SET cardsSeenAt=? WHERE id=? AND COALESCE(cardsSeenAt, '') < ?").run(rows.at(-1)!.createdAt, id, rows.at(-1)!.createdAt);
-    return rows.map(row => row.id);
+    const mark = this.db.prepare("UPDATE cards SET unseen=0 WHERE id=? AND repo=? AND unseen=1 AND status!='archived'");
+    return [...new Set(cardIds)].filter(cardId => Number(mark.run(cardId, repoBoard.repo).changes) > 0);
   }
   /** Cards per board and status. `review` counts only Review cards that need you; `reviewWaiting` counts the rest. */
   cardCounts(): Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> {
@@ -949,8 +943,8 @@ export class Board {
     this.addRepo(input.repo);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, origin) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?, ?)")
-        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0), input.origin ?? "api");
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1);
       for (const parent of new Set(input.dependsOn ?? [])) {
         this.checkDependency(this.getCard(id)!, parent);
         this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);

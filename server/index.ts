@@ -403,7 +403,9 @@ const server = createServer(async (req, res) => {
     const seenRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards-seen$/);
     if (seenRoute && req.method === "POST") {
       if (!board.getBoard(seenRoute[1])) { send(res, 404, { error: "Board not found" }); return; }
-      send(res, 200, { cardIds: board.markCardsSeen(seenRoute[1]) }); return;
+      const { cardIds } = await body(req);
+      if (!Array.isArray(cardIds) || cardIds.length > 5000 || cardIds.some(item => typeof item !== "string")) { send(res, 400, { error: "cardIds must list the loaded card ids" }); return; }
+      send(res, 200, { cardIds: board.markCardsSeen(seenRoute[1], cardIds as string[]) }); return;
     }
     const conflictsRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflicts$/);
     if (conflictsRoute && req.method === "GET") {

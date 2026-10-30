@@ -1092,34 +1092,75 @@ export function App() {
       clearTimeout(timer);
     };
   }, [view, boardId, refreshKey, settings?.notifyOnReview]);
-  // Opening the Kanban view marks the board's new cards seen and highlights just those cards for this visit. Cards
-  // that arrive while the view is open are marked and highlighted the same way. Leaving the view drops the highlight.
+  // Opening the Kanban view marks the board's new cards seen and highlights just those cards for this visit. Only
+  // cards this screen has loaded are acknowledged, so a card that appears later stays new until a later pass. The
+  // request belongs to the visit (view + board), not to the count that triggered it: a poll that already reads zero
+  // must not drop the answer. A failed request retries, and keeps failing visibly.
   const [newCardIds, setNewCardIds] = useState<Set<string>>(new Set());
+  const [ackRetry, setAckRetry] = useState(0);
   const boardHasNew =
     (boards.find((item) => item.id === boardId)?.newCards ?? 0) > 0;
-  useEffect(() => setNewCardIds(new Set()), [view, boardId]);
+  const boardLoaded = loadedBoard === boardId;
+  const visit = view === "board" && boardId ? boardId : null;
+  const visitRef = useRef<string | null>(null);
+  const loadedCards = useRef<Card[]>([]);
+  const selectedRef = useRef<string | null>(null);
+  const ackInFlight = useRef(false);
+  const ackFailures = useRef(0);
+  loadedCards.current = cards;
+  selectedRef.current = selected;
   useEffect(() => {
-    if (view !== "board" || !boardId || !boardHasNew) return;
-    let current = true;
-    api<{ cardIds: string[] }>(`/boards/${boardId}/cards-seen`, {
+    visitRef.current = visit;
+    ackFailures.current = 0;
+    setNewCardIds(new Set());
+  }, [visit]);
+  // Opening a card by any route (a tile, a deep link, a reload) ends its highlight.
+  useEffect(() => {
+    if (selected)
+      setNewCardIds((previous) => {
+        if (!previous.has(selected)) return previous;
+        const next = new Set(previous);
+        next.delete(selected);
+        return next;
+      });
+  }, [selected]);
+  useEffect(() => {
+    if (!visit || !boardLoaded || !boardHasNew || ackInFlight.current) return;
+    ackInFlight.current = true;
+    const target = visit;
+    api<{ cardIds: string[] }>(`/boards/${target}/cards-seen`, {
       method: "POST",
-    }).then(
-      ({ cardIds }) => {
-        if (current)
+      body: JSON.stringify({ cardIds: loadedCards.current.map((c) => c.id) }),
+    })
+      .then(
+        ({ cardIds }) => {
+          if (visitRef.current !== target) return;
+          ackFailures.current = 0;
           setBoards((previous) =>
             previous.map((item) =>
-              item.id === boardId ? { ...item, newCards: 0 } : item,
+              item.id === target ? { ...item, newCards: 0 } : item,
             ),
           );
-        if (current && cardIds.length)
-          setNewCardIds((previous) => new Set([...previous, ...cardIds]));
-      },
-      () => undefined,
-    );
-    return () => {
-      current = false;
-    };
-  }, [view, boardId, boardHasNew]);
+          const fresh = cardIds.filter((id) => id !== selectedRef.current);
+          if (fresh.length)
+            setNewCardIds((previous) => new Set([...previous, ...fresh]));
+        },
+        (failure) => {
+          if (visitRef.current !== target) return;
+          ackFailures.current += 1;
+          if (ackFailures.current >= 3)
+            setError(`Could not mark new cards as seen: ${String(failure)}`);
+          setTimeout(() => {
+            if (visitRef.current === target) setAckRetry((n) => n + 1);
+          }, 2000);
+        },
+      )
+      .finally(() => {
+        ackInFlight.current = false;
+        // A visit that began while this request ran never got its own pass.
+        if (visitRef.current !== target) setAckRetry((n) => n + 1);
+      });
+  }, [visit, boardLoaded, boardHasNew, ackRetry]);
   // An error belongs to the board it happened on, so switching board or view dismisses it.
   useEffect(() => setError(""), [view, boardId]);
   const currentBoard = boards.find((item) => item.id === boardId);
@@ -2482,12 +2523,6 @@ export function App() {
                               key={item.id}
                               onClick={() => {
                                 setSelected(item.id);
-                                setNewCardIds((previous) => {
-                                  if (!previous.has(item.id)) return previous;
-                                  const next = new Set(previous);
-                                  next.delete(item.id);
-                                  return next;
-                                });
                               }}
                               draggable={!busy && targets.length > 0}
                               onDragStart={(event) => {
