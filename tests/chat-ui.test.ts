@@ -144,6 +144,47 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
   }
 });
 
+test("a failed save does not discard a corrected pick queued behind it", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    let saved = { ...chat };
+    const patches: { model: string; thinking: string }[] = [];
+    await page.route("**/api/**", async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [saved] });
+      if (path === "/api/boards/b1/chats/c1" && request.method() === "PATCH") {
+        const input = request.postDataJSON();
+        patches.push(input);
+        if (patches.length === 1) { await new Promise(resolve => setTimeout(resolve, 400)); return route.fulfill({ status: 400, json: { error: "bad model" } }); }
+        saved = { ...saved, ...input };
+        return route.fulfill({ json: saved });
+      }
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat: saved, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c1/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "live", live: null })}\n\n` });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const thinking = page.getByLabel("Chat thinking");
+    await thinking.waitFor();
+    await thinking.selectOption("high");
+    await thinking.selectOption("medium");
+    for (let i = 0; i < 50 && patches.length < 2; i++) await page.waitForTimeout(100);
+    assert.equal(patches.length, 2, "the corrected pick is still sent after the first save fails");
+    assert.equal(patches[1].thinking, "medium");
+    await page.reload();
+    await thinking.waitFor();
+    assert.equal(await thinking.inputValue(), "medium");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
 test("quick model and thinking picks both persist, and Send waits for them to save", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();

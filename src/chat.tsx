@@ -258,7 +258,9 @@ export function ChatView({
           settle(id, sending);
           return true;
         } catch (err) {
-          settle(id, null);
+          // Drop the pick only if nothing newer was chosen; a newer pick is saved by the next queued request.
+          const newer = wantedRef.current[id];
+          if (!newer || same(newer, sending)) settle(id, sending);
           fail(err);
           return false;
         }
@@ -493,7 +495,7 @@ export function ChatView({
                 void choose({ ...choice, model: modelDraft });
               }
             }}
-            placeholder="Pi default"
+            placeholder={defaultChatModel.model}
             className="w-64 min-w-0 rounded-md border border-border bg-background px-2 py-1 font-mono"
           />
           <select
@@ -508,7 +510,7 @@ export function ChatView({
             }
             className="rounded-md border border-border bg-background px-2 py-1"
           >
-            <option value="">Pi default</option>
+            <option value="">Default ({defaultChatModel.thinking})</option>
             {thinkingLevels.map((level) => (
               <option key={level} value={level}>
                 {level}

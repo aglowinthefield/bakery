@@ -122,6 +122,11 @@ export function reportFromOutput(output: string): string | null {
   return output.slice(marker.index + marker[0].length).trim() || null;
 }
 
+/** Pi restores a resumed session's earlier model and thinking when a flag is omitted, so an empty field means the chat default, never "no flag". */
+function chatChoice(choice: unknown): AgentModel {
+  const { model, thinking } = validateAgentModel(choice, "chat");
+  return { model: model || defaultChatModel.model, thinking: thinking || defaultChatModel.thinking };
+}
 /** A chat's title from its first message: the first line, cut to 80 characters. */
 export function chatTitle(message: string): string {
   const line = message.trim().split("\n")[0].trim();
@@ -1104,14 +1109,14 @@ export class Board {
   getChat(id: string): Chat | undefined { return this.db.prepare("SELECT * FROM chats WHERE id=?").get(id) as Chat | undefined; }
   /** Creates a chat with the given model choice, or the cheap chat default. */
   createChat(boardId: string, title = "", choice: unknown = defaultChatModel): Chat {
-    const { model, thinking } = validateAgentModel(choice, "chat");
+    const { model, thinking } = chatChoice(choice);
     const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", model, thinking, createdAt: time, updatedAt: time };
     this.db.prepare("INSERT INTO chats(id, boardId, title, model, thinking, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)").run(chat.id, boardId, title, model, thinking, time, time);
     return chat;
   }
   /** Switches the model for the chat's next turns; Pi keeps the conversation across the switch. */
   setChatModel(id: string, choice: unknown): Chat {
-    const { model, thinking } = validateAgentModel(choice, "chat");
+    const { model, thinking } = chatChoice(choice);
     this.db.prepare("UPDATE chats SET model=?, thinking=? WHERE id=?").run(model, thinking, id);
     return this.getChat(id)!;
   }

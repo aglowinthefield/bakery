@@ -87,7 +87,7 @@ test("a chat keeps its own model, separate from card runs, and switching applies
     assert.throws(() => board.setChatModel(chat.id, { model: "--evil", thinking: "low" }), /Pi model pattern/);
     assert.throws(() => board.setChatModel(chat.id, { model: "a/b", thinking: "huge" }), /thinking must be/);
     const picked = board.createChat(repoBoard.id, "", { model: "", thinking: "" });
-    assert.deepEqual([picked.model, picked.thinking], ["", ""]);
+    assert.deepEqual([picked.model, picked.thinking], ["openai/gpt-6.1-sol", "low"], "an empty pick means the chat default");
 
     const pi = fakePi(dir, `for last; do :; done; echo "$@" > "${dir}/args-$last"
 echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ok"}}'
@@ -107,7 +107,28 @@ echo '{"type":"agent_settled","aborted":false}'`);
     const [first, second, third] = ["first", "second", "third"].map(message => readFileSync(join(dir, `args-${message}`), "utf8"));
     assert.ok(first.includes("--model anthropic/claude-sonnet-4-5 --thinking medium --") && !first.includes("opus"), first);
     assert.ok(second.includes("--model openai/gpt-6.1-sol --thinking minimal --"), second);
-    assert.ok(!third.includes("--model") && !third.includes("--thinking"), "an empty choice leaves both to Pi");
+    assert.ok(third.includes("--model openai/gpt-6.1-sol --thinking low --"), third);
+  } finally { done(); }
+});
+
+test("clearing the picker on a resumed session restores the defaults, not the session's earlier choice", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    // Like Pi: a resumed session keeps its earlier model/thinking for any flag that is omitted.
+    const pi = fakePi(dir, `model=$(cat "${dir}/model" 2>/dev/null); thinking=$(cat "${dir}/thinking" 2>/dev/null)
+while [ $# -gt 0 ]; do case "$1" in --model) model=$2; shift;; --thinking) thinking=$2; shift;; esac; shift; done
+echo "$model" > "${dir}/model"; echo "$thinking" > "${dir}/thinking"; echo "$model $thinking" >> "${dir}/effective"
+echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
+echo '{"type":"agent_settled","aborted":false}'`);
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const chat = board.createChat(repoBoard.id, "", { model: "anthropic/claude-sonnet-4-5", thinking: "high" });
+    for (const [message, choice] of [["one", undefined], ["two", { model: "", thinking: "" }]] as const) {
+      if (choice) board.setChatModel(chat.id, choice);
+      const finished = settle(chats, chat.id);
+      chats.send(repoBoard, chat.id, message);
+      await finished;
+    }
+    assert.deepEqual(readFileSync(join(dir, "effective"), "utf8").trim().split("\n"), ["anthropic/claude-sonnet-4-5 high", "openai/gpt-6.1-sol low"]);
   } finally { done(); }
 });
 
