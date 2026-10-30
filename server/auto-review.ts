@@ -141,6 +141,9 @@ export class AutoReview {
       if (!run.worktree) throw new Error("Card worktree is missing");
       // A pull-request board never merges locally, so uncommitted changes on local main are not in the way.
       const pullRequests = this.board.integrationFor(card.repo) === "github-pr";
+      // At the board's merge limit the card waits for a person before verification or review, so no tokens are spent.
+      if (!pullRequests && this.board.autoReviewMergeLimitReached(repoBoard))
+        throw new Error(`This board's limit of ${repoBoard.autoReviewMergeLimit} unattended merges per 24 hours is reached; review and approve it yourself, or raise the limit`);
       const blocked = pullRequests ? [] : this.integration.localConflicts(card);
       if (blocked.length) throw new Error(`Uncommitted changes on main overlap this card (${blocked.slice(0, 10).join(", ")}); commit or stash them, then approve`);
       // A failed verifier never spends review tokens. When it fails, the last 2000 characters of its
@@ -180,6 +183,7 @@ export class AutoReview {
       if (verdict.verdict !== "approve") throw new Error(`Agent requested ${verdict.verdict === "request_changes" ? "changes" : "human review"}: ${verdict.reason}${verdict.changes ? ` ${JSON.stringify(verdict.changes)}` : ""}`);
       const current = this.board.getBoard(repoBoard.id);
       if (!current?.autoReviewEnabled || current.autoReviewEnabledAt !== repoBoard.autoReviewEnabledAt || current.verificationCommand !== repoBoard.verificationCommand) throw new Error("Auto-review was disabled or its settings changed");
+      if (this.board.autoReviewMergeLimitReached(current)) throw new Error(`This board's limit of ${current.autoReviewMergeLimit} unattended merges per 24 hours was reached during review; approve it yourself, or raise the limit`);
       const currentCard = this.board.getCard(card.id);
       if (!currentCard || currentCard.title !== card.title || currentCard.body !== card.body) throw new Error("Card changed during agent review");
       if (this.integration.review(currentCard).fingerprint !== fingerprint) throw new Error("Work changed during agent review");
@@ -189,8 +193,8 @@ export class AutoReview {
         const latestCard = this.board.getCard(card.id), latestBoard = this.board.getBoard(repoBoard.id);
         if (!latestCard || latestCard.title !== card.title || latestCard.body !== card.body ||
           !latestBoard?.autoReviewEnabled || latestBoard.autoReviewEnabledAt !== repoBoard.autoReviewEnabledAt ||
-          latestBoard.verificationCommand !== repoBoard.verificationCommand)
-          throw new Error("Card or auto-review settings changed before merge; human review required");
+          latestBoard.verificationCommand !== repoBoard.verificationCommand || this.board.autoReviewMergeLimitReached(latestBoard))
+          throw new Error("Card or auto-review settings changed, or the merge limit was reached, before merge; human review required");
       });
       this.board.finishAutoReview(run.id, "merged", verdict.reason, fingerprint);
       console.log(`Auto-review merged card ${result.id} in ${result.repo}`);

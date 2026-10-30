@@ -289,6 +289,38 @@ test("unattended merges have no daily cap, and disabling stops new reviews", asy
   } finally { item.close(); }
 });
 
+test("a board's merge limit leaves the next card for a person before any verification or review tokens are spent", async () => {
+  const item = fixture();
+  try {
+    const marker = join(item.dir, "verified");
+    item.board.setAutoReview(item.repoBoard.id, true, `echo run >> ${marker}`);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMergeLimit, 0, "no limit by default");
+    assert.throws(() => item.board.setAutoReviewMergeLimit(item.repoBoard.id, -1), /0 \(no limit\) or between 1 and 99/);
+    assert.throws(() => item.board.setAutoReviewMergeLimit(item.repoBoard.id, 1.5), /0 \(no limit\)/);
+    assert.throws(() => item.board.setAutoReviewMergeLimit(item.repoBoard.id, 100), /0 \(no limit\)/);
+    assert.equal(item.board.setAutoReviewMergeLimit(item.repoBoard.id, 1).autoReviewMergeLimit, 1);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const first = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getCard(first.card.id)?.status, "done");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMerges, 1);
+    const verifications = readFileSync(marker, "utf8").split("\n").filter(Boolean).length;
+    const next = item.reviewedCard();
+    await item.auto.tick();
+    const job = item.board.getAutoReviewJob(next.run.id)!;
+    assert.equal(item.board.getCard(next.card.id)?.status, "review");
+    assert.equal(job.state, "needs_human");
+    assert.match(job.details, /limit of 1 unattended merges per 24 hours is reached/);
+    assert.equal(job.cost ?? 0, 0, "no reviewer ran");
+    assert.equal(readFileSync(marker, "utf8").split("\n").filter(Boolean).length, verifications, "the verification command did not run");
+    // Raising the limit or removing it does not re-queue a card already left for a person, but a new card merges.
+    item.board.setAutoReviewMergeLimit(item.repoBoard.id, 0);
+    const third = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getCard(third.card.id)?.status, "done");
+  } finally { item.close(); }
+});
+
 test("failing verification leaves the card in Review without calling a model or retrying", async () => {
   const item = fixture();
   try {
