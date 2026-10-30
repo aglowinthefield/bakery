@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { MessageSquarePlus, Square, Trash2 } from "lucide-react";
-import { api } from "./api.js";
+import { api, listModels } from "./api.js";
+import {
+  defaultChatModel,
+  thinkingLevels,
+  type AgentModel,
+  type ThinkingLevel,
+} from "../server/agent-models.js";
 import { Button } from "./components/ui/button";
 import { Markdown } from "./markdown-view.js";
 import type { Chat, ChatLive, ChatMessage, ChatPart } from "./model.js";
@@ -63,6 +69,9 @@ export function ChatView({
   const [state, setState] = useState<ChatState>({ messages: [], live: null });
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  // The model for the next new chat; an open chat shows and changes its own.
+  const [newChoice, setNewChoice] = useState<AgentModel>(defaultChatModel);
+  const [models, setModels] = useState<string[]>([]);
   const end = useRef<HTMLDivElement>(null);
   const base = `/boards/${boardId}/chats`;
   const fail = (err: unknown) =>
@@ -141,9 +150,42 @@ export function ChatView({
     state.live?.parts.at(-1),
   ]);
 
+  const current = chats?.find((chat) => chat.id === chatId);
+  const choice: AgentModel = current
+    ? { model: current.model, thinking: current.thinking }
+    : newChoice;
+  const [modelDraft, setModelDraft] = useState(choice.model);
+  useEffect(() => setModelDraft(choice.model), [chatId, choice.model]);
+  const choose = async (next: AgentModel) => {
+    next = { ...next, model: next.model.trim() };
+    if (!current) return setNewChoice(next);
+    if (next.model === current.model && next.thinking === current.thinking)
+      return setModelDraft(current.model);
+    try {
+      const saved = await api<Chat>(`${base}/${current.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(next),
+      });
+      setChats(
+        (previous) =>
+          previous?.map((chat) =>
+            chat.id === saved.id ? { ...chat, ...saved } : chat,
+          ) ?? null,
+      );
+    } catch (err) {
+      setModelDraft(current.model);
+      fail(err);
+    }
+  };
+  const loadModels = () =>
+    void listModels().then((result) => setModels(result.models));
+
   const create = async () => {
     try {
-      const chat = await api<Chat>(base, { method: "POST", body: "{}" });
+      const chat = await api<Chat>(base, {
+        method: "POST",
+        body: JSON.stringify(newChoice),
+      });
       setChats((previous) => [chat, ...(previous ?? [])]);
       setChatId(chat.id);
     } catch (err) {
@@ -168,7 +210,11 @@ export function ChatView({
     try {
       let id = chatId;
       if (!id) {
-        const chat = await api<Chat>(base, { method: "POST", body: "{}" });
+        const chat = await api<Chat>(base, {
+          method: "POST",
+          body: JSON.stringify(newChoice),
+        });
+        setChats((previous) => [chat, ...(previous ?? [])]);
         id = chat.id;
         setChatId(id);
       }
@@ -277,8 +323,54 @@ export function ChatView({
           )}
           <div ref={end} />
         </ol>
+        <div className="flex items-center gap-2 border-t border-border px-3 pt-2 text-xs lg:px-8">
+          <datalist id="chat-models">
+            {models.map((model) => (
+              <option key={model} value={model} />
+            ))}
+          </datalist>
+          <input
+            aria-label="Chat model"
+            list="chat-models"
+            value={modelDraft}
+            disabled={!!chatId && !current}
+            onFocus={loadModels}
+            onChange={(event) => setModelDraft(event.target.value)}
+            onBlur={() => void choose({ ...choice, model: modelDraft })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void choose({ ...choice, model: modelDraft });
+              }
+            }}
+            placeholder="Pi default"
+            className="w-64 min-w-0 rounded-md border border-border bg-background px-2 py-1 font-mono"
+          />
+          <select
+            aria-label="Chat thinking"
+            value={choice.thinking}
+            disabled={!!chatId && !current}
+            onChange={(event) =>
+              void choose({
+                model: modelDraft,
+                thinking: event.target.value as ThinkingLevel | "",
+              })
+            }
+            className="rounded-md border border-border bg-background px-2 py-1"
+          >
+            <option value="">Pi default</option>
+            {thinkingLevels.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+          <span className="text-muted-foreground">
+            {current ? "Used from this chat's next message" : "For new chats"}
+          </span>
+        </div>
         <form
-          className="flex items-end gap-2 border-t border-border p-3 lg:px-8"
+          className="flex items-end gap-2 p-3 pt-2 lg:px-8"
           onSubmit={(event) => {
             event.preventDefault();
             void send();

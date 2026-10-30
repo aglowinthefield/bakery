@@ -55,7 +55,7 @@ import {
 import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { FilePicker, formatSize, uploadAttachment } from "./attachments.js";
-import { ago, api, date } from "./api.js";
+import { ago, api, date, listModels } from "./api.js";
 import {
   agentPhases,
   emptyAgentModels,
@@ -419,8 +419,6 @@ const phaseLabels: Record<AgentPhase, string> = {
   review: "Agent review",
   draft: "PR drafts",
 };
-// Shared across dialogs; listing spawns Pi, so only ask once a model field is used.
-let modelList: Promise<{ models: string[]; error?: string }> | undefined;
 function AgentModelFields({
   scope,
   value,
@@ -438,11 +436,7 @@ function AgentModelFields({
   const [models, setModels] = useState<string[]>([]);
   const [modelError, setModelError] = useState("");
   const loadModels = () => {
-    modelList ??= api<{ models: string[]; error?: string }>("/models").catch(
-      (err) => ({ models: [], error: String(err) }),
-    );
-    void modelList.then((result) => {
-      if (result.error) modelList = undefined;
+    void listModels().then((result) => {
       setModels(result.models);
       setModelError(result.error ?? "");
     });
