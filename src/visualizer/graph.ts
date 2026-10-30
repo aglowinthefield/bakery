@@ -150,10 +150,18 @@ export function stateCounts(
 /** Nodes and dependency edges (dependency → dependent). Edges to cards that are missing or filtered out are dropped. */
 export function buildGraph(
   cards: Card[],
-  options: { done?: DoneFilter; now?: number; quietAfterMs?: number } = {},
+  options: {
+    done?: DoneFilter;
+    /** False leaves out cards still in Triage (not yet scheduled). Default true. */
+    triage?: boolean;
+    now?: number;
+    quietAfterMs?: number;
+  } = {},
 ): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const now = options.now ?? Date.now();
-  const shown = visibleCards(cards, options.done ?? "relevant");
+  const shown = visibleCards(cards, options.done ?? "relevant").filter(
+    (card) => options.triage !== false || card.status !== "triage",
+  );
   const ids = new Set(shown.map((card) => card.id));
   const nodes = shown.map((card) => ({
     id: card.id,

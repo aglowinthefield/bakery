@@ -109,11 +109,15 @@ export function Header({
   look,
   done,
   onDone,
+  triage,
+  onTriage,
 }: {
   counts: Partial<Record<VisualState, number>>;
   look: Look;
   done: DoneFilter;
   onDone: (done: DoneFilter) => void;
+  triage: boolean;
+  onTriage: (triage: boolean) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-6 py-2.5 text-xs lg:px-10">
@@ -139,8 +143,26 @@ export function Header({
       </ul>
       <div
         role="group"
-        aria-label="Done cards"
+        aria-label="Triage cards"
         className="ml-auto flex items-center gap-1.5"
+      >
+        <span className="mr-0.5 text-muted-foreground">Triage</span>
+        {([true, false] as const).map((show) => (
+          <button
+            key={String(show)}
+            type="button"
+            aria-pressed={triage === show}
+            onClick={() => onTriage(show)}
+            className={`cursor-pointer rounded px-2 py-0.5 ${triage === show ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/40"}`}
+          >
+            {show ? "Show" : "Hide"}
+          </button>
+        ))}
+      </div>
+      <div
+        role="group"
+        aria-label="Done cards"
+        className="flex items-center gap-1.5"
       >
         <span className="mr-0.5 text-muted-foreground">Done</span>
         {(Object.keys(doneNames) as DoneFilter[]).map((name) => (
