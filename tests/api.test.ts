@@ -62,7 +62,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code")}`)).status, 400);
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha/subfolder")}`)).status, 400);
     assert.equal((await request(`/path-suggestions?path=${"a".repeat(1025)}`)).status, 400);
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { notifyOnReview: "true" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { cardDetailsLayout: "drawer" })).status, 400);
@@ -70,12 +70,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/settings", "PATCH", { density: "spacious" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { density: "compact" })).data.density, "compact");
     assert.equal((await request("/settings", "PATCH", { density: "default" })).data.density, "default");
-    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual((await request("/settings", "PATCH", { notifyOnReview: true })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "dialog", theme: "default", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual((await request("/settings", "PATCH", { theme: "compline" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual((await request("/settings", "PATCH", { theme: "light" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { notifyOnReview: true })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { theme: "compline" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings", "PATCH", { theme: "light" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual((await request("/settings")).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
@@ -157,11 +157,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(card.repo, realpathSync(alpha));
     assert.equal(card.status, "triage");
     assert.equal(card.priority, 0, "new cards default to Normal");
-    for (const priority of ["critical", "HIGH", 3, 0.5, null])
-      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Bad", body: "", priority })).data.error, /Priority must be low, normal, high, or urgent/);
+    for (const priority of ["critical", "HIGH", 101, -101, 0.5, null])
+      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Bad", body: "", priority })).data.error, /Priority must be a whole number from -100 to 100/);
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: "bogus" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: "high" })).data.priority, 1);
-    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "Edited" })).data.priority, 1, "omitting priority on edit keeps it");
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: "high" })).data.priority, 50);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: 80 })).data.priority, 80);
+    assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "Edited" })).data.priority, 80, "omitting priority on edit keeps it");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "No Pi", priority: 0 })).data.priority, 0);
     assert.equal(card.idempotencyKey, null);
     const keyed = await request(`/boards/${first.id}/cards`, "POST", { title: "Keyed", body: "", idempotencyKey: "script-1" });

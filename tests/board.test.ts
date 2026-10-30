@@ -109,17 +109,19 @@ test("settings default to notifications off and persist across restarts", () => 
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
-    assert.deepEqual(first.getSettings(), { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual(first.getSettings(), { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual(first.updateSettings({ confirmRunStart: true }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     assert.equal(first.updateSettings({ density: "cozy" }).density, "cozy");
+    assert.equal(first.updateSettings({ showCardModels: true }).showCardModels, true);
+    assert.equal(first.updateSettings({ showCardModels: false }).showCardModels, false);
     assert.equal(first.updateSettings({ density: "default" }).density, "default");
-    assert.deepEqual(first.updateSettings({ cardDetailsLayout: "side" }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual(first.updateSettings({ theme: "compline", notifyOnReview: true }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual(first.updateSettings({ cardDetailsLayout: "side" }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual(first.updateSettings({ theme: "compline", notifyOnReview: true }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     first.close();
     const second = new Board(path);
-    assert.deepEqual(second.getSettings(), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual(second.updateSettings({ theme: "light" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual(second.updateSettings({ theme: "default" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual(second.getSettings(), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual(second.updateSettings({ theme: "light" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual(second.updateSettings({ theme: "default" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     second.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -133,7 +135,7 @@ test("existing settings databases gain the Default theme without losing preferen
     legacy.exec("INSERT INTO settings VALUES (1, 1, 'side')");
     legacy.close();
     const board = new Board(path);
-    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -146,8 +148,8 @@ test("a Compline database can save Light without losing its preferences", () => 
     old.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL, cardDetailsLayout TEXT NOT NULL, theme TEXT NOT NULL DEFAULT 'default' CHECK(theme IN ('default', 'compline'))); INSERT INTO settings VALUES (1, 1, 'side', 'compline')");
     old.close();
     const board = new Board(path);
-    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "compline", density: "default", agentModels: emptyAgentModels() });
-    assert.deepEqual(board.updateSettings({ theme: "light" }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "light", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
+    assert.deepEqual(board.updateSettings({ theme: "light" }), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     board.close();
     const reopened = new Board(path);
     assert.equal(reopened.getSettings().theme, "light");
@@ -164,7 +166,7 @@ test("a database from before Hearth can save it without losing density or models
       INSERT INTO settings VALUES (1, 1, 'side', 'light', 1, '{}', 'cozy');`);
     old.close();
     const board = new Board(path);
-    assert.deepEqual(board.updateSettings({ theme: "hearth" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "hearth", density: "cozy", agentModels: emptyAgentModels() });
+    assert.deepEqual(board.updateSettings({ theme: "hearth" }), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "hearth", density: "cozy", showCardModels: false, agentModels: emptyAgentModels() });
     board.close();
     const reopened = new Board(path);
     assert.equal(reopened.getSettings().theme, "hearth");
@@ -180,7 +182,7 @@ test("an older Dark preference maps to the unchanged Default palette", () => {
     old.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), confirmRunStart INTEGER NOT NULL, cardDetailsLayout TEXT NOT NULL, theme TEXT NOT NULL DEFAULT 'dark' CHECK(theme IN ('dark', 'light'))); INSERT INTO settings VALUES (1, 1, 'side', 'dark')");
     old.close();
     const board = new Board(path);
-    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     assert.equal(board.updateSettings({ theme: "compline" }).theme, "compline");
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -469,7 +471,7 @@ test("older databases gain inheriting Pi model settings; repository overrides re
     legacy.prepare("INSERT INTO boards(id, repo) VALUES (?, ?)").run("old", dir);
     legacy.close();
     const board = new Board(path);
-    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", agentModels: emptyAgentModels() });
+    assert.deepEqual(board.getSettings(), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels() });
     assert.deepEqual(board.getBoard("old")?.agentModels, emptyAgentModels());
     assert.deepEqual(board.agentModelFor(dir, "work"), { model: "", thinking: "" });
     assert.throws(() => board.updateSettings({ agentModels: { work: { model: "--version", thinking: "" } } as never }), /model must be/);
@@ -571,4 +573,19 @@ test("creating cards from a plan records their ids and refuses a second set", ()
     assert.throws(() => board.createPlanCards(card.id), /already created/);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the four old priority levels move to their numeric values once", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "bakery-priority-")), "board.db");
+  const repo = "/tmp/priority-repo";
+  const first = new Board(path);
+  const ids = [-1, 0, 1, 2].map(priority => first.createCard({ title: `p${priority}`, body: "", repo }).id);
+  const db = new DatabaseSync(path);
+  [-1, 0, 1, 2].forEach((priority, index) => db.prepare("UPDATE cards SET priority=? WHERE id=?").run(priority, ids[index]));
+  db.exec("PRAGMA user_version = 0");
+  db.close();
+  const migrated = new Board(path);
+  assert.deepEqual(ids.map(id => migrated.getCard(id)?.priority), [-10, 0, 50, 100]);
+  migrated.updateCard(ids[0], { title: "p-1", body: "", repo, priority: 1 });
+  assert.equal(new Board(path).getCard(ids[0])?.priority, 1, "a later start does not migrate again");
 });

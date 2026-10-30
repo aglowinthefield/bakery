@@ -16,6 +16,13 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
   return data as T;
 }
+/** "5m", "3h", "2d": the footer only needs a rough age; the exact time is in the tooltip. */
+export const ago = (value: string) => {
+  const minutes = Math.max(0, (Date.now() - new Date(value).getTime()) / 60000);
+  if (minutes < 60) return `${Math.floor(minutes)}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / 1440)}d`;
+};
 export const date = (value: string) =>
   new Date(value).toLocaleString([], {
     month: "short",

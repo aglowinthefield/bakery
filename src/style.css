@@ -380,6 +380,8 @@ body { margin: 0; min-width: 320px; background: var(--background); color: var(--
 }
 .card-activity[data-activity="waiting"] { animation: activity-breathe 3.2s ease-in-out infinite; }
 .card-activity[data-turn="yours"] { border-color: color-mix(in srgb, var(--status-review) 70%, transparent); box-shadow: inset 3px 0 0 var(--status-review); }
+/* A left stripe marks what needs attention within a lane: your review or a failure. */
+.card-activity[data-stripe="failed"] { box-shadow: inset 3px 0 0 var(--status-failed); }
 .card-activity[data-activity="quiet"] { border-color: color-mix(in srgb, #d99a3a 70%, transparent); }
 @media (prefers-reduced-motion: reduce) {
   .card-activity[data-activity="working"]::before { animation: none; background: var(--primary); }

@@ -74,6 +74,7 @@ export type BakerySettings = {
   cardDetailsLayout: "dialog" | "side";
   theme: ThemeName;
   density: "compact" | "default" | "cozy";
+  showCardModels?: boolean;
   agentModels?: AgentModels;
 };
 export type ReviewComment = {
@@ -110,15 +111,34 @@ export type ReviewDiff = {
   files: { path: string; patch: string }[];
 };
 // Mirrors server/board.ts: stored as an integer, higher is picked up first.
-export const priorities = [
-  { value: 2, name: "urgent", label: "Urgent" },
-  { value: 1, name: "high", label: "High" },
-  { value: 0, name: "normal", label: "Normal" },
-  { value: -1, name: "low", label: "Low" },
-] as const;
-export type Priority = (typeof priorities)[number]["value"];
+export type Priority = number;
+export const PRIORITY_MIN = -100;
+export const PRIORITY_MAX = 100;
 export const priorityLabel = (value: number) =>
-  priorities.find((item) => item.value === value)?.label ?? "Normal";
+  value > 0
+    ? `Priority ${value}`
+    : value < 0
+      ? `Priority ${value} (below normal)`
+      : "Normal priority";
+/** Parse a typed priority; null when it is not a whole number in range. */
+export const parsePriorityInput = (text: string): Priority | null => {
+  const value = Number(text);
+  return text.trim() !== "" &&
+    Number.isInteger(value) &&
+    value >= PRIORITY_MIN &&
+    value <= PRIORITY_MAX
+    ? value
+    : null;
+};
+/** Warmer for higher priority: grey at 0, amber from 1, orange from 50, red from 90. */
+export const priorityTone = (value: number) =>
+  value >= 90
+    ? "text-red-400"
+    : value >= 50
+      ? "text-orange-400"
+      : value > 0
+        ? "text-amber-400"
+        : "text-muted-foreground";
 // Stable sort: equal priorities keep the server's existing order.
 export const byPriority = <T extends { priority?: number }>(items: T[]) =>
   [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
