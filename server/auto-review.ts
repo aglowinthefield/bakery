@@ -93,11 +93,11 @@ export function reviewerVerdict(stream: string): ReviewerVerdict {
 }
 
 export class AutoReview {
-  private busy = false;
-  private currentCardId: string | null = null;
+  /** Reviews in progress, by run id. A board runs at most `autoReviewConcurrency` at once; boards do not share a limit. */
+  private activeReviews = new Map<string, { cardId: string; repo: string }>();
+  private reviewers = new Map<string, ChildProcess>();
   private draining = false;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private reviewer: ChildProcess | undefined;
   /**
    * `sendBack` starts the implementing agent again on a card the reviewer requested changes to.
    * `openPullRequest` pushes the approved work on a github-pr board and opens (or updates) its PR, returning the card
@@ -111,27 +111,35 @@ export class AutoReview {
   }
   async shutdown(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
-    if (this.reviewer) this.reviewer.kill("SIGTERM");
-    while (this.busy) await new Promise(resolve => setTimeout(resolve, 50));
+    for (const reviewer of this.reviewers.values()) reviewer.kill("SIGTERM");
+    while (this.activeReviews.size) await new Promise(resolve => setTimeout(resolve, 50));
   }
   /** Stops claiming new reviews and resolves once the review in progress, if any, has finished. */
   async drain(): Promise<void> {
     this.draining = true;
-    while (this.busy) await new Promise(resolve => setTimeout(resolve, 50));
+    while (this.activeReviews.size) await new Promise(resolve => setTimeout(resolve, 50));
   }
-  get active(): boolean { return this.busy; }
-  /** The card being reviewed right now, if any. */
-  get activeCardId(): string | null { return this.busy ? this.currentCardId : null; }
+  get active(): boolean { return this.activeReviews.size > 0; }
+  /** How many reviews are in progress right now. */
+  get activeCount(): number { return this.activeReviews.size; }
+  /** The cards being reviewed right now. */
+  get activeCardIds(): string[] { return [...this.activeReviews.values()].map(item => item.cardId); }
+  /**
+   * Starts the oldest waiting reviews of each board that has a free slot, and resolves once those it started have
+   * finished. Reviews started by an earlier tick keep running and keep their slots.
+   */
   async tick(): Promise<void> {
-    if (this.busy || this.draining) return;
+    if (this.draining) return;
     // This is the server's unconditional periodic tick, not an auto-review opt-in.
     this.integration.reconcileExternallyMerged();
-    const candidate = this.board.listAutoReviewCandidates()[0];
-    if (!candidate) return;
-    this.busy = true;
-    this.currentCardId = candidate.card.id;
-    try { await this.process(candidate.card, candidate.run, candidate.board); }
-    finally { this.busy = false; }
+    const started: Promise<void>[] = [];
+    for (const candidate of this.board.listAutoReviewCandidates()) {
+      const running = [...this.activeReviews.values()].filter(item => item.repo === candidate.card.repo).length;
+      if (running >= candidate.board.autoReviewConcurrency) continue;
+      this.activeReviews.set(candidate.run.id, { cardId: candidate.card.id, repo: candidate.card.repo });
+      started.push(this.process(candidate.card, candidate.run, candidate.board).finally(() => this.activeReviews.delete(candidate.run.id)));
+    }
+    await Promise.all(started);
   }
   private async process(card: Card, run: Run, repoBoard: RepoBoard): Promise<void> {
     try { this.board.beginAutoReview(card.id, run.id); }
@@ -226,7 +234,7 @@ export class AutoReview {
     // Same capabilities as a card run (tools, extensions, MCP, skills, context files), without a saved session.
     const args = ["--print", "--mode", "json", "--no-session", ...models, "--", prompt];
     const child = spawn(...command(this.piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
-    this.reviewer = child;
+    this.reviewers.set(runId, child);
     try { return await new Promise<string>((resolve, reject) => {
       let stdout = "", stderr = "", exceeded = false, pending = "";
       const progress = new ReviewProgress(Date.now());
@@ -253,6 +261,6 @@ export class AutoReview {
         else if (code !== 0) reject(new Error(`Agent review failed (${code}): ${stderr.slice(-1000)}`));
         else resolve(stdout);
       });
-    }); } finally { this.reviewer = undefined; }
+    }); } finally { this.reviewers.delete(runId); }
   }
 }

@@ -39,6 +39,7 @@ export type Board = {
   verificationCommand: string;
   autoReviewEnabledAt: string | null;
   autoReviewMergeLimit?: number;
+  autoReviewConcurrency?: number;
   autoReviewMerges?: number;
   autoPickupEnabled: boolean;
   pickupConcurrency: number;
@@ -188,6 +189,8 @@ export type Card = {
   locallyMerged?: boolean;
   /** Set on Review cards that are not your turn yet; see `reviewWaitLabels`. */
   reviewWait?: ReviewWait | null;
+  /** For a card waiting on an agent review that has not started: its place in its board's queue. */
+  reviewQueue?: { position: number; of: number } | null;
   /** A start was asked for during a restart drain and runs after the restart. */
   startQueued?: boolean;
   /** Files attached to the card; the Attachments section only fetches the list when this is above 0. */
@@ -210,6 +213,13 @@ export const reviewWaitLabels: Record<ReviewWait, string> = {
   ci_fix: "CI fix queued",
   github: "Waiting on GitHub",
 };
+/** The label for a Review card's wait; a queued agent review says where it stands. */
+export const reviewWaitText = (card: Card): string =>
+  card.reviewWait === "agent_review" && card.reviewQueue
+    ? `Waiting for agent review (#${card.reviewQueue.position} of ${card.reviewQueue.of})`
+    : card.reviewWait
+      ? reviewWaitLabels[card.reviewWait]
+      : "";
 /** A Review card you can act on now, rather than one an agent, CI or GitHub still has. */
 export const needsYourReview = (card: Card) =>
   card.status === "review" && !card.reviewWait;
@@ -230,7 +240,7 @@ export function cardActivity(
       ? "quiet"
       : "working";
   if (card.status === "review" && card.reviewWait)
-    return card.reviewWait === "agent_review" ? "working" : "waiting";
+    return card.reviewWait === "agent_review" && !card.reviewQueue ? "working" : "waiting";
   return null;
 }
 /**
