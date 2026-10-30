@@ -49,3 +49,49 @@ test("the Chat tab lists chats, shows tool calls, streams the live reply", async
     await server.close();
   }
 });
+
+test("an empty chat is deleted when the user switches to another chat; chats with messages stay", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  const deleted: string[] = [];
+  const fresh = { ...chat, id: "c2", title: "", createdAt: "2025-01-02T00:00:00Z", updatedAt: "2025-01-02T00:00:00Z" };
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await page.route("**/api/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: request.method() === "POST" ? fresh : [chat] });
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat, messages, live: null } });
+      if (path === "/api/boards/b1/chats/c2") {
+        if (request.method() === "DELETE") { deleted.push("c2"); return route.fulfill({ json: {} }); }
+        return route.fulfill({ json: { chat: fresh, messages: [], live: null } });
+      }
+      if (path.endsWith("/events")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(server.resolvedUrls!.local[0]);
+    const row = page.getByRole("button", { name: "b1", exact: true });
+    await row.waitFor();
+    if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    const nav = page.getByRole("navigation", { name: "Chats" });
+    await nav.getByRole("button", { name: "What is blocked?", exact: true }).waitFor();
+    await page.locator("[data-role='agent']").getByText("Card B waits on A.").waitFor();
+
+    await nav.getByRole("button", { name: "New chat" }).click();
+    await page.getByText("New chat", { exact: true }).first().waitFor();
+    await page.waitForTimeout(300);
+    assert.deepEqual(deleted, [], "the empty chat is kept while it is open");
+    await nav.getByRole("button", { name: "What is blocked?", exact: true }).click();
+    await page.waitForTimeout(500);
+    assert.deepEqual(deleted, ["c2"], "switching away deletes the empty chat");
+    assert.equal(await nav.getByRole("button", { name: "Delete New chat" }).count(), 0);
+    assert.equal(await nav.getByRole("button", { name: "What is blocked?", exact: true }).count(), 1, "a chat with messages is kept");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});

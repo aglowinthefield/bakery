@@ -64,6 +64,11 @@ export function ChatView({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const end = useRef<HTMLDivElement>(null);
+  // Latest transcript, whether it finished loading, and chats a send was started for: an empty chat is discarded only when all say it is truly empty.
+  const latest = useRef({ count: 0, live: false, loaded: false });
+  latest.current.count = state.messages.length;
+  latest.current.live = !!state.live;
+  const sentTo = useRef(new Set<string>());
   const base = `/boards/${boardId}/chats`;
   const fail = (err: unknown) =>
     onError(err instanceof Error ? err.message : String(err));
@@ -95,10 +100,12 @@ export function ChatView({
     setState({ messages: [], live: null });
     if (!chatId) return;
     let current = true;
+    latest.current.loaded = false;
     const url = `${base}/${chatId}`;
     void api<{ messages: ChatMessage[]; live: ChatLive }>(url)
       .then((data) => {
         if (!current) return;
+        latest.current.loaded = true;
         setState((previous) => ({
           messages: [
             ...data.messages,
@@ -131,6 +138,14 @@ export function ChatView({
     return () => {
       current = false;
       source.close();
+      // Leaving a chat (another chat, page or board) discards it when it never got a message.
+      const { count, live, loaded } = latest.current;
+      if (loaded && count === 0 && !live && !sentTo.current.has(chatId)) {
+        setChats(
+          (previous) => previous?.filter((c) => c.id !== chatId) ?? previous,
+        );
+        void api(`${base}/${chatId}`, { method: "DELETE" }).catch(() => {});
+      }
     };
   }, [chatId, boardId]);
   useEffect(() => {
@@ -172,6 +187,7 @@ export function ChatView({
         id = chat.id;
         setChatId(id);
       }
+      sentTo.current.add(id);
       await api(`${base}/${id}/messages`, {
         method: "POST",
         body: JSON.stringify({ message }),
