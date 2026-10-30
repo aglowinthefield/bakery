@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
 import { piModelArgs, type AgentPhase } from "./agent-models.js";
-import { Board, type Card, type Run } from "./board.js";
+import { Board, RunLimitError, type Card, type Run } from "./board.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
 function git(repo: string, ...args: string[]) {
@@ -88,9 +88,14 @@ export class Worker {
     // A github-pr card conflicts with origin/main (fetched above), not with the local checkout's main.
     const mainRef = prMode ? "origin/main" : "main";
     const mainTip = conflict ? git(root, "rev-parse", mainRef) : null;
+    // Bakery pushes this work through the repository's pre-push hook after Approve. A check the agent could have run
+    // here otherwise surfaces only then, as another full round.
+    const hookCheck = prMode || this.board.boardForRepo(card.repo)?.pushMainAfterMerge
+      ? " After Approve, Bakery pushes this work through the repository's pre-push hook (find it with `git config core.hooksPath`, for example `.husky/pre-push`, or in `.git/hooks`). If there is one, run the checks it runs before you finish, and fix what they report, since a refused push sends the card back."
+      : "";
     const instructions = conflict
       ? `This is a merge-conflict repair attempt. Bakery could not merge this card into ${mainRef}. Conflicting files: ${JSON.stringify(conflict.files)}. Current ${mainRef} tip: ${mainTip}. Reconcile the reviewed card work with current ${mainRef}. You may merge ${mainRef} into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. ${ciFeedback?.source === "conflict" ? "Resolve every conflict that is mechanical, meaning the right result follows from the two sides without a product or design decision (both sides added lines, renamed or moved code, formatting, lockfiles you can regenerate, generated files you can rebuild). Run the checks that cover the files you touched. Bakery pushes your resolution to the pull request itself once you finish, so commit the merge and leave nothing unresolved. If a conflict needs a human decision (the two sides change the same behavior in incompatible ways, say), run `git merge --abort`, change nothing, and explain exactly what the decision is; Bakery posts your report on the pull request." : "Bakery will ask for human review and approval again; do not attempt to integrate it yourself."}`
-      : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action.";
+      : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action." + hookCheck;
     const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
     const reviewerPrompt = reviewerChanges.length ? `\n\nAn independent agent reviewer inspected the previous attempt and sent it back with these requested changes. Address each item and report any you could not resolve: ${JSON.stringify(reviewerChanges)}` : "";
     const ciPrompt = ciFeedback?.source === "ci" && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix. Some checks are satisfied outside the code, by a label or a line in the pull request description. For this run you are authorized to change that pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} with \`gh pr edit\` (add or remove labels, edit the description) when the repository's own rules allow it, and to post a \`gh pr comment\` there explaining each such change and why the rules allow it. If a failure looks like a hang, timeout or flake rather than a code problem, re-run just the failed jobs once with \`gh run rerun <run-id> --failed\` (run ids are in the failure list or \`gh run list --branch\`) before changing code, and say so in your report; re-run each run at most once. Do not push, merge, close it, or touch any other pull request; Bakery pushes your code changes. The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
@@ -104,6 +109,20 @@ export class Worker {
     const launch = () => this.launchPi(card, run, worktree, prompt, phase);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
+  }
+  /**
+   * Sends a refused push, already recorded with `recordPushFailure`, back to the card's agent. Returns false when the
+   * repository is at its run limit or Bakery is draining for a restart: the hook's output stays recorded and
+   * `AutoPickup` starts the run once it can. Any other failure drops the output, since nothing will retry it, and throws.
+   */
+  startHookFix(card: Card): boolean {
+    if (this.draining) return false;
+    try { this.start(card, "manual", "to fix the failing pre-push hook"); return true; }
+    catch (error) {
+      if (error instanceof RunLimitError) return false;
+      this.board.clearCiFeedback(card.id);
+      throw error;
+    }
   }
   /**
    * A local-mode card starts from origin/main when the repository has an origin and local HEAD is not ahead of it,

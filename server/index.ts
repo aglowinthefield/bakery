@@ -60,21 +60,30 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
   card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true)));
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
- * as a new run, like failed CI, and the card (now running) is returned. If that run cannot start, the push error stands.
+ * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
+ * slot, and the push error says so. If the run cannot start for another reason, the push error stands.
  */
 async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promise<Card> {
-  try { return await push(); }
+  try {
+    const pushed = await push();
+    // Pushed after all (the operator fixed it by hand, say): an earlier refusal still waiting for a slot is stale.
+    if (board.getCiFeedback(card.id)?.source === "push") board.clearCiFeedback(card.id);
+    return pushed;
+  }
   catch (error) {
     if (!(error instanceof PushHookError)) throw error;
-    try {
-      board.recordPushFailure(card.id, error.sha, error.output);
-      const previous = board.listRuns(card.id)[0];
-      if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
-      worker.start(board.getCard(card.id)!, "manual", "to fix the failing pre-push hook");
-    } catch (startError) {
-      board.clearCiFeedback(card.id);
+    board.recordPushFailure(card.id, error.sha, error.output);
+    const previous = board.listRuns(card.id)[0];
+    let started: boolean;
+    try { started = worker.startHookFix(board.getCard(card.id)!); }
+    catch (startError) {
       throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
     }
+    if (!started) {
+      board.noteCard(card.id, "The pre-push hook refused the push. Its output goes to the agent once a run can start (the repository is at its run limit, or Bakery is restarting)");
+      throw new Error(`${error.message}\n\nBakery cannot start a run yet (the repository is at its run limit, or Bakery is restarting), so it sends this to the agent as soon as one can start.`);
+    }
+    if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
     return board.getCard(card.id)!;
   }
 }
