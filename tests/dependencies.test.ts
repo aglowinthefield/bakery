@@ -182,3 +182,17 @@ test("the HTTP API creates cards with dependencies, adds and removes them, and r
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("moving a Triage card to Ready brings its Triage dependencies, transitively, and leaves finished and unrelated cards", async () => {
+  const item = fixture();
+  try {
+    const make = (title: string, dependsOn?: string[]) => item.board.createCard({ title, body: "", repo: item.repo, dependsOn });
+    const leaf = make("Leaf"), mid = make("Mid", [leaf.id]), done = item.board.setStatus(make("Done dep").id, "done"), other = make("Other");
+    const top = make("Top", [mid.id, done.id]);
+    assert.deepEqual(item.board.moveToReadyWithDependencies(top.id).map(moved => moved.title), ["Top", "Leaf", "Mid"]);
+    for (const id of [top.id, mid.id, leaf.id]) assert.equal(item.board.getCard(id)!.status, "ready");
+    assert.equal(item.board.getCard(done.id)!.status, "done");
+    assert.equal(item.board.getCard(other.id)!.status, "triage");
+    assert.match(item.board.listCardEvents(leaf.id).at(-1)!.reason, /Top.*waits on it/);
+  } finally { await item.close(); }
+});

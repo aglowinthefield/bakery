@@ -203,6 +203,14 @@ const framesIn = async (page: Page, ms: number) => {
   await page.waitForTimeout(ms);
   return (await page.evaluate<number>("window.__frames")) - before;
 };
+/**
+ * Waits for the page to ask for more than five frames. A wait rather than a count in a fixed
+ * window, because software WebGL on a loaded machine can manage only a few frames a second.
+ */
+const framesKeepComing = async (page: Page) => {
+  const before = await page.evaluate<number>("window.__frames");
+  await page.waitForFunction(`window.__frames > ${before + 5}`, undefined, { timeout: 10_000 });
+};
 const setHidden = (page: Page, hidden: boolean) => page.evaluate(`
   Object.defineProperty(document, "hidden", { configurable: true, get: function () { return ${hidden}; } });
   document.dispatchEvent(new Event("visibilitychange"));
@@ -214,25 +222,39 @@ test("the render loop runs with motion, stops while the tab is hidden, and idles
     await countFrames(viz);
     await viz.reload();
     await ready(viz, 4);
-    assert.ok(await framesIn(viz, 400) > 5, "frames keep coming while visible");
+    await framesKeepComing(viz);
     await setHidden(viz, true);
     await viz.waitForTimeout(100);
     assert.equal(await framesIn(viz, 400), 0, "no frames while hidden");
     await setHidden(viz, false);
-    assert.ok(await framesIn(viz, 400) > 5, "frames resume when shown again");
+    await framesKeepComing(viz);
     await viz.emulateMedia({ reducedMotion: "reduce" });
-    await viz.waitForTimeout(100);
+    // A frame already in flight may still land, so wait for the requests to stop rather than sleeping.
+    await viz.waitForFunction(`new Promise(function (resolve) {
+      const seen = window.__frames;
+      setTimeout(function () { resolve(window.__frames === seen); }, 400);
+    })`, undefined, { timeout: 10_000, polling: 100 });
     assert.equal(await framesIn(viz, 400), 0, "reduced motion renders only on change");
   } finally { await viz.close(); }
 });
 
-/** Records a label's x position on every frame for `ms`. */
-const track = (page: Page, id: string, ms: number) => page.evaluate<number[]>(`new Promise(function (resolve) {
+/**
+ * Records a label's x position every 16 ms until it has moved and then held its rounded
+ * position for 1.5 s, or for at most 20 s. Waiting for it to settle, rather than sampling a
+ * fixed window, keeps the slide whole when frames are slow (the slide advances at most
+ * 0.1 s of easing per frame, so at a few frames a second it takes several seconds).
+ */
+const track = (page: Page, id: string) => page.evaluate<number[]>(`new Promise(function (resolve) {
   const xs = [];
   const start = performance.now();
+  let still = start;
   (function step() {
-    xs.push(document.querySelector('[data-viz-label="${id}"]').getBoundingClientRect().x);
-    if (performance.now() - start < ${ms}) setTimeout(step, 16); else resolve(xs);
+    const now = performance.now();
+    const x = document.querySelector('[data-viz-label="${id}"]').getBoundingClientRect().x;
+    if (xs.length && Math.round(x) !== Math.round(xs[xs.length - 1])) still = now;
+    xs.push(x);
+    const settled = Math.round(x) !== Math.round(xs[0]) && now - still > 1500;
+    if (settled || now - start > 20000) resolve(xs); else setTimeout(step, 16);
   })();
 })`);
 
@@ -244,7 +266,7 @@ for (const reduced of [false, true])
       await ready(page, 4);
       await page.waitForTimeout(300);
       page.data["/api/boards/board/cards"] = cards.map(c => c.id === "alone" ? { ...c, dependsOn: ["mid"] } : c);
-      const xs = await track(page, "alone", 4000);
+      const xs = await track(page, "alone");
       const steps = new Set(xs.map(x => Math.round(x))).size;
       assert.ok(xs[xs.length - 1] !== xs[0], "the node moved");
       if (reduced) assert.ok(steps <= 3, `it jumps (${steps} positions)`);

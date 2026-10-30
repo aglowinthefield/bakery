@@ -324,3 +324,18 @@ test("the API reports each board's unread chat total, and a looking view clears 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("discardIfEmpty deletes only a chat with no saved message and no running reply", () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: "pi", sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const empty = board.createChat(repoBoard.id), used = board.createChat(repoBoard.id);
+    board.addChatMessage(used.id, "user", "hello");
+    // A client with a stale view asks about the chat that gained a message elsewhere.
+    assert.equal(chats.discardIfEmpty(used.id), false);
+    assert.equal(board.listChatMessages(used.id).length, 1);
+    assert.equal(chats.discardIfEmpty(empty.id), true);
+    assert.equal(board.getChat(empty.id), undefined);
+    assert.equal(chats.discardIfEmpty(empty.id), false, "an already-deleted chat is a no-op");
+  } finally { done(); }
+});
