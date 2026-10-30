@@ -100,6 +100,83 @@ test("the chat list shows each chat's topic, updates it live, and collapses to a
   }
 });
 
+// Stands in for the browser's focus and EventSource: each stream requests its URL (so the route sees it), opens,
+// and stays open until the test drops it with window.dropStreams(). Closing a stream tells the route, as a closed
+// connection tells the server.
+function controlledPage(focused: boolean) {
+  const w = window as unknown as { focused: boolean; dropStreams: () => void; EventSource: unknown };
+  w.focused = focused;
+  document.hasFocus = () => w.focused;
+  const streams = new Set<{ onopen?: () => void; onerror?: () => void }>();
+  w.dropStreams = () => { for (const stream of [...streams]) { streams.delete(stream); stream.onerror?.(); } };
+  w.EventSource = class {
+    onopen?: () => void; onerror?: () => void; onmessage?: (event: { data: string }) => void;
+    url: string;
+    constructor(url: string) {
+      this.url = url;
+      streams.add(this);
+      void fetch(url).then(() => { if (streams.has(this)) this.onopen?.(); });
+    }
+    close() { streams.delete(this); void fetch(`/api/test/closed?stream=${encodeURIComponent(this.url)}`); }
+  };
+}
+const setFocus = (page: Page, focused: boolean) => page.evaluate(focused => {
+  (window as unknown as { focused: boolean }).focused = focused;
+  window.dispatchEvent(new Event(focused ? "focus" : "blur"));
+}, focused);
+
+/**
+ * Serves a board whose chats carry unread counts the test can change, logging stream opens and view updates. Like the
+ * server it keeps each open stream's view and the revision of its last update, so finishTurn() counts a turn only
+ * when no view is looking. onView can answer a view update itself, for example to fail or delay it.
+ */
+async function unreadHarness(page: Page, list: { id: string; topic: string; unread: number }[]) {
+  const views: string[] = [];
+  const watching = new Map<string, { chatId: string; looking: boolean; revision: number }>();
+  const read = (id: string) => { list.find(item => item.id === id)!.unread = 0; };
+  const harness = {
+    views,
+    onView: undefined as undefined | ((looking: boolean, route: Route) => Promise<boolean>),
+    finishTurn(id: string) {
+      if (![...watching.values()].some(view => view.chatId === id && view.looking)) list.find(item => item.id === id)!.unread++;
+    },
+  };
+  await page.route("**/api/**", async route => {
+    const url = new URL(route.request().url()), path = url.pathname;
+    const total = list.reduce((sum, item) => sum + item.unread, 0);
+    if (path === "/api/boards") return route.fulfill({ json: [{ ...boards[0], chatUnread: total }] });
+    if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+    if (path === "/api/boards/b1/chats") return route.fulfill({ json: list.map(item => ({ ...chat, ...item })) });
+    if (path === "/api/test/closed") {
+      watching.delete(new URL(url.searchParams.get("stream")!, url).searchParams.get("viewer")!);
+      return route.fulfill({ json: {} });
+    }
+    const match = path.match(/^\/api\/boards\/b1\/chats\/(c\d)(?:\/(events|view))?$/);
+    if (match?.[2] === "events") {
+      views.push(`${match[1]} open looking=${url.searchParams.get("looking")}`);
+      watching.set(url.searchParams.get("viewer")!, { chatId: match[1], looking: url.searchParams.get("looking") === "1", revision: 0 });
+      if (url.searchParams.get("looking") === "1") read(match[1]);
+      return route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" });
+    }
+    if (match?.[2] === "view") {
+      const { viewer, looking, revision } = route.request().postDataJSON() as { viewer: string; looking: boolean; revision: number };
+      views.push(`${match[1]} view looking=${looking}`);
+      if (harness.onView && await harness.onView(looking, route)) return;
+      const view = watching.get(viewer);
+      if (view && revision > view.revision) {
+        Object.assign(view, { looking, revision });
+        if (looking) read(match[1]);
+      }
+      return route.fulfill({ json: { ok: true, known: !!view } });
+    }
+    if (match) return route.fulfill({ json: { chat: { ...chat, ...list.find(item => item.id === match[1]) }, messages: [], live: null } });
+    await route.fulfill({ json: [] });
+  });
+  const nav = page.getByRole("navigation", { name: "Chats" });
+  const unreadOf = (label: string) => nav.locator("div", { has: page.getByRole("button", { name: label, exact: true }) }).locator("[data-unread]");
+  return { ...harness, harness, nav, unreadOf };
+}
+
 test("unread replies show per chat and as board totals, and looking at a chat clears them", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
@@ -107,44 +184,17 @@ test("unread replies show per chat and as board totals, and looking at a chat cl
   try {
     const page = await (await browser.newContext()).newPage();
     // The page starts unfocused, so opening the first chat does not read it yet.
-    await page.addInitScript(() => {
-      (window as unknown as { focused: boolean }).focused = false;
-      document.hasFocus = () => (window as unknown as { focused: boolean }).focused;
-    });
-    const list = [{ ...chat, topic: "First", unread: 1 }, { ...chat, id: "c2", topic: "Second", unread: 2 }];
-    const views: string[] = [];
-    const read = (id: string) => { list.find(item => item.id === id)!.unread = 0; };
-    await page.route("**/api/**", async route => {
-      const url = new URL(route.request().url()), path = url.pathname;
-      const total = list.reduce((sum, item) => sum + item.unread, 0);
-      if (path === "/api/boards") return route.fulfill({ json: [{ ...boards[0], chatUnread: total }] });
-      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
-      if (path === "/api/boards/b1/chats") return route.fulfill({ json: list });
-      const match = path.match(/^\/api\/boards\/b1\/chats\/(c\d)(?:\/(events|view))?$/);
-      if (match?.[2] === "events") {
-        views.push(`${match[1]} open looking=${url.searchParams.get("looking")}`);
-        if (url.searchParams.get("looking") === "1") read(match[1]);
-        return route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" });
-      }
-      if (match?.[2] === "view") {
-        const { looking } = route.request().postDataJSON() as { looking: boolean };
-        views.push(`${match[1]} view looking=${looking}`);
-        if (looking) read(match[1]);
-        return route.fulfill({ json: { ok: true } });
-      }
-      if (match) return route.fulfill({ json: { chat: list.find(item => item.id === match[1]), messages: [], live: null } });
-      await route.fulfill({ json: [] });
-    });
+    await page.addInitScript(controlledPage, false);
+    const list = [{ id: "c1", topic: "First", unread: 1 }, { id: "c2", topic: "Second", unread: 2 }];
+    const { views, nav, unreadOf } = await unreadHarness(page, list);
     await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
-    const nav = page.getByRole("navigation", { name: "Chats" });
     const sidebarChat = page.getByRole("button", { name: /^Chat\b/ });
-    const unreadOf = (label: string) => nav.locator("div", { has: page.getByRole("button", { name: label, exact: true }) }).locator("[data-unread]");
     await sidebarChat.locator("[data-chat-unread='3']").waitFor();
     await unreadOf("First").filter({ hasText: "1" }).waitFor();
     await unreadOf("Second").filter({ hasText: "2" }).waitFor();
     assert.deepEqual(views, ["c1 open looking=0"]);
 
-    await page.evaluate(() => { (window as unknown as { focused: boolean }).focused = true; window.dispatchEvent(new Event("focus")); });
+    await setFocus(page, true);
     await page.waitForFunction(() => !document.querySelector("nav[aria-label='Chats'] [data-unread='1']"));
     await sidebarChat.locator("[data-chat-unread='2']").waitFor();
     assert.deepEqual(views, ["c1 open looking=0", "c1 view looking=true"]);
@@ -169,6 +219,117 @@ test("unread replies show per chat and as board totals, and looking at a chat cl
     await server.close();
   }
 });
+
+test("a stream that reconnects while the operator is away keeps the reply it missed unread", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await page.addInitScript(controlledPage, true);
+    const list = [{ id: "c1", topic: "First", unread: 0 }];
+    const { views, unreadOf } = await unreadHarness(page, list);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    await page.waitForFunction(() => document.querySelector("nav[aria-label='Chats'] button"));
+    await waitUntil(() => views.length === 1);
+    assert.deepEqual(views, ["c1 open looking=1"]);
+
+    await setFocus(page, false);
+    await waitUntil(() => views.length === 2);
+    list[0].unread = 1; // a reply finished while the operator was away
+    await page.evaluate(() => (window as unknown as { dropStreams: () => void }).dropStreams());
+    await waitUntil(() => views.length === 3);
+    assert.deepEqual(views, ["c1 open looking=1", "c1 view looking=false", "c1 open looking=0"], "the reconnect reports the current state");
+    assert.equal(list[0].unread, 1);
+    await unreadOf("First").filter({ hasText: "1" }).waitFor();
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("unread counts that move between chats show up even when the board's total stays the same", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await page.addInitScript(controlledPage, true);
+    const list = [{ id: "c1", topic: "First", unread: 0 }, { id: "c2", topic: "Second", unread: 1 }, { id: "c3", topic: "Third", unread: 0 }];
+    const { unreadOf } = await unreadHarness(page, list);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    await unreadOf("Second").filter({ hasText: "1" }).waitFor();
+    // Another browser reads Second while a turn finishes in Third.
+    list[1].unread = 0;
+    list[2].unread = 1;
+    await unreadOf("Third").filter({ hasText: "1" }).waitFor({ timeout: 10_000 });
+    assert.equal(await unreadOf("Second").count(), 0);
+    await page.getByRole("button", { name: /^Chat\b/ }).locator("[data-chat-unread='1']").waitFor();
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("a blur the server never received is recovered by reconnecting, so the next reply still counts", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await page.addInitScript(controlledPage, true);
+    const list = [{ id: "c1", topic: "First", unread: 0 }];
+    const { harness, views, unreadOf } = await unreadHarness(page, list);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    await waitUntil(() => views.length === 1);
+    harness.onView = async (_looking, route) => { await route.fulfill({ status: 500, json: { error: "unavailable" } }); return true; };
+    await setFocus(page, false);
+    await waitUntil(() => views.length === 3);
+    harness.onView = undefined;
+    assert.deepEqual(views, ["c1 open looking=1", "c1 view looking=false", "c1 open looking=0"], "the failed blur reopens the stream with the current state");
+    harness.finishTurn("c1");
+    await unreadOf("First").filter({ hasText: "1" }).waitFor({ timeout: 10_000 });
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("a focus update delayed past the blur that followed it does not leave the chat looked at", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await page.addInitScript(controlledPage, false);
+    const list = [{ id: "c1", topic: "First", unread: 0 }];
+    const { harness, views, unreadOf } = await unreadHarness(page, list);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    await waitUntil(() => views.length === 1);
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    harness.onView = async looking => { if (looking) await held; return false; };
+    await setFocus(page, true);
+    await waitUntil(() => views.length === 2);
+    await setFocus(page, false);
+    await waitUntil(() => views.length === 3);
+    // Let the blur land first, then the focus that was sent before it.
+    await page.waitForTimeout(200);
+    release();
+    await page.waitForTimeout(200);
+    harness.finishTurn("c1");
+    await unreadOf("First").filter({ hasText: "1" }).waitFor({ timeout: 10_000 });
+    assert.deepEqual(views, ["c1 open looking=0", "c1 view looking=true", "c1 view looking=false"], "no reconnect was needed");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+async function waitUntil(condition: () => boolean, timeout = 10_000) {
+  for (const started = Date.now(); !condition(); await new Promise(resolve => setTimeout(resolve, 25)))
+    if (Date.now() - started > timeout) throw new Error("timed out waiting for the condition");
+}
 
 type Harness = { page: Page; nav: Locator; discards: string[]; deletes: string[]; close: () => Promise<void> };
 const fresh = { ...chat, id: "c2", title: "", createdAt: "2025-01-02T00:00:00Z", updatedAt: "2025-01-02T00:00:00Z" };

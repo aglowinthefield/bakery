@@ -121,7 +121,7 @@ export class Chats {
   private listeners = new Map<string, Set<(event: ChatEvent) => void>>();
   private naming = new Set<string>();
   /** Per chat, each open browser view and whether the operator is looking at it (the page visible and focused). */
-  private viewers = new Map<string, Map<string, boolean>>();
+  private viewers = new Map<string, Map<string, { looking: boolean; revision: number }>>();
   /** `topic` writes a chat's few-word topic from its first message; without it chats keep only their title. */
   constructor(private board: Board, private options: { piBin: string; sessionDir: string; cli: string; env: NodeJS.ProcessEnv; models: (repo: string) => string[]; topic?: (repoBoard: RepoBoard, message: string) => Promise<string> }) {
     mkdirSync(options.sessionDir, { recursive: true, mode: 0o700 });
@@ -138,13 +138,27 @@ export class Chats {
   private emit(chatId: string, event: ChatEvent) { for (const listener of this.listeners.get(chatId) ?? []) listener(event); }
 
   /**
-   * Records whether one browser view (`viewer`, chosen by the client) is looking at the chat. Looking marks the chat
-   * read, and a turn that finishes while any view is looking does not count as unread.
+   * Registers one browser view of the chat (`viewer`: an id the client picks for each event stream it opens) and
+   * whether the operator is looking at it. Looking marks the chat read, and a turn that finishes while any view is
+   * looking does not count as unread. The view lasts until `unview`, which the stream calls when it closes.
    */
-  view(chatId: string, viewer: string, looking: boolean) {
-    const views = this.viewers.get(chatId) ?? new Map<string, boolean>();
-    views.set(viewer, looking); this.viewers.set(chatId, views);
+  watch(chatId: string, viewer: string, looking: boolean) {
+    const views = this.viewers.get(chatId) ?? new Map<string, { looking: boolean; revision: number }>();
+    views.set(viewer, { looking, revision: 0 }); this.viewers.set(chatId, views);
     if (looking) this.read(chatId);
+  }
+  /**
+   * Updates whether a registered view is looking. `revision` numbers the view's updates from 1, so one that arrives
+   * after a later update is ignored. Returns false, changing nothing, for a view that is not registered: an update
+   * that arrives after its stream closed must not leave a view behind that nothing would remove.
+   */
+  view(chatId: string, viewer: string, looking: boolean, revision: number): boolean {
+    const view = this.viewers.get(chatId)?.get(viewer);
+    if (!view) return false;
+    if (revision <= view.revision) return true;
+    view.looking = looking; view.revision = revision;
+    if (looking) this.read(chatId);
+    return true;
   }
   /** Forgets a browser view, for example when its event stream closes. */
   unview(chatId: string, viewer: string) {
@@ -152,7 +166,7 @@ export class Chats {
     views?.delete(viewer);
     if (views && !views.size) this.viewers.delete(chatId);
   }
-  private watched(chatId: string) { return [...this.viewers.get(chatId)?.values() ?? []].some(Boolean); }
+  private watched(chatId: string) { return [...this.viewers.get(chatId)?.values() ?? []].some(view => view.looking); }
   private read(chatId: string) {
     const chat = this.board.clearChatUnread(chatId);
     if (chat) this.emit(chatId, { type: "chat", chat });

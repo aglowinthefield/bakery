@@ -109,7 +109,7 @@ test("a turn that finishes while nobody looks bumps the chat's unread count, onc
     const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
     const chat = board.createChat(repoBoard.id);
     assert.equal(chat.unread, 0);
-    chats.view(chat.id, "tab1", false);
+    chats.watch(chat.id, "tab1", false);
     let finished = settle(chats, chat.id);
     chats.send(repoBoard, chat.id, "one");
     const events = await finished;
@@ -128,8 +128,8 @@ test("a turn that finishes while a view is looking, or that the operator stopped
   try {
     const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
     const chat = board.createChat(repoBoard.id);
-    chats.view(chat.id, "away", false);
-    chats.view(chat.id, "here", true);
+    chats.watch(chat.id, "away", false);
+    chats.watch(chat.id, "here", true);
     let finished = settle(chats, chat.id);
     chats.send(repoBoard, chat.id, "hi");
     await finished;
@@ -158,14 +158,47 @@ test("looking at a chat clears its count and tells subscribers", async () => {
     board.bumpChatUnread(chat.id); board.bumpChatUnread(chat.id);
     const seen: ChatEvent[] = [];
     const off = chats.subscribe(chat.id, event => seen.push(event));
-    chats.view(chat.id, "tab1", false);
+    chats.watch(chat.id, "tab1", false);
     assert.equal(board.getChat(chat.id)?.unread, 2, "an open but unfocused view does not read it");
-    chats.view(chat.id, "tab1", true);
+    chats.view(chat.id, "tab1", true, 1);
     off();
     assert.equal(board.getChat(chat.id)?.unread, 0);
     assert.deepEqual(seen.map(event => event.type === "chat" && event.chat.unread), [0]);
-    chats.view(chat.id, "tab1", true);
+    chats.view(chat.id, "tab1", true, 2);
     assert.equal(seen.length, 1, "clearing an already read chat announces nothing");
+  } finally { done(); }
+});
+
+test("a focus update that arrives after a later blur is ignored, so the turn still counts", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chat = board.createChat(repoBoard.id);
+    chats.watch(chat.id, "tab1", false);
+    // The operator focused (revision 1) then blurred (revision 2); the blur reached the server first.
+    assert.equal(chats.view(chat.id, "tab1", false, 2), true);
+    assert.equal(chats.view(chat.id, "tab1", true, 1), true, "the view is still known, the stale update just does nothing");
+    const finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "hi");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 1);
+  } finally { done(); }
+});
+
+test("an update from a view whose stream has closed is ignored, so later turns still count", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chat = board.createChat(repoBoard.id);
+    assert.equal(chats.view(chat.id, "never-opened", true, 1), false, "a view without a stream is not registered");
+    chats.watch(chat.id, "tab1", false);
+    chats.unview(chat.id, "tab1");
+    // The operator focused the page just before navigating away; that update lands after the stream closed.
+    assert.equal(chats.view(chat.id, "tab1", true, 1), false);
+    const finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "hi");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 1, "no leftover looking view suppresses the count");
   } finally { done(); }
 });
 
@@ -312,9 +345,10 @@ test("the API reports each board's unread chat total, and a looking view clears 
     assert.equal((await request(`${chatUrl}/messages`, "POST", { message: "hello" })).status, 202);
     await until(async () => (await request("/boards")).data[0].chatUnread === 1, "the unread total");
     assert.equal((await request(`/boards/${repoBoard.id}/chats`)).data[0].unread, 1);
-    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "bad id!", looking: true })).status, 400);
-    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: "yes" })).status, 400);
-    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: true })).status, 200);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "bad id!", looking: true, revision: 1 })).status, 400);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: "yes", revision: 1 })).status, 400);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: true })).status, 400, "an update needs its revision");
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: true, revision: 1 })).status, 200);
     assert.equal((await request("/boards")).data[0].chatUnread, 0);
     assert.equal((await request(`/boards/${repoBoard.id}/chats`)).data[0].unread, 0);
   } finally {

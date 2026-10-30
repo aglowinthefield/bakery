@@ -488,21 +488,25 @@ const server = createServer(async (req, res) => {
         if (req.method === "POST" && action === "stop") { chats.stop(chatId); send(res, 200, { ok: true }); return; }
         // A browser view says whether the operator is looking at this chat; looking marks it read.
         if (req.method === "POST" && action === "view") {
-          const { viewer, looking } = await body(req);
-          if (typeof viewer !== "string" || !/^[\w-]{1,64}$/.test(viewer) || typeof looking !== "boolean") throw new Error("Send a viewer id and whether it is looking");
-          chats.view(chatId, viewer, looking); send(res, 200, { ok: true }); return;
+          const { viewer, looking, revision } = await body(req);
+          if (typeof viewer !== "string" || !/^[\w-]{1,64}$/.test(viewer) || typeof looking !== "boolean" || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) throw new Error("Send a viewer id, whether it is looking, and the update's revision");
+          // Only a view with an open event stream counts; a late update from a closed one is ignored, and `known`
+          // tells the browser to reconnect.
+          send(res, 200, { ok: true, known: chats.view(chatId, viewer, looking, revision) }); return;
         }
         // Server-sent events: the live reply as it is written, and each message once saved.
         if (req.method === "GET" && action === "events") {
-          res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
-          const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
-          write({ type: "live", live: chats.live(chatId) });
-          const unsubscribe = chats.subscribe(chatId, write), ping = setInterval(() => res.write(": ping\n\n"), 20_000);
-          // The stream carries the view's id and whether it is looking, so a turn finishing right after it opens is judged correctly.
+          // The stream registers its view (an id per stream) and whether it is looking before the browser sees it open,
+          // so a turn finishing right after is judged correctly and the view's later updates are accepted. The view ends
+          // with the stream.
           const params = new URL(req.url ?? "/", "http://localhost").searchParams, viewer = params.get("viewer");
           const viewing = viewer && /^[\w-]{1,64}$/.test(viewer) ? viewer : null;
-          if (viewing) chats.view(chatId, viewing, params.get("looking") === "1");
+          const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+          const unsubscribe = chats.subscribe(chatId, write), ping = setInterval(() => res.write(": ping\n\n"), 20_000);
           req.once("close", () => { unsubscribe(); clearInterval(ping); if (viewing) chats.unview(chatId, viewing); });
+          res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
+          write({ type: "live", live: chats.live(chatId) });
+          if (viewing && !res.destroyed) chats.watch(chatId, viewing, params.get("looking") === "1");
           return;
         }
       }
