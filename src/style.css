@@ -11,9 +11,10 @@
   --text-base: calc(1rem * var(--density-text));
   --text-lg: calc(1.125rem * var(--density-text));
   --text-xl: calc(1.25rem * var(--density-text));
-  /* Sidebar rows sit a step below body text: 13px and 11px at default density. */
-  --text-sidebar: calc(0.75rem * var(--density-text));
-  --text-sidebar-meta: calc(0.65625rem * var(--density-text));
+  /* Sidebar type is fixed like Linear and macOS sidebars; density only changes spacing. */
+  --text-sidebar: 13px;
+  --text-sidebar-meta: 11px;
+  --text-sidebar-heading: 11px;
 }
 :root {
   color-scheme: dark;

@@ -1430,7 +1430,7 @@ export function App() {
             onClick={toggleRepos}
             aria-expanded={!reposCollapsed}
             aria-controls="sidebar-repositories"
-            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[length:calc(0.625rem*var(--density-text))] font-normal uppercase tracking-[.16em] text-muted-foreground hover:text-foreground"
+            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[length:var(--text-sidebar-heading)] font-medium uppercase tracking-[.08em] text-muted-foreground hover:text-foreground"
           >
             Repositories
             {reposCollapsed ? (
