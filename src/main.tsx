@@ -1373,12 +1373,17 @@ export function App() {
           setSelected(card.id);
         }}
       />
+      <div
+        data-tauri-drag-region
+        aria-hidden="true"
+        className="desktop-titlebar"
+      />
       {sidebarHidden && (
         <button
           aria-label="Show sidebar"
           title="Show sidebar"
           onClick={toggleSidebar}
-          className="fixed left-3 top-3 z-30 hidden rounded-md border border-border bg-sidebar p-1.5 text-muted-foreground hover:text-foreground lg:block"
+          className="desktop-sidebar-toggle fixed left-3 top-3 z-30 hidden rounded-md border border-border bg-sidebar p-1.5 text-muted-foreground hover:text-foreground lg:block"
         >
           <PanelLeftOpen size={15} />
         </button>
@@ -1399,7 +1404,7 @@ export function App() {
           }}
           className="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize hover:bg-primary/30 lg:block"
         />
-        <div className="flex items-center gap-3 px-5 py-5">
+        <div className="desktop-sidebar-head flex items-center gap-3 px-5 py-5">
           <BrandIcon />
           <span className="text-[18px] font-semibold tracking-[-.04em]">
             bakery<span className="text-primary">.</span>

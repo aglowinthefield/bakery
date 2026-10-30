@@ -78,6 +78,7 @@ async fn connect(
         .write()
         .map_err(|error| error.to_string())?
         .replace(url.clone());
+    let url_for_drag = url.clone();
     let result = if let Some(remote) = remote_window(&app) {
         remote
             .navigate(url)
@@ -86,6 +87,9 @@ async fn connect(
     } else {
         create_remote(&app, url)
     };
+    if let Err(error) = allow_window_dragging(&app, &url_for_drag) {
+        eprintln!("Cannot enable window dragging: {error}");
+    }
     let remote = match result {
         Ok(remote) => remote,
         Err(error) => {
@@ -100,12 +104,33 @@ async fn connect(
     Ok(())
 }
 
+/// The hosted page may start a window drag from its title-bar strip and nothing else.
+/// The grant is scoped to the connected origin and added when the user connects.
+fn allow_window_dragging(app: &tauri::AppHandle, url: &url::Url) -> Result<(), String> {
+    let origin = url.origin().ascii_serialization();
+    let capability = tauri::ipc::CapabilityBuilder::new(format!("remote-drag-{}", origin))
+        .remote(format!("{origin}/*"))
+        .window("remote")
+        .permission("core:window:allow-start-dragging");
+    app.add_capability(capability)
+        .map_err(|error| error.to_string())
+}
+
 fn create_remote(app: &tauri::AppHandle, url: url::Url) -> Result<WebviewWindow, String> {
     let navigation_app = app.clone();
     let popup_app = app.clone();
     let download_app = app.clone();
-    let remote = WebviewWindowBuilder::new(app, "remote", WebviewUrl::External(url))
+    let builder = WebviewWindowBuilder::new(app, "remote", WebviewUrl::External(url))
         .title("Bakery")
+        // The page paints its own title bar; see docs/desktop.md.
+        .initialization_script(
+            "document.documentElement.dataset.desktop = navigator.platform.startsWith('Mac') ? 'macos' : 'other';",
+        );
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    let remote = builder
         // Keep HTML5 card dragging and file drops available in WebView2.
         .disable_drag_drop_handler()
         // GTK download handlers belong to their WebContext, not their window.

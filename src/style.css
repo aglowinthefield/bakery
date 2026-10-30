@@ -406,3 +406,9 @@ body { margin: 0; min-width: 320px; background: var(--background); color: var(--
 @media (prefers-reduced-motion: reduce) {
   [data-dialog-overlay], [data-dialog-content] { animation-duration: 1ms !important; }
 }
+
+/* The desktop app hides the native title bar on macOS and the page paints under the traffic lights. */
+.desktop-titlebar { display: none; }
+:root[data-desktop="macos"] .desktop-titlebar { display: block; position: fixed; inset: 0 0 auto 0; height: 28px; z-index: 40; }
+:root[data-desktop="macos"] .desktop-sidebar-head { padding-top: 2.5rem; }
+:root[data-desktop="macos"] .desktop-sidebar-toggle { top: 2.25rem; }
