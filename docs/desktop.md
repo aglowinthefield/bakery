@@ -46,7 +46,7 @@ To work on the UI against a remote server's boards, run only Vite and point its 
 BAKERY_API_TARGET=http://bakery.example.ts.net:4317 npm run dev:ui
 ```
 
-Connect the client to `http://127.0.0.1:5173`. UI edits hot-reload, while boards, cards, and agents come from the remote server. The remote server must list its hostname in `BAKERY_ALLOWED_HOSTS`. Stop `npm run dev` first, because both use port 5173.
+Connect the client to `http://127.0.0.1:5173`. UI edits hot-reload, while boards, cards, and agents come from the remote server. The remote server must list its hostname in `BAKERY_ALLOWED_HOSTS`. If another Vite already holds port 5173, such as a service running `npm run dev`, add `BAKERY_VITE_PORT=5174` and connect the client to that port instead.
 
 Build on each target operating system:
 
