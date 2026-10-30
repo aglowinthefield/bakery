@@ -256,7 +256,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/repository-root" && req.method === "GET") {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
-    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0 }))); return; }
+    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
       // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
@@ -473,7 +473,7 @@ const server = createServer(async (req, res) => {
       for (const item of purged) removeCardAttachmentFiles(dataDir, item.cardId);
       send(res, 200, purged); return;
     }
-    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events|discard))?)?$/);
+    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events|view|discard))?)?$/);
     if (chatRoute) {
       const repoBoard = board.getBoard(chatRoute[1]), chatId = chatRoute[2], action = chatRoute[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -500,13 +500,27 @@ const server = createServer(async (req, res) => {
         // Automatic cleanup of an abandoned empty chat; unlike DELETE it refuses when a message was saved or a reply is running.
         if (req.method === "POST" && action === "discard") { send(res, 200, { discarded: chats.discardIfEmpty(chatId) }); return; }
         if (req.method === "POST" && action === "stop") { chats.stop(chatId); send(res, 200, { ok: true }); return; }
+        // A browser view says whether the operator is looking at this chat; looking marks it read.
+        if (req.method === "POST" && action === "view") {
+          const { viewer, looking, revision } = await body(req);
+          if (typeof viewer !== "string" || !/^[\w-]{1,64}$/.test(viewer) || typeof looking !== "boolean" || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) throw new Error("Send a viewer id, whether it is looking, and the update's revision");
+          // Only a view with an open event stream counts; a late update from a closed one is ignored, and `known`
+          // tells the browser to reconnect.
+          send(res, 200, { ok: true, known: chats.view(chatId, viewer, looking, revision) }); return;
+        }
         // Server-sent events: the live reply as it is written, and each message once saved.
         if (req.method === "GET" && action === "events") {
-          res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
+          // The stream registers its view (an id per stream) and whether it is looking before the browser sees it open,
+          // so a turn finishing right after is judged correctly and the view's later updates are accepted. The view ends
+          // with the stream.
+          const params = new URL(req.url ?? "/", "http://localhost").searchParams, viewer = params.get("viewer");
+          const viewing = viewer && /^[\w-]{1,64}$/.test(viewer) ? viewer : null;
           const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
-          write({ type: "live", live: chats.live(chatId) });
           const unsubscribe = chats.subscribe(chatId, write), ping = setInterval(() => res.write(": ping\n\n"), 20_000);
-          req.once("close", () => { unsubscribe(); clearInterval(ping); });
+          req.once("close", () => { unsubscribe(); clearInterval(ping); if (viewing) chats.unview(chatId, viewing); });
+          res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
+          write({ type: "live", live: chats.live(chatId) });
+          if (viewing && !res.destroyed) chats.watch(chatId, viewing, params.get("looking") === "1");
           return;
         }
       }

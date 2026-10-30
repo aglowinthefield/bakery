@@ -56,6 +56,8 @@ export type Board = {
   cardCounts?: Partial<Record<CountKey, number>>;
   /** Cards created outside this UI that the operator has not opened the board to see yet. */
   newCards?: number;
+  /** Finished chat turns the operator has not seen, summed over the board's chats. */
+  chatUnread?: number;
 };
 export type AutoReviewJob = {
   cardId: string;
@@ -341,7 +343,8 @@ export type DiscussionMessage = {
 
 /**
  * A board chat: a general agent session about one repo. `title` is the first line of the first message, `topic` a
- * few-word summary of it (empty until written). `pending` is set while the agent is replying.
+ * few-word summary of it (empty until written). `pending` is set while the agent is replying. `unread` counts agent
+ * turns that finished while nobody was looking at the chat.
  */
 export type Chat = {
   id: string;
@@ -351,6 +354,7 @@ export type Chat = {
   model: string;
   thinking: ThinkingLevel | "";
   topic?: string;
+  unread?: number;
   createdAt: string;
   updatedAt: string;
   pending?: boolean;

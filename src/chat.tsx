@@ -23,6 +23,35 @@ type ChatState = { messages: ChatMessage[]; live: ChatLive };
 /** What the sidebar calls a chat: its few-word topic, else its first line. */
 const chatLabel = (chat: Chat) => chat.topic || chat.title || "New chat";
 const railKey = "bakery-chat-sidebar";
+// How often the chat list refreshes its per-chat unread counts, and how long a dropped event stream waits to reconnect.
+const listPollMs = 3000;
+const reconnectMs = 3000;
+/** The operator is looking at the page: it is visible and has focus. */
+const looking = () =>
+  document.visibilityState === "visible" && document.hasFocus();
+/** Sums the unread turns over a board's chats. */
+export const unreadTotal = (chats: Pick<Chat, "unread">[]) =>
+  chats.reduce((sum, chat) => sum + (chat.unread ?? 0), 0);
+
+/** A small count of finished turns the operator has not seen. */
+function UnreadBadge({
+  count,
+  className = "",
+}: {
+  count: number;
+  className?: string;
+}) {
+  return (
+    <span
+      data-unread={count}
+      aria-label={`${count} unread`}
+      title={`${count} unread ${count === 1 ? "reply" : "replies"}`}
+      className={`shrink-0 rounded-full bg-primary px-1.5 font-mono text-[10px] leading-4 text-primary-foreground ${className}`}
+    >
+      {count}
+    </span>
+  );
+}
 
 /** One tool call from the agent: its command on one line, its output behind a disclosure. */
 function ToolCall({ part }: { part: Extract<ChatPart, { type: "tool" }> }) {
@@ -69,9 +98,14 @@ function Parts({ parts }: { parts: ChatPart[] }) {
 export function ChatView({
   boardId,
   onError,
+  boardUnread,
+  onUnreadChange,
 }: {
   boardId: string;
   onError: (message: string) => void;
+  /** The board's unread total as last polled; when it changes, another chat finished a turn, so the list reloads. */
+  boardUnread?: number;
+  onUnreadChange?: (total: number) => void;
 }) {
   const [chats, setChats] = useState<Chat[] | null>(null);
   const [chatId, setChatId] = useState<string | null>(() =>
@@ -96,9 +130,40 @@ export function ChatView({
   openId.current = chatId;
   const input = useRef<HTMLTextAreaElement>(null);
   const [focusRequest, setFocusRequest] = useState(0);
+  const [isLooking, setIsLooking] = useState(looking);
+  const lookingNow = useRef(isLooking);
+  lookingNow.current = isLooking;
   const base = `/boards/${boardId}/chats`;
   const fail = (err: unknown) =>
     onError(err instanceof Error ? err.message : String(err));
+  // The open event stream registers a view with the server, which counts a finished turn as unread only while no
+  // registered view is looking at the chat. Changes are reported only once the server holds the registration.
+  // Updates carry increasing revisions, so the server ignores one that arrives after a later one. If an update fails
+  // or the server no longer knows the view, the stream is dropped and reopened: closing it makes the server forget
+  // the view, and the new stream registers whatever the operator is doing then.
+  const stream = useRef<{
+    url: string;
+    viewer: string;
+    looking: boolean;
+    revision: number;
+    open: boolean;
+    drop: () => void;
+  } | null>(null);
+  const report = (looking: boolean) => {
+    const current = stream.current;
+    if (!current?.open || current.looking === looking) return;
+    current.looking = looking;
+    const revision = ++current.revision;
+    void api<{ known?: boolean }>(`${current.url}/view`, {
+      method: "POST",
+      body: JSON.stringify({ viewer: current.viewer, looking, revision }),
+    }).then(
+      (result) => {
+        if (result.known === false) current.drop();
+      },
+      () => current.drop(),
+    );
+  };
 
   const discard = async (id: string) => {
     if (sendsInFlight.current.has(id)) return; // send() retries once its request settles
@@ -117,7 +182,13 @@ export function ChatView({
   };
   const refresh = async () => {
     try {
-      const next = await api<Chat[]>(base);
+      const listed = await api<Chat[]>(base);
+      // The open chat's count is being cleared while the operator looks at it.
+      const next = listed.map((item) =>
+        lookingNow.current && item.id === openId.current && item.unread
+          ? { ...item, unread: 0 }
+          : item,
+      );
       setChats(next);
       setChatId((current) =>
         current && next.some((chat) => chat.id === current)
@@ -132,6 +203,48 @@ export function ChatView({
     setChats(null);
     void refresh();
   }, [boardId]);
+  const polledUnread = useRef(boardUnread);
+  useEffect(() => {
+    if (polledUnread.current === boardUnread) return;
+    polledUnread.current = boardUnread;
+    void refresh();
+  }, [boardUnread]);
+  // Polling the list catches counts that move between chats while the board's total stays the same.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, listPollMs);
+    return () => clearInterval(timer);
+  }, [boardId]);
+  useEffect(() => {
+    if (!chats) return;
+    // The parent's total follows this list, which is already current, so that echo should not reload it.
+    polledUnread.current = unreadTotal(chats);
+    onUnreadChange?.(polledUnread.current);
+  }, [chats]);
+  useEffect(() => {
+    const update = () => setIsLooking(looking());
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+  // Looking at a chat marks it read; the server also skips counting turns that finish while it is looked at.
+  useEffect(() => {
+    if (!chatId) return;
+    if (isLooking)
+      setChats(
+        (previous) =>
+          previous?.map((item) =>
+            item.id === chatId && item.unread ? { ...item, unread: 0 } : item,
+          ) ?? previous,
+      );
+    report(isLooking);
+  }, [chatId, isLooking]);
   useEffect(() => {
     if (collapsed) localStorage.setItem(railKey, "collapsed");
     else localStorage.removeItem(railKey);
@@ -147,50 +260,94 @@ export function ChatView({
     if (!chatId) return;
     let current = true;
     const url = `${base}/${chatId}`;
-    void api<{ messages: ChatMessage[]; live: ChatLive }>(url)
-      .then((data) => {
-        if (!current) return;
-        setState((previous) => ({
-          messages: [
-            ...data.messages,
-            ...previous.messages.filter(
-              (item) => !data.messages.some((saved) => saved.id === item.id),
-            ),
-          ],
-          live: previous.live ?? data.live,
-        }));
-      })
-      .catch((err) => current && fail(err));
-    const source = new EventSource(`/api${url}/events`);
-    source.onmessage = (event) => {
-      const data = JSON.parse(event.data) as
-        | { type: "live"; live: ChatLive }
-        | { type: "message"; message: ChatMessage }
-        | { type: "chat"; chat: Chat };
-      if (data.type === "chat") {
-        const named = data.chat;
-        setChats(
-          (previous) =>
-            previous?.map((item) =>
-              item.id === named.id ? { ...item, ...named } : item,
-            ) ?? previous,
-        );
-      } else if (data.type === "live") {
-        setState((previous) => ({ ...previous, live: data.live }));
-        if (data.live === null) void refresh();
-      } else {
-        const message = data.message;
-        setState((previous) => ({
-          ...previous,
-          messages: previous.messages.some((item) => item.id === message.id)
-            ? previous.messages
-            : [...previous.messages, message],
-        }));
-      }
+    const load = () =>
+      api<{ messages: ChatMessage[]; live: ChatLive }>(url)
+        .then((data) => {
+          if (!current) return;
+          setState((previous) => ({
+            messages: [
+              ...data.messages,
+              ...previous.messages.filter(
+                (item) => !data.messages.some((saved) => saved.id === item.id),
+              ),
+            ],
+            live: previous.live ?? data.live,
+          }));
+        })
+        .catch((err) => current && fail(err));
+    void load();
+    let source: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const connect = () => {
+      // Each connection is a fresh view opened with the current state; the browser's own retry would reuse the
+      // first URL and its stale looking state, which could clear a reply that arrived while the operator was away.
+      const registration = {
+        url,
+        viewer: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+        looking: lookingNow.current,
+        revision: 0,
+        open: false,
+        drop: () => {},
+      };
+      stream.current = registration;
+      const events = new EventSource(
+        `/api${url}/events?viewer=${registration.viewer}&looking=${registration.looking ? 1 : 0}`,
+      );
+      source = events;
+      events.onopen = () => {
+        registration.open = true;
+        report(lookingNow.current);
+      };
+      registration.drop = () => {
+        if (stream.current !== registration) return; // already dropped or replaced
+        events.close();
+        registration.open = false;
+        stream.current = null;
+        clearTimeout(retry);
+        retry = setTimeout(() => {
+          if (!current) return;
+          connect();
+          void load(); // catch up on messages saved while disconnected
+        }, reconnectMs);
+      };
+      events.onerror = registration.drop;
+      events.onmessage = (event) => {
+        const data = JSON.parse(event.data) as
+          | { type: "live"; live: ChatLive }
+          | { type: "message"; message: ChatMessage }
+          | { type: "chat"; chat: Chat };
+        if (data.type === "chat") {
+          // A count that arrives while the operator is looking is already being cleared.
+          const named =
+            lookingNow.current && data.chat.id === chatId
+              ? { ...data.chat, unread: 0 }
+              : data.chat;
+          setChats(
+            (previous) =>
+              previous?.map((item) =>
+                item.id === named.id ? { ...item, ...named } : item,
+              ) ?? previous,
+          );
+        } else if (data.type === "live") {
+          setState((previous) => ({ ...previous, live: data.live }));
+          if (data.live === null) void refresh();
+        } else {
+          const message = data.message;
+          setState((previous) => ({
+            ...previous,
+            messages: previous.messages.some((item) => item.id === message.id)
+              ? previous.messages
+              : [...previous.messages, message],
+          }));
+        }
+      };
     };
+    connect();
     return () => {
       current = false;
-      source.close();
+      clearTimeout(retry);
+      source?.close();
+      stream.current = null;
       // Leaving a chat (another chat, page or board) asks the server to discard it if it is still empty.
       // The server decides, so a stale view here cannot delete a message sent from another tab.
       const { count, live } = latest.current;
@@ -383,13 +540,20 @@ export function ChatView({
               key={chat.id}
               onClick={() => setChatId(chat.id)}
               aria-current={chat.id === chatId ? "true" : undefined}
-              aria-label={chatLabel(chat)}
+              aria-label={`${chatLabel(chat)}${chat.unread ? `, ${chat.unread} unread` : ""}`}
               title={chatLabel(chat)}
               className={`relative rounded-md p-2 text-muted-foreground ${chat.id === chatId ? "bg-accent/50 text-foreground" : "hover:bg-accent/30"}`}
             >
               <MessageSquare size={14} aria-hidden="true" />
-              {chat.pending && (
-                <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
+              {chat.unread ? (
+                <UnreadBadge
+                  count={chat.unread}
+                  className="absolute right-0 top-0 px-1 text-[9px] leading-3"
+                />
+              ) : (
+                chat.pending && (
+                  <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
+                )
               )}
             </button>
           ) : (
@@ -408,6 +572,7 @@ export function ChatView({
                   <span className="ml-1 text-muted-foreground">…</span>
                 )}
               </button>
+              {!!chat.unread && <UnreadBadge count={chat.unread} />}
               <button
                 aria-label={`Delete ${chatLabel(chat)}`}
                 onClick={() => void remove(chat)}
