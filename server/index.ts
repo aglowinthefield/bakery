@@ -193,10 +193,10 @@ const server = createServer(async (req, res) => {
       const cardIds = new Set<string>();
       if (draining.on) {
         for (const runId of worker.activeRunIds) { const run = board.getRun(runId); if (run) cardIds.add(run.cardId); }
-        if (autoReview.activeCardId) cardIds.add(autoReview.activeCardId);
+        for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + (autoReview.active ? 1 : 0), cards, updates: updates?.state ?? null, ...version });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount, cards, updates: updates?.state ?? null, ...version });
       return;
     }
     if (path === "/api/update" && req.method === "POST") {
@@ -370,6 +370,10 @@ const server = createServer(async (req, res) => {
       if ("autoReviewMergeLimit" in input) {
         if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewMergeLimit)) throw new Error("Update autoReviewMergeLimit as an integer (0 for no limit), separately from other board settings");
         send(res, 200, board.setAutoReviewMergeLimit(repoBoard.id, Number(input.autoReviewMergeLimit))); return;
+      }
+      if ("autoReviewConcurrency" in input) {
+        if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewConcurrency)) throw new Error("Update autoReviewConcurrency as an integer from 1 to 4, separately from other board settings");
+        send(res, 200, board.setAutoReviewConcurrency(repoBoard.id, Number(input.autoReviewConcurrency))); return;
       }
       if ("autoReviewEnabled" in input || "verificationCommand" in input) {
         if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
@@ -691,7 +695,7 @@ const startDrain = (onDrained: () => void) => {
   draining.on = true;
   autoPickup.shutdown();
   // Agent reviews count too: a restart would kill the reviewer mid-review.
-  process.send?.({ type: "draining", activeRuns: worker.activeCount + (autoReview.active ? 1 : 0) });
+  process.send?.({ type: "draining", activeRuns: worker.activeCount + autoReview.activeCount });
   void Promise.all([worker.drain(), autoReview.drain()]).then(onDrained);
 };
 process.on("message", (message: unknown) => {

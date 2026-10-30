@@ -101,7 +101,7 @@ import {
   dropTargets,
   readyCompanions,
   needsYourReview,
-  reviewWaitLabels,
+  reviewWaitText,
   type BakerySettings,
   type Board,
   type Card,
@@ -3133,6 +3133,39 @@ export function App() {
                     </Button>
                   )}
               </label>
+              <label className="mt-3 flex items-center gap-2 text-xs">
+                Agent reviews at the same time
+                <select
+                  aria-label="Agent review concurrency"
+                  value={editingBoard.autoReviewConcurrency ?? 1}
+                  disabled={busy}
+                  onChange={(event) =>
+                    void action(async () => {
+                      updateBoard(
+                        await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({
+                              autoReviewConcurrency: Number(event.target.value),
+                            }),
+                          },
+                        ),
+                      );
+                    })
+                  }
+                  className="rounded-md border border-border bg-background px-2 py-1"
+                >
+                  {[1, 2, 3, 4].map((count) => (
+                    <option key={count} value={count}>
+                      {count}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-muted-foreground">
+                  Each runs the verification command too
+                </span>
+              </label>
               {!mergeLimitValid && (
                 <p role="alert" className="mt-1 text-xs text-destructive">
                   Enter a whole number from 0 to 99.
@@ -3520,7 +3553,7 @@ function ActivityBadge({
         ) : (
           <Hourglass size={10} aria-hidden />
         )}
-        {reviewWaitLabels[card.reviewWait]}
+        {reviewWaitText(card)}
       </span>
     );
   if (needsYourReview(card))
