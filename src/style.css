@@ -58,7 +58,7 @@
   --syntax-tag: #7ee787;
   --syntax-heading: #79c0ff;
   --syntax-list: #f2cc60;
-  --radius: 0.75rem;
+  --radius: 0.625rem;
 }
 :root[data-theme="light"] {
   --repo-violet: #7c5cc4;
