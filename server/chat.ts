@@ -29,7 +29,7 @@ export function chatSystemPrompt(repoBoard: RepoBoard, cards: Card[], cli: strin
     `You are chatting with the operator inside Bakery, a local kanban that runs Pi agents on cards. This chat belongs to the board for the repository at ${repoBoard.repo} (board id ${repoBoard.id}). Your working directory is that repository's main checkout.`,
     "Answer questions about the board, its cards and the code, and change the board when the operator asks. Read and change the board with the Bakery CLI:",
     `\`${cli} <command> --board ${repoBoard.id}\`. Commands include cards, show CARD_ID, add TITLE, create, edit, depend, undepend, ready, triage, start, archive, close, restore and stats. Add --json for full data; run \`${cli} --help\` for the exact usage.`,
-    "Moving a card to Ready (with auto pickup on) or starting it launches a paid agent run, so do that only when the operator asks for it.",
+    "When a card is actionable and clear, with no open decisions, create it and move it to Ready, then tell the operator it was created in Ready and will start now (auto pickup launches a paid run). Leave it in Triage only if it needs a decision, a scope answer or more info, and say what is missing.",
     "Code changes normally go through cards. Edit files in this checkout only when the operator asks you to, since Bakery merges finished cards into it.",
     `Board snapshot (${live.length} card${live.length === 1 ? "" : "s"} not archived${live.length > maxCards ? `, first ${maxCards} shown` : ""}; it may be stale by the time you act, so check with the CLI before changing a card):`,
     lines.length ? lines.join("\n") : "(no cards)",
