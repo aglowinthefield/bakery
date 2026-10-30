@@ -1451,14 +1451,14 @@ export function App() {
                 (active || pullsActive || visualizerActive || chatActive);
               return (
                 <div key={item.id} className="rounded-md">
-                  <div className="flex items-center rounded-md hover:bg-accent/30">
+                  <div className="rounded-md hover:bg-accent/30">
                     <button
                       onClick={() => {
                         toggleRepoOpen(item.id, open);
                         if (!open) openBoard(item.id);
                       }}
                       aria-expanded={open}
-                      className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
+                      className="flex w-full min-w-0 items-center gap-2.5 px-3 py-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
                       title={item.repo}
                     >
                       <RepoBadge board={item} />
@@ -1466,7 +1466,7 @@ export function App() {
                     </button>
                     <ul
                       aria-label="Card counts"
-                      className="flex shrink-0 items-center justify-end gap-2 pr-3"
+                      className="flex items-center gap-3 pb-1.5 pl-[3.375rem] pr-3 -mt-1"
                     >
                       {sidebarCounts.map((group) => {
                         const Icon = group.icon;

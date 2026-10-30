@@ -32,7 +32,9 @@ test("every repo in the sidebar shows one condensed row of backlog, in progress 
     await nav.locator('[data-group="backlog"]').getByText("2", { exact: true }).waitFor();
     const repoButton = page.getByRole("button", { name: "repo", exact: true });
     const [repoBox, navBox] = [await repoButton.boundingBox(), await nav.boundingBox()];
-    assert.ok(repoBox && navBox && navBox.x >= repoBox.x + repoBox.width - 1 && Math.abs(navBox.y + navBox.height / 2 - (repoBox.y + repoBox.height / 2)) < 4, "counts sit right-aligned on the repo row");
+    const nameBox = await repoButton.locator("span.truncate").boundingBox();
+    const firstCount = await nav.getByRole("listitem").first().boundingBox();
+    assert.ok(repoBox && navBox && nameBox && navBox.y >= repoBox.y + repoBox.height - 4 && firstCount && Math.abs(firstCount.x - nameBox.x) < 2, "counts sit on a row under the repo name");
     assert.ok(await repoButton.locator("xpath=../..").locator('[aria-label="Card counts"]').count() === 1, "counts live in the repo's selection area");
     const items = nav.getByRole("listitem");
     const tops = await items.evaluateAll(els => els.map(el => el.getBoundingClientRect().top));
