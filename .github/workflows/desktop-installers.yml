@@ -81,7 +81,7 @@ jobs:
           trap 'hdiutil detach "$mount"' EXIT
           app="$mount/Bakery.app"
           codesign --verify --deep --strict --verbose=2 "$app"
-          lipo -verify_arch arm64 "$app/Contents/MacOS/bakery-desktop"
+          lipo "$app/Contents/MacOS/bakery-desktop" -verify_arch arm64
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
