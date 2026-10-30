@@ -1974,15 +1974,17 @@ export function App() {
                 : laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
-              const collapsible = cards
+              const idle = cards
                 .filter((c) => laneOf(c, splitReview) === column.id)
                 .every((c) => c.status === "done" || c.status === "archived");
               const override = boardId
                 ? manualCollapse[boardId]?.[column.status]
                 : undefined;
+              // Any lane can be collapsed by hand; only idle lanes
+              // collapse automatically.
               const collapsed =
-                collapsible &&
-                (override ??
+                override ??
+                (idle &&
                   (column.id === "archived" ||
                     (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
               const selecting =
@@ -2051,10 +2053,10 @@ export function App() {
                   ) : (
                     <>
                       <div
-                        className={`mb-2 flex min-h-6 items-center gap-2 px-1 ${collapsible ? "cursor-pointer" : ""}`}
+                        className={`mb-2 flex min-h-6 items-center gap-2 px-1 ${idle ? "cursor-pointer" : ""}`}
                         onClick={(event) => {
                           if (
-                            collapsible &&
+                            idle &&
                             !(event.target as HTMLElement).closest("button")
                           )
                             toggleLane(column.status, false);
@@ -2084,17 +2086,15 @@ export function App() {
                               Select
                             </button>
                           )}
-                        {collapsible && (
-                          <button
-                            type="button"
-                            aria-label={`Collapse ${column.label} lane`}
-                            aria-expanded={true}
-                            onClick={() => toggleLane(column.status, false)}
-                            className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <ChevronDown size={16} />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          aria-label={`Collapse ${column.label} lane`}
+                          aria-expanded={true}
+                          onClick={() => toggleLane(column.status, false)}
+                          className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <ChevronDown size={16} />
+                        </button>
                       </div>
                       {selecting && (
                         <div
