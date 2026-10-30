@@ -1,0 +1,88 @@
+name: Desktop installers
+
+on:
+  push:
+    paths:
+      - .github/workflows/desktop-installers.yml
+      - desktop/**
+      - src-tauri/**
+      - package.json
+      - package-lock.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-installers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundle: nsis
+            extension: exe
+          - platform: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            bundle: dmg
+            extension: dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Test desktop Rust code
+        run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Build unsigned Windows installer
+        if: runner.os == 'Windows'
+        run: npm run desktop:build -- --ci --no-sign --target ${{ matrix.target }} --bundles ${{ matrix.bundle }} -- --locked
+
+      - name: Build ad-hoc signed macOS installer
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: npm run desktop:build -- --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundle }} -- --locked
+
+      - name: Verify macOS app signature and architecture
+        if: runner.os == 'macOS'
+        run: |
+          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Bakery.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          lipo -verify_arch arm64 "$app/Contents/MacOS/bakery-desktop"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: bakery-${{ matrix.platform }}-${{ github.sha }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/${{ matrix.bundle }}/*.${{ matrix.extension }}
+          if-no-files-found: error
+          retention-days: 14

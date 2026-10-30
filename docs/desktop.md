@@ -2,7 +2,7 @@
 
 Bakery's Tauri 2 client opens an existing Bakery server in the operating system's webview. It does not bundle Chromium, Node, Git, Pi, or a local server. Repositories and agents stay on the server. Closing the app does not stop runs.
 
-The client targets macOS, Windows, and Linux. The Linux native build and smoke test have been exercised. macOS and Windows still need native build and interaction checks before release. There are no signed installers or automatic updates yet.
+The client targets macOS, Windows, and Linux. The Linux native build and smoke test have been exercised. macOS and Windows still need native build and interaction checks before release. There are no publisher-signed installers or automatic updates yet.
 
 ## Connect
 
@@ -48,17 +48,27 @@ npm run desktop:build
 
 Installers appear under `src-tauri/target/release/bundle/`. For an unbundled debug executable, use `npm run desktop:build -- --debug --no-bundle`. Production distribution still requires platform signing and macOS notarization.
 
-## Test Windows from a headless server
+## Test Windows or Apple Silicon from a headless server
 
-The `Windows desktop installer` GitHub Actions workflow builds an unsigned x64 NSIS installer on `windows-latest`. It runs the Rust tests on Windows and uploads the installer as an artifact for 14 days. It does not publish a release or require signing secrets. A successful build does not verify desktop interactions.
+The `Desktop installers` GitHub Actions workflow runs the Rust tests and builds installers on each target OS. It uploads each installer as an artifact for 14 days. It does not publish a release or require signing secrets. A successful build does not verify desktop interactions.
 
-1. Push the branch containing `.github/workflows/desktop-windows.yml` and the desktop client. Changes to the workflow, desktop files, Rust files, or npm dependency files trigger a build on any branch.
-2. On GitHub, open **Actions > Windows desktop installer** and select the run for your commit.
-3. After the run succeeds, download the `bakery-windows-x64-<commit>` artifact on your Windows PC, extract the ZIP, and run the `.exe` installer. Windows may warn because the installer is unsigned. Only run an artifact from your own trusted build. If WebView2 is missing, the installer downloads its runtime.
+| Platform      | Runner           | Artifact                      | Installer                            |
+| ------------- | ---------------- | ----------------------------- | ------------------------------------ |
+| Windows x64   | `windows-latest` | `bakery-windows-x64-<commit>` | Unsigned NSIS `.exe`                 |
+| Apple Silicon | `macos-15`       | `bakery-macos-arm64-<commit>` | Ad-hoc signed `.app` inside a `.dmg` |
+
+The macOS job targets `aarch64-apple-darwin` and verifies the app's signature and ARM64 architecture. Ad-hoc signing needs no Apple account and does not establish publisher identity. The app is not notarized. Intel Macs are not included.
+
+1. Push the branch containing `.github/workflows/desktop-installers.yml` and the desktop client. Changes to the workflow, desktop files, Rust files, or npm dependency files trigger a build on any branch.
+2. On GitHub, open **Actions > Desktop installers** and select the run for your commit.
+3. After your platform's job succeeds, download its artifact on that computer and extract the ZIP. Only run an artifact from your own trusted build.
+4. On Windows, run the `.exe` installer. Windows may warn because it is unsigned. If WebView2 is missing, the installer downloads its runtime. On your Apple Silicon Mac, open the `.dmg`, drag Bakery into **Applications**, and open it from there.
+
+If macOS blocks the app because the developer cannot be verified, use **System Settings > Privacy & Security > Open Anyway** after attempting to launch it. Managed Macs may prohibit this override. If macOS reports the app as damaged or the app exits immediately, capture the exact error rather than disabling Gatekeeper.
 
 Once the workflow is on the repository's default branch, you can also use **Run workflow** and choose a branch. For the first branch-only build, use the push trigger; the manual-run button might not be available yet.
 
-You do not need Node, Rust, or Visual Studio on your Windows PC to run the installer. To connect through SSH, run this in a separate Windows PowerShell window and keep it open:
+You do not need Node, Rust, Visual Studio, or Xcode on the computer running the installer. To connect through SSH, run this in a separate Windows PowerShell or macOS Terminal window and keep it open:
 
 ```powershell
 ssh -N -L 4317:127.0.0.1:4317 your-user@your-server
@@ -72,7 +82,7 @@ ssh -N -L 4317:127.0.0.1:5173 your-user@your-server
 
 The desktop address stays `http://127.0.0.1:4317`. The loopback HTTP connection travels through the encrypted SSH tunnel. No public listener or extra allowed hostname is needed.
 
-On Windows, check that you can connect, drag cards between lanes, upload and download attachments, open external links, switch servers, and recover through **Connection settings** after closing the Bakery window. Avoid starting agent runs unless you intend to use paid model tokens.
+On each platform, check that you can connect, drag cards between lanes, upload and download attachments, open external links, switch servers, and recover through **Connection settings** after closing the Bakery window. Avoid starting agent runs unless you intend to use paid model tokens.
 
 ## Tests
 
