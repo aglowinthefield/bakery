@@ -87,12 +87,34 @@ export function ChatView({
     () => localStorage.getItem(railKey) === "collapsed",
   );
   const end = useRef<HTMLDivElement>(null);
+  // Whether the open chat is known to hold a message (messages are never removed, so this cannot go stale the wrong way), and the chats with a first send in flight.
+  const latest = useRef({ count: 0, live: false });
+  latest.current.count = state.messages.length;
+  latest.current.live = !!state.live;
+  const sendsInFlight = useRef(new Set<string>());
+  const openId = useRef<string | null>(chatId);
+  openId.current = chatId;
   const input = useRef<HTMLTextAreaElement>(null);
   const [focusRequest, setFocusRequest] = useState(0);
   const base = `/boards/${boardId}/chats`;
   const fail = (err: unknown) =>
     onError(err instanceof Error ? err.message : String(err));
 
+  const discard = async (id: string) => {
+    if (sendsInFlight.current.has(id)) return; // send() retries once its request settles
+    try {
+      const result = await api<{ discarded: boolean }>(
+        `${base}/${id}/discard`,
+        { method: "POST", body: "{}" },
+      );
+      if (result.discarded)
+        setChats(
+          (previous) => previous?.filter((c) => c.id !== id) ?? previous,
+        );
+    } catch {
+      // Cleanup is best effort; the chat stays listed.
+    }
+  };
   const refresh = async () => {
     try {
       const next = await api<Chat[]>(base);
@@ -169,6 +191,10 @@ export function ChatView({
     return () => {
       current = false;
       source.close();
+      // Leaving a chat (another chat, page or board) asks the server to discard it if it is still empty.
+      // The server decides, so a stale view here cannot delete a message sent from another tab.
+      const { count, live } = latest.current;
+      if (count === 0 && !live) void discard(chatId);
     };
   }, [chatId, boardId]);
   useEffect(() => {
@@ -182,7 +208,7 @@ export function ChatView({
   const current = chats?.find((chat) => chat.id === chatId);
   // Choices the operator made that the server has not confirmed yet, per chat. They win over the saved values on screen.
   const [wanted, setWanted] = useState<Record<string, AgentModel>>({});
-  const latest = useRef<Record<string, AgentModel>>({});
+  const wantedRef = useRef<Record<string, AgentModel>>({});
   // Saves run one at a time per chat, each sending the newest choice, so a slow response never overwrites a newer pick.
   const saves = useRef<Record<string, Promise<boolean>>>({});
   const choice: AgentModel =
@@ -194,9 +220,9 @@ export function ChatView({
   useEffect(() => setModelDraft(choice.model), [chatId, choice.model]);
   const settle = (id: string, sent: AgentModel | null) => {
     // Forget the wanted choice unless the operator has picked again since this save began.
-    const latestChoice = latest.current[id];
+    const latestChoice = wantedRef.current[id];
     if (!sent || (latestChoice && same(latestChoice, sent))) {
-      delete latest.current[id];
+      delete wantedRef.current[id];
       setWanted((previous) => {
         const { [id]: _, ...rest } = previous;
         return rest;
@@ -210,11 +236,11 @@ export function ChatView({
     if (!current || !chatId) return setNewChoice(next);
     const id = chatId;
     if (same(next, choice)) return setModelDraft(choice.model);
-    latest.current[id] = next;
+    wantedRef.current[id] = next;
     setWanted((previous) => ({ ...previous, [id]: next }));
     saves.current[id] = (saves.current[id] ?? Promise.resolve(true)).then(
       async () => {
-        const sending = latest.current[id];
+        const sending = wantedRef.current[id];
         if (!sending) return true;
         try {
           const saved = await api<Chat>(`${base}/${id}`, {
@@ -242,10 +268,10 @@ export function ChatView({
   /** Resolves once every choice made for this chat is saved; false if a save failed. */
   const flushChoice = async (id: string) => {
     let ok = true;
-    while (latest.current[id]) {
+    while (wantedRef.current[id]) {
       const pending = saves.current[id];
       ok = (await pending) && ok;
-      if (saves.current[id] === pending && latest.current[id]) break;
+      if (saves.current[id] === pending && wantedRef.current[id]) break;
     }
     return ok;
   };
@@ -282,8 +308,8 @@ export function ChatView({
     const message = draft.trim();
     if (!message || sending || state.live) return;
     setSending(true);
+    let id = chatId;
     try {
-      let id = chatId;
       if (id && !(await flushChoice(id))) return;
       if (!id) {
         const chat = await api<Chat>(base, {
@@ -294,6 +320,7 @@ export function ChatView({
         id = chat.id;
         setChatId(id);
       }
+      sendsInFlight.current.add(id);
       await api(`${base}/${id}/messages`, {
         method: "POST",
         body: JSON.stringify({ message }),
@@ -304,6 +331,11 @@ export function ChatView({
       fail(err);
     } finally {
       setSending(false);
+      if (id) {
+        sendsInFlight.current.delete(id);
+        // Left while the send was pending: the server keeps the chat if the message was saved, discards it if the send failed.
+        if (openId.current !== id) void discard(id);
+      }
     }
   };
   const busy = !!state.live;

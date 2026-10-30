@@ -563,3 +563,28 @@ test("an older auto-review table is rebuilt to accept the pull_request state wit
     finally { reopened.close(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("queued agent reviews show their place, and a board runs as many at once as its concurrency allows", async () => {
+  const item = fixture();
+  try {
+    const fake = join(item.dir, "fake-pi");
+    writeFileSync(fake, `#!/bin/sh\nsleep 0.6\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Check manually"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const cards = [item.reviewedCard(), item.reviewedCard(), item.reviewedCard()].map(entry => entry.card.id);
+    assert.deepEqual(cards.map(id => item.board.getCard(id)!.reviewQueue), [1, 2, 3].map(position => ({ position, of: 3 })), "first finished is first in line");
+    assert.throws(() => item.board.setAutoReviewConcurrency(item.repoBoard.id, 0));
+    assert.throws(() => item.board.setAutoReviewConcurrency(item.repoBoard.id, 5));
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewConcurrency, 1, "one at a time by default");
+    item.board.setAutoReviewConcurrency(item.repoBoard.id, 2);
+    const ticking = item.auto.tick();
+    while (item.auto.activeCount < 2) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(item.auto.activeCount, 2, "only two start");
+    assert.deepEqual(item.board.getCard(cards[2])!.reviewQueue, { position: 1, of: 1 }, "the third is next in line");
+    assert.equal(item.board.getCard(cards[0])!.reviewQueue, null, "a review that started is no longer queued");
+    await ticking;
+    await item.auto.tick();
+    assert.deepEqual(cards.map(id => item.board.listAutoReviewJobs(id).length), [1, 1, 1]);
+    assert.equal(item.board.getCard(cards[2])!.reviewWait, null);
+  } finally { item.close(); }
+});

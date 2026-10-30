@@ -99,8 +99,9 @@ import {
   cardActivity,
   countKey,
   dropTargets,
+  readyCompanions,
   needsYourReview,
-  reviewWaitLabels,
+  reviewWaitText,
   type BakerySettings,
   type Board,
   type Card,
@@ -820,7 +821,11 @@ export function App() {
   const [dragging, setDragging] = useState<{
     card: Card;
     targets: Status[];
+    // Triage cards that come along if the card is dropped on Ready.
+    along: Card[];
   } | null>(null);
+  // What the last drop moved, shown until dismissed or replaced.
+  const [moveNotice, setMoveNotice] = useState("");
   const [dropLane, setDropLane] = useState<Status | null>(null);
   const [selectingDone, setSelectingDone] = useState(false);
   const [doneSelection, setDoneSelection] = useState<Set<string>>(new Set());
@@ -1285,9 +1290,33 @@ export function App() {
     });
   };
   // Each drop calls the same endpoint as the matching button in the card's details.
-  const moveCard = (card: Card, to: Status) => {
+  const moveCard = (card: Card, to: Status, along: Card[] = []) => {
     if (!boardId || !dropTargets(card).includes(to)) return;
     const path = `/boards/${boardId}/cards`;
+    if (to === "ready" && along.length > 0) {
+      const total = along.length + 1;
+      if (
+        currentBoard?.autoPickupEnabled &&
+        settings?.confirmRunStart &&
+        !window.confirm(
+          `Move ${total} cards to Ready ("${card.title}" and the ${along.length} ${along.length === 1 ? "card" : "cards"} it waits on)? Auto pickup is on, so they may start and use paid model tokens. Cards that wait on others start after them.`,
+        )
+      )
+        return;
+      void action(async () => {
+        const moved = await api<Card[]>(`${path}/${card.id}/status`, {
+          method: "POST",
+          body: JSON.stringify({ status: "ready", withDependencies: true }),
+        });
+        const extra = moved.length - 1;
+        setMoveNotice(
+          extra > 0
+            ? `Moved ${moved.length} cards to Ready: ${card.title} and the ${extra} ${extra === 1 ? "card" : "cards"} it waits on`
+            : `Moved ${card.title} to Ready`,
+        );
+      });
+      return;
+    }
     if (to === "running") {
       if (
         settings?.confirmRunStart &&
@@ -1312,6 +1341,7 @@ export function App() {
         }),
       );
   };
+  useEffect(() => setMoveNotice(""), [boardId]);
   const endDrag = () => {
     setDragging(null);
     setDropLane(null);
@@ -2003,6 +2033,23 @@ export function App() {
             </Button>
           </div>
         )}
+        {moveNotice && (
+          <div
+            role="status"
+            aria-label="Move notice"
+            className="mx-6 mt-4 flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm lg:mx-10"
+          >
+            <span>{moveNotice}</span>
+            <button
+              type="button"
+              aria-label="Dismiss move notice"
+              onClick={() => setMoveNotice("")}
+              className="ml-auto rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         {boardId && loadedBoard !== boardId && (
           <p
             role="status"
@@ -2087,9 +2134,9 @@ export function App() {
                   onDrop={(event) => {
                     if (!dragging || !droppable) return;
                     event.preventDefault();
-                    const { card } = dragging;
+                    const { card, along } = dragging;
                     endDrag();
-                    moveCard(card, column.status);
+                    moveCard(card, column.status, along);
                   }}
                   className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
@@ -2159,6 +2206,19 @@ export function App() {
                           <ChevronDown size={16} />
                         </button>
                       </div>
+                      {column.id === "ready" &&
+                        dropLane === "ready" &&
+                        dragging &&
+                        dragging.along.length > 0 && (
+                          <p
+                            role="status"
+                            className="mb-2 rounded-md border border-dashed border-[var(--lane-status-color)] px-2 py-1 text-xs"
+                          >
+                            +{dragging.along.length}{" "}
+                            {dragging.along.length === 1 ? "card" : "cards"} it
+                            waits on
+                          </p>
+                        )}
                       {selecting && (
                         <div
                           role="toolbar"
@@ -2376,7 +2436,11 @@ export function App() {
                                   "text/plain",
                                   item.id,
                                 );
-                                setDragging({ card: item, targets });
+                                setDragging({
+                                  card: item,
+                                  targets,
+                                  along: readyCompanions(item, cards),
+                                });
                               }}
                               onDragEnd={endDrag}
                               data-card-tile={item.status}
@@ -2393,6 +2457,14 @@ export function App() {
                               }
                               data-dragging={
                                 dragging?.card.id === item.id || undefined
+                              }
+                              data-comes-along={
+                                dropLane === "ready" &&
+                                dragging?.along.some(
+                                  (other) => other.id === item.id,
+                                )
+                                  ? true
+                                  : undefined
                               }
                               className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50`}
                             >
@@ -3055,6 +3127,39 @@ export function App() {
                     </Button>
                   )}
               </label>
+              <label className="mt-3 flex items-center gap-2 text-xs">
+                Agent reviews at the same time
+                <select
+                  aria-label="Agent review concurrency"
+                  value={editingBoard.autoReviewConcurrency ?? 1}
+                  disabled={busy}
+                  onChange={(event) =>
+                    void action(async () => {
+                      updateBoard(
+                        await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({
+                              autoReviewConcurrency: Number(event.target.value),
+                            }),
+                          },
+                        ),
+                      );
+                    })
+                  }
+                  className="rounded-md border border-border bg-background px-2 py-1"
+                >
+                  {[1, 2, 3, 4].map((count) => (
+                    <option key={count} value={count}>
+                      {count}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-muted-foreground">
+                  Each runs the verification command too
+                </span>
+              </label>
               {!mergeLimitValid && (
                 <p role="alert" className="mt-1 text-xs text-destructive">
                   Enter a whole number from 0 to 99.
@@ -3442,7 +3547,7 @@ function ActivityBadge({
         ) : (
           <Hourglass size={10} aria-hidden />
         )}
-        {reviewWaitLabels[card.reviewWait]}
+        {reviewWaitText(card)}
       </span>
     );
   if (needsYourReview(card))
