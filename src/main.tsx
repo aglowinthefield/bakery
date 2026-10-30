@@ -1419,7 +1419,9 @@ export function App() {
             className={`mb-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
             <Sun size={16} aria-hidden="true" />
-            Today
+            <span className="text-[14px] font-medium text-foreground">
+              Today
+            </span>
             {needsYouCount > 0 && (
               <span className="ml-auto text-[length:var(--text-sidebar-meta)] tabular-nums text-muted-foreground">
                 {needsYouCount}
@@ -1458,7 +1460,7 @@ export function App() {
                         if (!open) openBoard(item.id);
                       }}
                       aria-expanded={open}
-                      className="flex w-full min-w-0 items-center gap-2.5 px-3 py-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
+                      className="flex w-full min-w-0 items-center gap-2.5 px-3 pb-0 pt-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
                       title={item.repo}
                     >
                       <RepoBadge board={item} />
@@ -1468,7 +1470,7 @@ export function App() {
                     </button>
                     <ul
                       aria-label="Card counts"
-                      className="flex items-center gap-3 pb-1.5 pl-[3.375rem] pr-3 -mt-1"
+                      className="flex items-center gap-3 pb-1.5 pl-[3.375rem] pr-3"
                     >
                       {sidebarCounts.map((group) => {
                         const Icon = group.icon;
