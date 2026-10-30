@@ -73,6 +73,11 @@ const finishedStatuses = "('done', 'archived')";
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
 type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string };
+/** A board chat: a general agent session about one repo and its board. Pi keeps the conversation; Bakery keeps what to show. */
+export type Chat = { id: string; boardId: string; title: string; createdAt: string; updatedAt: string };
+/** What an agent turn did, in order: reply text and the tools it ran. */
+export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
+export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
@@ -107,6 +112,12 @@ export function reportFromOutput(output: string): string | null {
   return output.slice(marker.index + marker[0].length).trim() || null;
 }
 
+/** A chat's title from its first message: the first line, cut to 80 characters. */
+export function chatTitle(message: string): string {
+  const line = message.trim().split("\n")[0].trim();
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
 export class Board {
   private db: DatabaseSync;
   constructor(path: string) {
@@ -124,6 +135,10 @@ export class Board {
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS discussion_messages (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS discussion_messages_card ON discussion_messages(cardId, createdAt);
+      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS chats_board ON chats(boardId, updatedAt);
+      CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, chatId TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', createdAt TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages(chatId, createdAt);
       CREATE TABLE IF NOT EXISTS card_dependencies (cardId TEXT NOT NULL REFERENCES cards(id), dependsOn TEXT NOT NULL REFERENCES cards(id), PRIMARY KEY (cardId, dependsOn));
       CREATE INDEX IF NOT EXISTS card_dependencies_parent ON card_dependencies(dependsOn);
       DELETE FROM card_dependencies WHERE cardId NOT IN (SELECT id FROM cards) OR dependsOn NOT IN (SELECT id FROM cards);
@@ -917,6 +932,34 @@ export class Board {
   addDiscussionMessage(cardId: string, role: DiscussionMessage["role"], body: string): DiscussionMessage {
     const message = { id: randomUUID(), cardId, role, body, createdAt: now() };
     this.db.prepare("INSERT INTO discussion_messages(id, cardId, role, body, createdAt) VALUES (?, ?, ?, ?, ?)").run(message.id, cardId, role, body, message.createdAt);
+    return message;
+  }
+  listChats(boardId: string): Chat[] {
+    return this.db.prepare("SELECT * FROM chats WHERE boardId=? ORDER BY updatedAt DESC, rowid DESC").all(boardId) as Chat[];
+  }
+  getChat(id: string): Chat | undefined { return this.db.prepare("SELECT * FROM chats WHERE id=?").get(id) as Chat | undefined; }
+  createChat(boardId: string, title = ""): Chat {
+    const time = now(), chat = { id: randomUUID(), boardId, title, createdAt: time, updatedAt: time };
+    this.db.prepare("INSERT INTO chats(id, boardId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)").run(chat.id, boardId, title, time, time);
+    return chat;
+  }
+  renameChat(id: string, title: string): Chat {
+    this.db.prepare("UPDATE chats SET title=? WHERE id=?").run(title, id);
+    return this.getChat(id)!;
+  }
+  deleteChat(id: string) {
+    this.db.prepare("DELETE FROM chat_messages WHERE chatId=?").run(id);
+    this.db.prepare("DELETE FROM chats WHERE id=?").run(id);
+  }
+  listChatMessages(chatId: string): ChatMessage[] {
+    return (this.db.prepare("SELECT * FROM chat_messages WHERE chatId=? ORDER BY rowid").all(chatId) as (Omit<ChatMessage, "parts"> & { parts: string })[])
+      .map(row => ({ ...row, parts: JSON.parse(row.parts) as ChatPart[] }));
+  }
+  /** Saves a message and bumps the chat to the top of its board's list. An untitled chat takes its first message as title. */
+  addChatMessage(chatId: string, role: ChatMessage["role"], body: string, parts: ChatPart[] = []): ChatMessage {
+    const message = { id: randomUUID(), chatId, role, body, parts, createdAt: now() };
+    this.db.prepare("INSERT INTO chat_messages(id, chatId, role, body, parts, createdAt) VALUES (?, ?, ?, ?, ?, ?)").run(message.id, chatId, role, body, JSON.stringify(parts), message.createdAt);
+    this.db.prepare("UPDATE chats SET updatedAt=?, title=CASE WHEN title='' AND ?='user' THEN ? ELSE title END WHERE id=?").run(message.createdAt, role, chatTitle(body), chatId);
     return message;
   }
   listReviewComments(cardId: string): ReviewComment[] {

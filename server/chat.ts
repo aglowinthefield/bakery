@@ -1,0 +1,171 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { command } from "./platform.js";
+import type { Board, Card, ChatMessage, ChatPart, RepoBoard } from "./board.js";
+
+/** The reply being written: the parts so far. Null when the chat is idle. */
+export type ChatLive = { startedAt: string; parts: ChatPart[] } | null;
+export type ChatEvent = { type: "live"; live: ChatLive } | { type: "message"; message: ChatMessage };
+
+const maxCards = 200;
+const statusOrder = ["running", "review", "failed", "interrupted", "ready", "triage", "done"];
+const priorityName: Record<number, string> = { [-1]: "low", 0: "normal", 1: "high", 2: "urgent" };
+
+/**
+ * The system prompt for a board chat turn. Pi keeps the conversation in its session; this adds a fresh snapshot of
+ * the board on every turn, so the agent sees cards that changed since the last message.
+ */
+export function chatSystemPrompt(repoBoard: RepoBoard, cards: Card[], cli: string): string {
+  const live = cards.filter(card => card.status !== "archived")
+    .sort((a, b) => statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status) || b.priority - a.priority);
+  const lines = live.slice(0, maxCards).map(card => {
+    const extra = [priorityName[card.priority] !== "normal" ? priorityName[card.priority] : "", card.blocked ? "blocked" : "",
+      card.dependsOn.length ? `after ${card.dependsOn.join(", ")}` : "", card.attempts ? `${card.attempts} attempt${card.attempts === 1 ? "" : "s"}` : ""].filter(Boolean).join("; ");
+    return `- ${card.id} [${card.status}] ${card.title}${extra ? ` (${extra})` : ""}`;
+  });
+  return [
+    "## Bakery board chat",
+    `You are chatting with the operator inside Bakery, a local kanban that runs Pi agents on cards. This chat belongs to the board for the repository at ${repoBoard.repo} (board id ${repoBoard.id}). Your working directory is that repository's main checkout.`,
+    "Answer questions about the board, its cards and the code, and change the board when the operator asks. Read and change the board with the Bakery CLI:",
+    `\`${cli} <command> --board ${repoBoard.id}\`. Commands include cards, show CARD_ID, add TITLE, create, edit, depend, undepend, ready, triage, start, archive, close, restore and stats. Add --json for full data; run \`${cli} --help\` for the exact usage.`,
+    "Moving a card to Ready (with auto pickup on) or starting it launches a paid agent run, so do that only when the operator asks for it.",
+    "Code changes normally go through cards. Edit files in this checkout only when the operator asks you to, since Bakery merges finished cards into it.",
+    `Board snapshot (${live.length} card${live.length === 1 ? "" : "s"} not archived${live.length > maxCards ? `, first ${maxCards} shown` : ""}; it may be stale by the time you act, so check with the CLI before changing a card):`,
+    lines.length ? lines.join("\n") : "(no cards)",
+  ].join("\n\n");
+}
+
+/** A tool call's input in one short line, for the chat transcript. */
+function toolInput(args: unknown): string {
+  if (args && typeof args === "object") {
+    const record = args as Record<string, unknown>;
+    const main = record.command ?? record.path ?? record.pattern ?? record.query;
+    if (typeof main === "string") return main.slice(0, 500);
+  }
+  return JSON.stringify(args ?? {}).slice(0, 500);
+}
+function toolOutput(result: unknown): string {
+  const content = (result as { content?: { type: string; text?: string }[] } | undefined)?.content;
+  const text = Array.isArray(content) ? content.filter(part => part.type === "text").map(part => part.text ?? "").join("") : "";
+  return text.length > 4000 ? `${text.slice(0, 4000)}\n…` : text;
+}
+
+/** Folds one Pi `--mode json` event into the turn's parts. Returns the assistant stop details when a message ends. */
+export function applyPiEvent(parts: ChatPart[], event: Record<string, unknown>): { stopReason?: string; errorMessage?: string } | undefined {
+  if (event.type === "message_update") {
+    const update = event.assistantMessageEvent as { type?: string; delta?: string } | undefined;
+    if (update?.type !== "text_delta" || !update.delta) return;
+    const last = parts.at(-1);
+    if (last?.type === "text") last.text += update.delta;
+    else parts.push({ type: "text", text: update.delta });
+  } else if (event.type === "tool_execution_start") {
+    parts.push({ type: "tool", id: String(event.toolCallId), name: String(event.toolName), input: toolInput(event.args), output: "", status: "running" });
+  } else if (event.type === "tool_execution_end") {
+    const tool = parts.find(part => part.type === "tool" && part.id === event.toolCallId);
+    if (tool?.type === "tool") { tool.status = event.isError ? "error" : "done"; tool.output = toolOutput(event.result); }
+  } else if (event.type === "message_end") {
+    const message = event.message as { role?: string; stopReason?: string; errorMessage?: string } | undefined;
+    if (message?.role === "assistant") return { stopReason: message.stopReason, errorMessage: message.errorMessage };
+  }
+}
+
+/** The text a finished turn replied with: its text parts after the last tool call, or all of them if that is empty. */
+export function replyText(parts: ChatPart[]): string {
+  const lastTool = parts.map(part => part.type).lastIndexOf("tool");
+  const text = (from: number) => parts.slice(from).flatMap(part => part.type === "text" ? [part.text] : []).join("\n\n").trim();
+  return text(lastTool + 1) || text(0);
+}
+
+type Turn = { child: ChildProcess; live: NonNullable<ChatLive>; stopped: boolean };
+
+/**
+ * Runs board chat turns. Each chat is one Pi session (`--session-id` = chat id under `sessionDir`), so Pi carries the
+ * conversation; Bakery saves each turn's parts for display and streams the live turn to subscribers.
+ */
+export class Chats {
+  private turns = new Map<string, Turn>();
+  private listeners = new Map<string, Set<(event: ChatEvent) => void>>();
+  constructor(private board: Board, private options: { piBin: string; sessionDir: string; cli: string; env: NodeJS.ProcessEnv; models: (repo: string) => string[] }) {
+    mkdirSync(options.sessionDir, { recursive: true, mode: 0o700 });
+  }
+
+  live(chatId: string): ChatLive { return this.turns.get(chatId)?.live ?? null; }
+  get active() { return this.turns.size; }
+
+  subscribe(chatId: string, listener: (event: ChatEvent) => void): () => void {
+    const set = this.listeners.get(chatId) ?? new Set();
+    set.add(listener); this.listeners.set(chatId, set);
+    return () => { set.delete(listener); if (!set.size) this.listeners.delete(chatId); };
+  }
+  private emit(chatId: string, event: ChatEvent) { for (const listener of this.listeners.get(chatId) ?? []) listener(event); }
+
+  /** Saves the operator's message and starts the agent's reply. Throws while a reply is still being written. */
+  send(repoBoard: RepoBoard, chatId: string, message: string): ChatMessage {
+    if (this.turns.has(chatId)) throw new Error("The agent is still answering the previous message");
+    const saved = this.board.addChatMessage(chatId, "user", message);
+    this.emit(chatId, { type: "message", message: saved });
+    const prompt = chatSystemPrompt(repoBoard, this.board.listCards(repoBoard.repo), this.options.cli);
+    const args = ["--print", "--mode", "json", "--session-dir", this.options.sessionDir, "--session-id", chatId, "--append-system-prompt", prompt, ...this.options.models(repoBoard.repo), "--", message];
+    const child = spawn(...command(this.options.piBin, args), { cwd: repoBoard.repo, env: this.options.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const turn: Turn = { child, live: { startedAt: saved.createdAt, parts: [] }, stopped: false };
+    this.turns.set(chatId, turn);
+    this.emit(chatId, { type: "live", live: turn.live });
+
+    let buffer = "", stderr = "", settled = false, stop: { stopReason?: string; errorMessage?: string } | undefined, flush: ReturnType<typeof setTimeout> | undefined;
+    // Text arrives a few characters at a time; subscribers get the whole turn at most every 80ms.
+    const changed = () => { flush ??= setTimeout(() => { flush = undefined; if (this.turns.get(chatId) === turn) this.emit(chatId, { type: "live", live: turn.live }); }, 80); };
+    child.stdout?.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString();
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+        if (!line.trim()) continue;
+        let event: Record<string, unknown>;
+        try { event = JSON.parse(line); } catch { continue; }
+        if (event.type === "agent_settled") settled = event.aborted !== true;
+        stop = applyPiEvent(turn.live.parts, event) ?? stop;
+        changed();
+      }
+    });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-1000); });
+    const finish = (error: string | null) => {
+      if (this.turns.get(chatId) !== turn) return;
+      clearTimeout(flush);
+      this.turns.delete(chatId);
+      const parts = turn.live.parts.map(part => part.type === "tool" && part.status === "running" ? { ...part, status: "error" as const } : part);
+      const text = replyText(parts);
+      if (this.board.getChat(chatId)) {
+        if (parts.length) this.emit(chatId, { type: "message", message: this.board.addChatMessage(chatId, "agent", text, parts) });
+        if (error) this.emit(chatId, { type: "message", message: this.board.addChatMessage(chatId, "error", error) });
+      }
+      this.emit(chatId, { type: "live", live: null });
+    };
+    child.once("error", error => finish(`Pi could not start: ${error.message}`));
+    child.once("close", code => {
+      if (turn.stopped) return finish("Stopped by the operator");
+      if (code !== 0) return finish(`Pi failed (${code})${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)}` : ""}`);
+      if (!settled) return finish("Pi ended without finishing its reply");
+      if (stop?.stopReason !== "stop") return finish(`Pi stopped early (${stop?.stopReason ?? "no reply"})${stop?.errorMessage ? `: ${stop.errorMessage.slice(0, 500)}` : ""}`);
+      finish(null);
+    });
+    return saved;
+  }
+
+  stop(chatId: string) {
+    const turn = this.turns.get(chatId);
+    if (!turn) return;
+    turn.stopped = true;
+    // Pi's tool processes share its pipes, so end the whole group or the turn would not finish until they exit.
+    try { if (process.platform !== "win32" && turn.child.pid) process.kill(-turn.child.pid, "SIGTERM"); else turn.child.kill("SIGTERM"); } catch { turn.child.kill("SIGTERM"); }
+  }
+
+  /** Stops any reply, then removes the chat and its Pi session file. */
+  delete(chatId: string) {
+    this.stop(chatId);
+    this.board.deleteChat(chatId);
+    for (const file of readdirSync(this.options.sessionDir).filter(name => name.endsWith(`_${chatId}.jsonl`))) unlinkSync(join(this.options.sessionDir, file));
+  }
+
+  shutdown() { for (const id of this.turns.keys()) this.stop(id); }
+}
