@@ -27,7 +27,7 @@ import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
 import { LogBuffer } from "./logs.js";
-import { Updates, installScript } from "./updates.js";
+import { Updates, installScript, promoteStagedUi } from "./updates.js";
 
 // The Logs view reads this process's console output from here.
 const logs = new LogBuffer();
@@ -39,6 +39,7 @@ chmodSync(dataDir, 0o700);
 // Exclusive ownership of the local board; a lock left by a dead server is taken over.
 const lockPath = join(dataDir, "server.lock");
 const lock = acquireLock(lockPath);
+if (promoteStagedUi(process.cwd())) console.log("Serving the UI built by the last update.");
 let board: Board;
 try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
