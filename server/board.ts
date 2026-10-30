@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { addAgent, type Usage } from "./agent.js";
-import { parseAgentModels, resolveAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
+import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import type { ThemeName } from "../src/themes.js";
 import { parsePlan } from "../src/plan.js";
@@ -84,9 +84,10 @@ export type DiscussionMessage = { id: string; cardId: string; role: "user" | "ag
 /** A board chat: a general agent session about one repo and its board. Pi keeps the conversation; Bakery keeps what to show. */
 /**
  * `title` is the first line of the first message; `topic` is a few-word summary of it, empty until one is written.
+ * `model` and `thinking` are this chat's Pi choice; "" leaves that flag to Pi's own default.
  * `unread` counts agent turns that finished while nobody was looking at the chat.
  */
-export type Chat = { id: string; boardId: string; title: string; topic: string; unread: number; createdAt: string; updatedAt: string };
+export type Chat = { id: string; boardId: string; title: string; topic: string; model: string; thinking: AgentModel["thinking"]; unread: number; createdAt: string; updatedAt: string };
 /** What an agent turn did, in order: reply text and the tools it ran. */
 export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
@@ -96,6 +97,8 @@ export type AutoReviewJob = { cardId: string; runId: string; state: "running" | 
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoReviewConcurrency, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
+/** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
+export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
 /** A status change (fromStatus/toStatus set) or a note (both null), with why it happened. */
 export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string };
@@ -125,6 +128,11 @@ export function reportFromOutput(output: string): string | null {
   return output.slice(marker.index + marker[0].length).trim() || null;
 }
 
+/** Pi restores a resumed session's earlier model and thinking when a flag is omitted, so an empty field means the chat default, never "no flag". */
+function chatChoice(choice: unknown): AgentModel {
+  const { model, thinking } = validateAgentModel(choice, "chat");
+  return { model: model || defaultChatModel.model, thinking: thinking || defaultChatModel.thinking };
+}
 /** A chat's title from its first message: the first line, cut to 80 characters. */
 export function chatTitle(message: string): string {
   const line = message.trim().split("\n")[0].trim();
@@ -139,7 +147,7 @@ export class Board {
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, unseen INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', ${usageDefinitions}, UNIQUE(cardId, attempt));
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'sprinkle_donut', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, verificationCommand TEXT NOT NULL DEFAULT '', autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0, agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
@@ -154,7 +162,7 @@ export class Board {
       -- Files the operator attached to a card, or to one of its discussion messages (messageId). The bytes live on disk; see server/attachments.ts.
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), messageId TEXT REFERENCES discussion_messages(id), name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attachments_card ON attachments(cardId, createdAt);
-      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', unread INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', thinking TEXT NOT NULL DEFAULT '', unread INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS chats_board ON chats(boardId, updatedAt);
       CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, chatId TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages(chatId, createdAt);
@@ -177,6 +185,9 @@ export class Board {
       this.db.exec("UPDATE cards SET priority = CASE priority WHEN -1 THEN -10 WHEN 1 THEN 50 WHEN 2 THEN 100 ELSE priority END; PRAGMA user_version = 1");
     }
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
+    // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
+    // Cards that exist before this column are not new, and a card made in the board UI never is.
+    if (!cardColumns.has("unseen")) this.db.exec("ALTER TABLE cards ADD COLUMN unseen INTEGER NOT NULL DEFAULT 0");
     for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     if (!cardColumns.has("prPushedRunId")) {
@@ -191,9 +202,9 @@ export class Board {
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
-    const chatColumns = (this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).map(column => column.name);
-    if (!chatColumns.includes("topic")) this.db.exec("ALTER TABLE chats ADD COLUMN topic TEXT NOT NULL DEFAULT ''");
-    if (!chatColumns.includes("unread")) this.db.exec("ALTER TABLE chats ADD COLUMN unread INTEGER NOT NULL DEFAULT 0");
+    const chatColumns = new Set((this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).map(column => column.name));
+    if (!chatColumns.has("topic")) this.db.exec("ALTER TABLE chats ADD COLUMN topic TEXT NOT NULL DEFAULT ''");
+    if (!chatColumns.has("unread")) this.db.exec("ALTER TABLE chats ADD COLUMN unread INTEGER NOT NULL DEFAULT 0");
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
     const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
     if (!settingsColumns.has("cardDetailsLayout")) this.db.exec("ALTER TABLE settings ADD COLUMN cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side'))");
@@ -252,6 +263,13 @@ export class Board {
     if (!boardColumns.has("integrationChosen")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationChosen INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("githubMainProtected")) this.db.exec("ALTER TABLE boards ADD COLUMN githubMainProtected INTEGER");
     if (!boardColumns.has("integrationNote")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationNote TEXT NOT NULL DEFAULT ''");
+
+    // Chats made before the picker move to the cheap chat default rather than the card-run model they used to share.
+    if (!chatColumns.has("model")) {
+      this.db.exec("ALTER TABLE chats ADD COLUMN model TEXT NOT NULL DEFAULT ''");
+      this.db.exec("ALTER TABLE chats ADD COLUMN thinking TEXT NOT NULL DEFAULT ''");
+      this.db.prepare("UPDATE chats SET model=?, thinking=?").run(defaultChatModel.model, defaultChatModel.thinking);
+    }
 
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
@@ -847,6 +865,21 @@ export class Board {
     if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status IN ('running', 'interrupted') LIMIT 1").get(board.repo)) throw new Error("Resolve running or interrupted cards before removing this board");
     this.db.prepare("UPDATE boards SET archived=1 WHERE id=?").run(id);
   }
+  /** Per repo, how many cards created outside the board UI the operator has not seen yet. Archived cards are left out. */
+  newCardCounts(): Record<string, number> {
+    const rows = this.db.prepare("SELECT repo, COUNT(*) AS count FROM cards WHERE unseen=1 AND status!='archived' GROUP BY repo").all() as { repo: string; count: number }[];
+    return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
+  }
+  /**
+   * Marks seen the board's new cards among `cardIds` (the ones the operator's screen has loaded) and returns them,
+   * so the UI can point them out for this visit. Other new cards, such as one created after that screen loaded, stay new.
+   */
+  markCardsSeen(id: string, cardIds: string[]): string[] {
+    const repoBoard = this.getBoard(id);
+    if (!repoBoard) throw new Error("Board not found");
+    const mark = this.db.prepare("UPDATE cards SET unseen=0 WHERE id=? AND repo=? AND unseen=1 AND status!='archived'");
+    return [...new Set(cardIds)].filter(cardId => Number(mark.run(cardId, repoBoard.repo).changes) > 0);
+  }
   /** Cards per board and status. `review` counts only Review cards that need you; `reviewWaiting` counts the rest. */
   cardCounts(): Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> {
     const counts: Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> = {};
@@ -919,7 +952,7 @@ export class Board {
     return row && this.getCard(row.id);
   }
   /** `dependsOn` lists cards on the same board that must be Done before this one starts. */
-  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[] }): Card {
+  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin }): Card {
     const key = input.idempotencyKey ?? null;
     if (key !== null && (!key.trim() || key.length > 200)) throw new Error("Idempotency key must be 1 to 200 characters");
     const existing = key === null ? undefined : this.getCardByIdempotencyKey(input.repo, key);
@@ -928,8 +961,8 @@ export class Board {
     this.addRepo(input.repo);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?)")
-        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0));
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1);
       for (const parent of new Set(input.dependsOn ?? [])) {
         this.checkDependency(this.getCard(id)!, parent);
         this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);
@@ -1099,10 +1132,18 @@ export class Board {
     return this.db.prepare("SELECT * FROM chats WHERE boardId=? ORDER BY updatedAt DESC, rowid DESC").all(boardId) as Chat[];
   }
   getChat(id: string): Chat | undefined { return this.db.prepare("SELECT * FROM chats WHERE id=?").get(id) as Chat | undefined; }
-  createChat(boardId: string, title = ""): Chat {
-    const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", unread: 0, createdAt: time, updatedAt: time };
-    this.db.prepare("INSERT INTO chats(id, boardId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)").run(chat.id, boardId, title, time, time);
+  /** Creates a chat with the given model choice, or the cheap chat default. */
+  createChat(boardId: string, title = "", choice: unknown = defaultChatModel): Chat {
+    const { model, thinking } = chatChoice(choice);
+    const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", model, thinking, unread: 0, createdAt: time, updatedAt: time };
+    this.db.prepare("INSERT INTO chats(id, boardId, title, model, thinking, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)").run(chat.id, boardId, title, model, thinking, time, time);
     return chat;
+  }
+  /** Switches the model for the chat's next turns; Pi keeps the conversation across the switch. */
+  setChatModel(id: string, choice: unknown): Chat {
+    const { model, thinking } = chatChoice(choice);
+    this.db.prepare("UPDATE chats SET model=?, thinking=? WHERE id=?").run(model, thinking, id);
+    return this.getChat(id)!;
   }
   renameChat(id: string, title: string): Chat {
     this.db.prepare("UPDATE chats SET title=? WHERE id=?").run(title, id);

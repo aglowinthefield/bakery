@@ -1,7 +1,7 @@
 import type { SemanticTitleRules } from "./pr-title.js";
 import type { ThemeName } from "./themes.js";
 import type { UsageFields } from "./usage.js";
-import type { AgentModels } from "../server/agent-models.js";
+import type { AgentModels, ThinkingLevel } from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
 
 export type Status =
@@ -54,6 +54,8 @@ export type Board = {
   agentModels?: AgentModels;
   /** Per status; `review` counts only Review cards that need you, `reviewWaiting` the rest. */
   cardCounts?: Partial<Record<CountKey, number>>;
+  /** Cards created outside this UI that the operator has not opened the board to see yet. */
+  newCards?: number;
   /** Finished chat turns the operator has not seen, summed over the board's chats. */
   chatUnread?: number;
 };
@@ -348,6 +350,9 @@ export type Chat = {
   id: string;
   boardId: string;
   title: string;
+  /** Pi model and thinking level for this chat's turns; "" leaves it to Pi's default. */
+  model: string;
+  thinking: ThinkingLevel | "";
   topic?: string;
   unread?: number;
   createdAt: string;

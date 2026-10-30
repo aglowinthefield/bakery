@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { command } from "./platform.js";
 import { settledReply } from "./agent.js";
+import { piModelArgs } from "./agent-models.js";
 import type { Board, Card, Chat, ChatMessage, ChatPart, RepoBoard } from "./board.js";
 
 /** The reply being written: the parts so far. Null when the chat is idle. */
@@ -123,7 +124,7 @@ export class Chats {
   /** Per chat, each open browser view and whether the operator is looking at it (the page visible and focused). */
   private viewers = new Map<string, Map<string, { looking: boolean; revision: number }>>();
   /** `topic` writes a chat's few-word topic from its first message; without it chats keep only their title. */
-  constructor(private board: Board, private options: { piBin: string; sessionDir: string; cli: string; env: NodeJS.ProcessEnv; models: (repo: string) => string[]; topic?: (repoBoard: RepoBoard, message: string) => Promise<string> }) {
+  constructor(private board: Board, private options: { piBin: string; sessionDir: string; cli: string; env: NodeJS.ProcessEnv; topic?: (repoBoard: RepoBoard, message: string) => Promise<string> }) {
     mkdirSync(options.sessionDir, { recursive: true, mode: 0o700 });
   }
 
@@ -175,11 +176,13 @@ export class Chats {
   /** Saves the operator's message and starts the agent's reply. Throws while a reply is still being written. */
   send(repoBoard: RepoBoard, chatId: string, message: string): ChatMessage {
     if (this.turns.has(chatId)) throw new Error("The agent is still answering the previous message");
+    const chat = this.board.getChat(chatId);
+    if (!chat) throw new Error("Chat not found");
     const saved = this.board.addChatMessage(chatId, "user", message);
     this.emit(chatId, { type: "message", message: saved });
     this.name(repoBoard, chatId, message);
     const prompt = chatSystemPrompt(repoBoard, this.board.listCards(repoBoard.repo), this.options.cli);
-    const args = ["--print", "--mode", "json", "--session-dir", this.options.sessionDir, "--session-id", chatId, "--append-system-prompt", prompt, ...this.options.models(repoBoard.repo), "--", message];
+    const args = ["--print", "--mode", "json", "--session-dir", this.options.sessionDir, "--session-id", chatId, "--append-system-prompt", prompt, ...piModelArgs(chat), "--", message];
     const child = spawn(...command(this.options.piBin, args), { cwd: repoBoard.repo, env: this.options.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     const turn: Turn = { child, live: { startedAt: saved.createdAt, parts: [] }, stopped: false };
     this.turns.set(chatId, turn);

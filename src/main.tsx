@@ -55,7 +55,7 @@ import {
 import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { FilePicker, formatSize, uploadAttachment } from "./attachments.js";
-import { ago, api, date } from "./api.js";
+import { ago, api, date, listModels } from "./api.js";
 import {
   agentPhases,
   emptyAgentModels,
@@ -136,6 +136,20 @@ function ServerHost() {
   return <span data-testid="server-host">{host || "Bakery"}</span>;
 }
 
+/** Count of cards created outside this UI that the operator has not seen yet. */
+function NewCardsBadge({ count }: { count: number }) {
+  const label = `${count} new ${count === 1 ? "card" : "cards"}`;
+  return (
+    <span
+      role="status"
+      aria-label={label}
+      title={label}
+      className="ml-auto mr-2 shrink-0 rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
+    >
+      {count}
+    </span>
+  );
+}
 function filterCards(cards: Card[], query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return cards;
@@ -447,8 +461,6 @@ const phaseLabels: Record<AgentPhase, string> = {
   review: "Agent review",
   draft: "PR drafts",
 };
-// Shared across dialogs; listing spawns Pi, so only ask once a model field is used.
-let modelList: Promise<{ models: string[]; error?: string }> | undefined;
 function AgentModelFields({
   scope,
   value,
@@ -466,11 +478,7 @@ function AgentModelFields({
   const [models, setModels] = useState<string[]>([]);
   const [modelError, setModelError] = useState("");
   const loadModels = () => {
-    modelList ??= api<{ models: string[]; error?: string }>("/models").catch(
-      (err) => ({ models: [], error: String(err) }),
-    );
-    void modelList.then((result) => {
-      if (result.error) modelList = undefined;
+    void listModels().then((result) => {
       setModels(result.models);
       setModelError(result.error ?? "");
     });
@@ -1099,6 +1107,75 @@ export function App() {
       clearTimeout(timer);
     };
   }, [view, boardId, refreshKey, settings?.notifyOnReview]);
+  // Opening the Kanban view marks the board's new cards seen and highlights just those cards for this visit. Only
+  // cards this screen has loaded are acknowledged, so a card that appears later stays new until a later pass. The
+  // request belongs to the visit (view + board), not to the count that triggered it: a poll that already reads zero
+  // must not drop the answer. A failed request retries, and keeps failing visibly.
+  const [newCardIds, setNewCardIds] = useState<Set<string>>(new Set());
+  const [ackRetry, setAckRetry] = useState(0);
+  const boardHasNew =
+    (boards.find((item) => item.id === boardId)?.newCards ?? 0) > 0;
+  const boardLoaded = loadedBoard === boardId;
+  const visit = view === "board" && boardId ? boardId : null;
+  const visitRef = useRef<string | null>(null);
+  const loadedCards = useRef<Card[]>([]);
+  const selectedRef = useRef<string | null>(null);
+  const ackInFlight = useRef(false);
+  const ackFailures = useRef(0);
+  loadedCards.current = cards;
+  selectedRef.current = selected;
+  useEffect(() => {
+    visitRef.current = visit;
+    ackFailures.current = 0;
+    setNewCardIds(new Set());
+  }, [visit]);
+  // Opening a card by any route (a tile, a deep link, a reload) ends its highlight.
+  useEffect(() => {
+    if (selected)
+      setNewCardIds((previous) => {
+        if (!previous.has(selected)) return previous;
+        const next = new Set(previous);
+        next.delete(selected);
+        return next;
+      });
+  }, [selected]);
+  useEffect(() => {
+    if (!visit || !boardLoaded || !boardHasNew || ackInFlight.current) return;
+    ackInFlight.current = true;
+    const target = visit;
+    api<{ cardIds: string[] }>(`/boards/${target}/cards-seen`, {
+      method: "POST",
+      body: JSON.stringify({ cardIds: loadedCards.current.map((c) => c.id) }),
+    })
+      .then(
+        ({ cardIds }) => {
+          if (visitRef.current !== target) return;
+          ackFailures.current = 0;
+          setBoards((previous) =>
+            previous.map((item) =>
+              item.id === target ? { ...item, newCards: 0 } : item,
+            ),
+          );
+          const fresh = cardIds.filter((id) => id !== selectedRef.current);
+          if (fresh.length)
+            setNewCardIds((previous) => new Set([...previous, ...fresh]));
+        },
+        (failure) => {
+          if (visitRef.current !== target) return;
+          ackFailures.current += 1;
+          if (ackFailures.current >= 3)
+            setError(`Could not mark new cards as seen: ${String(failure)}`);
+          setTimeout(() => {
+            if (visitRef.current === target) setAckRetry((n) => n + 1);
+          }, 2000);
+        },
+      )
+      .finally(() => {
+        ackInFlight.current = false;
+        // A visit that began while this request ran never got its own pass.
+        if (visitRef.current !== target) setAckRetry((n) => n + 1);
+      });
+  }, [visit, boardLoaded, boardHasNew, ackRetry]);
   // An error belongs to the board it happened on, so switching board or view dismisses it.
   useEffect(() => setError(""), [view, boardId]);
   const currentBoard = boards.find((item) => item.id === boardId);
@@ -1488,6 +1565,9 @@ export function App() {
                         <ChatUnreadBadge count={item.chatUnread} />
                       )}
                     </button>
+                    {!open && !!item.newCards && (
+                      <NewCardsBadge count={item.newCards} />
+                    )}
                     <ul
                       aria-label="Card counts"
                       className="flex shrink-0 items-center justify-end gap-2 pr-3"
@@ -1535,6 +1615,9 @@ export function App() {
                       className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${active ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <Kanban size={13} aria-hidden="true" /> Kanban
+                      {!!item.newCards && (
+                        <NewCardsBadge count={item.newCards} />
+                      )}
                     </button>
                   )}
                   {open && supportsPullRequests(item) && (
@@ -1636,7 +1719,7 @@ export function App() {
               action(() =>
                 api(`/boards/${board.id}/cards`, {
                   method: "POST",
-                  body: JSON.stringify({ title, body: "" }),
+                  body: JSON.stringify({ title, body: "", origin: "ui" }),
                 }),
               )
             }
@@ -2498,6 +2581,7 @@ export function App() {
                               }}
                               onDragEnd={endDrag}
                               data-card-tile={item.status}
+                              data-new={newCardIds.has(item.id) || undefined}
                               data-stripe={
                                 needsYourReview(item)
                                   ? "review"
@@ -2520,8 +2604,13 @@ export function App() {
                                   ? true
                                   : undefined
                               }
-                              className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50`}
+                              className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50 data-[new]:border-primary data-[new]:ring-2 data-[new]:ring-primary/60`}
                             >
+                              {newCardIds.has(item.id) && (
+                                <span className="mb-1 inline-block rounded-full bg-primary px-2 py-px text-[10px] font-semibold uppercase tracking-[.1em] text-primary-foreground">
+                                  New
+                                </span>
+                              )}
                               {content}
                             </button>
                           );
@@ -3362,7 +3451,9 @@ export function App() {
                   `/boards/${owner}/cards${editing ? `/${editing.id}` : ""}`,
                   {
                     method: editing ? "PATCH" : "POST",
-                    body: JSON.stringify(value),
+                    body: JSON.stringify(
+                      editing ? value : { ...value, origin: "ui" },
+                    ),
                   },
                 );
                 // The card exists first; its files stream up one by one after.
