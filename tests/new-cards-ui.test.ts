@@ -10,7 +10,7 @@ test("new cards from elsewhere badge the sidebar, then highlight on the board an
   try {
     const page = await browser.newPage();
     const card = (id: string, title: string) => ({ id, title, body: "", repo: "/tmp/repo", source: "manual", status: "triage", priority: 0,
-      createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 });
+      createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: 0, reviewRounds: 0, runAgent: "", reviewAgent: "" });
     const cards = [card("old", "Old card"), card("cli", "Made by the CLI")];
     let unseen = ["cli"];
     let release = () => {};
@@ -45,7 +45,7 @@ test("new cards from elsewhere badge the sidebar, then highlight on the board an
         "/api/boards/other/conflicts": [],
       };
       assert.ok(path in data || path.startsWith("/api/boards/board/cards/"), `Unexpected API request: ${path}`);
-      await route.fulfill({ json: data[path] ?? {} });
+      await route.fulfill({ json: data[path] ?? [] });
     });
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
 
@@ -72,7 +72,9 @@ test("new cards from elsewhere badge the sidebar, then highlight on the board an
     assert.equal(await page.locator("[data-card-tile][data-new]").count(), 1);
 
     // Opening the highlighted card ends its highlight.
+    await page.getByRole("dialog").waitFor();
     await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await tile("Made by the CLI").click();
     await page.locator("[data-card-tile][data-new]").waitFor({ state: "detached" });
   } finally {

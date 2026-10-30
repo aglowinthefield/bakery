@@ -294,6 +294,10 @@
 .lane-drop[data-drop="valid"] { outline: 1px dashed var(--lane-status-color); outline-offset: 4px; }
 .lane-drop[data-drop="over"] { outline: 2px solid var(--lane-status-color); outline-offset: 4px; background-color: color-mix(in oklab, var(--lane-status-color) 8%, transparent); }
 .lane-drop[data-drop="invalid"] { opacity: 0.45; }
+/* Triage cards that move to Ready with the dragged card pulse while the pointer is over Ready. */
+[data-comes-along] { outline: 2px solid var(--status-ready); outline-offset: 2px; animation: comes-along-pulse 1s ease-in-out infinite; }
+@keyframes comes-along-pulse { 50% { outline-color: transparent; } }
+@media (prefers-reduced-motion: reduce) { [data-comes-along] { animation: none; } }
 @theme inline {
   --color-background: var(--background); --color-foreground: var(--foreground);
   --color-card: var(--card); --color-card-foreground: var(--card-foreground);

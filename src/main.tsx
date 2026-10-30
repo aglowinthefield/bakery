@@ -99,8 +99,9 @@ import {
   cardActivity,
   countKey,
   dropTargets,
+  readyCompanions,
   needsYourReview,
-  reviewWaitLabels,
+  reviewWaitText,
   type BakerySettings,
   type Board,
   type Card,
@@ -110,7 +111,13 @@ import {
   type Status,
   waitingOn,
 } from "./model.js";
-import { formatRoute, parseRoute, type RouteView } from "./route.js";
+import {
+  formatRoute,
+  parseRoute,
+  type RouteView,
+  type SettingsSection,
+} from "./route.js";
+import { SettingsPage } from "./settings.js";
 import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
 import { themeNames, themes } from "./themes.js";
@@ -552,7 +559,9 @@ export function App() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardId, setBoardId] = useState<string | null>(null);
   const [settings, setSettings] = useState<BakerySettings | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(
+    () => initialRoute?.section ?? "general",
+  );
   const [addingRepo, setAddingRepo] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [repoPath, setRepoPath] = useState("");
@@ -593,7 +602,8 @@ export function App() {
       saved === "visualizer" ||
       saved === "chat" ||
       saved === "stats" ||
-      saved === "logs"
+      saved === "logs" ||
+      saved === "settings"
       ? saved
       : "today";
   });
@@ -805,6 +815,7 @@ export function App() {
   );
   const routeReady = useRef(false);
   const firstSync = useRef(true);
+  const previousView = useRef<RouteView>(view);
   const [routeTick, setRouteTick] = useState(0);
   useEffect(() => {
     if (selected === null && restoreCard.current) return;
@@ -830,7 +841,11 @@ export function App() {
   const [dragging, setDragging] = useState<{
     card: Card;
     targets: Status[];
+    // Triage cards that come along if the card is dropped on Ready.
+    along: Card[];
   } | null>(null);
+  // What the last drop moved, shown until dismissed or replaced.
+  const [moveNotice, setMoveNotice] = useState("");
   const [dropLane, setDropLane] = useState<Status | null>(null);
   const [selectingDone, setSelectingDone] = useState(false);
   const [doneSelection, setDoneSelection] = useState<Set<string>>(new Set());
@@ -894,18 +909,36 @@ export function App() {
   useEffect(() => {
     if (!routeReady.current) return;
     if (selected === null && restoreCard.current) return;
-    const path = formatRoute({ view, boardId, cardId: selected });
-    if (path === location.pathname) return;
+    const path = formatRoute({
+      view,
+      boardId,
+      cardId: selected,
+      section: settingsSection,
+    });
+    if (path === location.pathname) {
+      // Already canonical, so the next change is a real navigation and gets its own history entry.
+      firstSync.current = false;
+      return;
+    }
     // The first sync only canonicalises the landing URL, so back doesn't return to it.
-    if (firstSync.current) history.replaceState(null, "", path);
+    // Switching categories inside Settings replaces the entry, so back leaves Settings in one step.
+    if (
+      firstSync.current ||
+      (view === "settings" && previousView.current === "settings")
+    )
+      history.replaceState(null, "", path);
     else history.pushState(null, "", path);
     firstSync.current = false;
-  }, [view, boardId, selected, routeTick]);
+  }, [view, boardId, selected, routeTick, settingsSection]);
+  useEffect(() => {
+    previousView.current = view;
+  }, [view]);
   useEffect(() => {
     const onPopState = () => {
       const route = parseRoute(location.pathname);
       if (!route) return;
       setView(route.view);
+      if (route.section) setSettingsSection(route.section);
       if (route.boardId && route.boardId !== boardId) {
         if (!boards.some((item) => item.id === route.boardId)) return;
         setBoardId(route.boardId);
@@ -961,7 +994,7 @@ export function App() {
     setView("chat");
     localStorage.setItem("bakery-view", "chat");
   };
-  const openPage = (page: "stats" | "logs") => {
+  const openPage = (page: "stats" | "logs" | "settings") => {
     setView(page);
     localStorage.setItem("bakery-view", page);
     restoreCard.current = null;
@@ -1305,9 +1338,33 @@ export function App() {
     });
   };
   // Each drop calls the same endpoint as the matching button in the card's details.
-  const moveCard = (card: Card, to: Status) => {
+  const moveCard = (card: Card, to: Status, along: Card[] = []) => {
     if (!boardId || !dropTargets(card).includes(to)) return;
     const path = `/boards/${boardId}/cards`;
+    if (to === "ready" && along.length > 0) {
+      const total = along.length + 1;
+      if (
+        currentBoard?.autoPickupEnabled &&
+        settings?.confirmRunStart &&
+        !window.confirm(
+          `Move ${total} cards to Ready ("${card.title}" and the ${along.length} ${along.length === 1 ? "card" : "cards"} it waits on)? Auto pickup is on, so they may start and use paid model tokens. Cards that wait on others start after them.`,
+        )
+      )
+        return;
+      void action(async () => {
+        const moved = await api<Card[]>(`${path}/${card.id}/status`, {
+          method: "POST",
+          body: JSON.stringify({ status: "ready", withDependencies: true }),
+        });
+        const extra = moved.length - 1;
+        setMoveNotice(
+          extra > 0
+            ? `Moved ${moved.length} cards to Ready: ${card.title} and the ${extra} ${extra === 1 ? "card" : "cards"} it waits on`
+            : `Moved ${card.title} to Ready`,
+        );
+      });
+      return;
+    }
     if (to === "running") {
       if (
         settings?.confirmRunStart &&
@@ -1332,6 +1389,7 @@ export function App() {
         }),
       );
   };
+  useEffect(() => setMoveNotice(""), [boardId]);
   const endDrag = () => {
     setDragging(null);
     setDropLane(null);
@@ -1347,6 +1405,10 @@ export function App() {
   return (
     <div className="min-h-screen lg:flex">
       <UpdateNotice
+        onOpenSettings={() => {
+          setSettingsSection("updates");
+          openPage("settings");
+        }}
         onOpenCard={(card) => {
           const target = boards.find((item) => item.repo === card.repo);
           if (target) openBoard(target.id);
@@ -1562,8 +1624,9 @@ export function App() {
             className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
             onClick={() => {
               setError("");
-              setShowSettings(true);
+              openPage("settings");
             }}
+            aria-current={view === "settings" ? "page" : undefined}
           >
             <Settings2 size={15} /> Settings
           </Button>
@@ -1607,6 +1670,28 @@ export function App() {
         <main className="min-w-0 flex-1">
           <Logs />
         </main>
+      )}
+      {view === "settings" && (
+        <SettingsPage
+          section={settingsSection}
+          onSection={setSettingsSection}
+          settings={settings}
+          busy={busy}
+          error={error}
+          saveSettings={saveSettings}
+          setError={setError}
+          modelFields={
+            settings && (
+              <AgentModelFields
+                key={JSON.stringify(settings.agentModels)}
+                scope="global"
+                value={settings.agentModels ?? emptyAgentModels()}
+                disabled={busy}
+                onSave={(agentModels) => saveSettings({ agentModels })}
+              />
+            )
+          }
+        />
       )}
       {view === "pulls" &&
         boardId &&
@@ -1669,6 +1754,7 @@ export function App() {
           (view === "chat" && !!currentBoard) ||
           view === "stats" ||
           view === "logs" ||
+          view === "settings" ||
           (view === "pulls" &&
             !!currentBoard &&
             supportsPullRequests(currentBoard))
@@ -2001,6 +2087,23 @@ export function App() {
             </Button>
           </div>
         )}
+        {moveNotice && (
+          <div
+            role="status"
+            aria-label="Move notice"
+            className="mx-6 mt-4 flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm lg:mx-10"
+          >
+            <span>{moveNotice}</span>
+            <button
+              type="button"
+              aria-label="Dismiss move notice"
+              onClick={() => setMoveNotice("")}
+              className="ml-auto rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         {boardId && loadedBoard !== boardId && (
           <p
             role="status"
@@ -2085,9 +2188,9 @@ export function App() {
                   onDrop={(event) => {
                     if (!dragging || !droppable) return;
                     event.preventDefault();
-                    const { card } = dragging;
+                    const { card, along } = dragging;
                     endDrag();
-                    moveCard(card, column.status);
+                    moveCard(card, column.status, along);
                   }}
                   className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
@@ -2157,6 +2260,19 @@ export function App() {
                           <ChevronDown size={16} />
                         </button>
                       </div>
+                      {column.id === "ready" &&
+                        dropLane === "ready" &&
+                        dragging &&
+                        dragging.along.length > 0 && (
+                          <p
+                            role="status"
+                            className="mb-2 rounded-md border border-dashed border-[var(--lane-status-color)] px-2 py-1 text-xs"
+                          >
+                            +{dragging.along.length}{" "}
+                            {dragging.along.length === 1 ? "card" : "cards"} it
+                            waits on
+                          </p>
+                        )}
                       {selecting && (
                         <div
                           role="toolbar"
@@ -2380,7 +2496,11 @@ export function App() {
                                   "text/plain",
                                   item.id,
                                 );
-                                setDragging({ card: item, targets });
+                                setDragging({
+                                  card: item,
+                                  targets,
+                                  along: readyCompanions(item, cards),
+                                });
                               }}
                               onDragEnd={endDrag}
                               data-card-tile={item.status}
@@ -2398,6 +2518,14 @@ export function App() {
                               }
                               data-dragging={
                                 dragging?.card.id === item.id || undefined
+                              }
+                              data-comes-along={
+                                dropLane === "ready" &&
+                                dragging?.along.some(
+                                  (other) => other.id === item.id,
+                                )
+                                  ? true
+                                  : undefined
                               }
                               className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50 data-[new]:border-primary data-[new]:ring-2 data-[new]:ring-primary/60`}
                             >
@@ -2460,187 +2588,6 @@ export function App() {
           </div>
         </div>
       </main>
-      <Dialog open={showSettings} onOpenChange={setShowSettings}>
-        <DialogContent>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>
-            These preferences are saved in Bakery's local database.
-          </DialogDescription>
-          <label className="mt-6 flex items-start gap-3 text-sm">
-            <input
-              type="checkbox"
-              className="mt-1 accent-primary"
-              checked={settings?.confirmRunStart ?? false}
-              disabled={!settings || busy}
-              onChange={(event) =>
-                saveSettings({ confirmRunStart: event.target.checked })
-              }
-            />
-            <span>
-              Confirm before starting a run
-              <span className="mt-1 block text-xs text-muted-foreground">
-                When off, Start Pi run launches immediately and may use paid
-                model tokens.
-              </span>
-            </span>
-          </label>
-          <label className="mt-6 flex items-start gap-3 border-t border-border pt-5 text-sm">
-            <input
-              type="checkbox"
-              className="mt-1 accent-primary"
-              checked={settings?.notifyOnReview ?? false}
-              disabled={!settings || busy || !("Notification" in window)}
-              onChange={async (event) => {
-                if (!event.target.checked) {
-                  saveSettings({ notifyOnReview: false });
-                  return;
-                }
-                try {
-                  const permission = await Notification.requestPermission();
-                  if (permission === "granted")
-                    saveSettings({ notifyOnReview: true });
-                  else
-                    setError(
-                      "Browser notification permission was not granted. Allow notifications for Bakery in your browser to enable them.",
-                    );
-                } catch {
-                  setError(
-                    "The browser could not request notification permission.",
-                  );
-                }
-              }}
-            />
-            <span>
-              Notify when a card enters Review
-              <span className="mt-1 block text-xs text-muted-foreground">
-                Browser notifications appear while this board page is open. Your
-                browser must allow notifications. Cards already in Review when
-                you open the page do not trigger one.
-              </span>
-            </span>
-          </label>
-          <fieldset
-            className="mt-6 border-t border-border pt-5 text-sm"
-            disabled={!settings || busy}
-          >
-            <legend className="pt-5 font-medium">Theme</legend>
-            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
-              {themeNames.map((theme) => (
-                <label
-                  key={theme}
-                  className="flex cursor-pointer items-center gap-2"
-                >
-                  <input
-                    type="radio"
-                    name="theme"
-                    checked={(settings?.theme ?? "default") === theme}
-                    onChange={() => saveSettings({ theme })}
-                    className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                  />
-                  {themes[theme].label}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <fieldset
-            className="mt-6 border-t border-border pt-5 text-sm"
-            disabled={!settings || busy}
-          >
-            <legend className="pt-5 font-medium">Density</legend>
-            <div className="mt-3 flex gap-5">
-              {(["compact", "default", "cozy"] as const).map((density) => (
-                <label
-                  key={density}
-                  className="flex cursor-pointer items-center gap-2"
-                >
-                  <input
-                    type="radio"
-                    name="density"
-                    checked={(settings?.density ?? "default") === density}
-                    onChange={() => saveSettings({ density })}
-                    className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                  />
-                  {density === "compact"
-                    ? "Compact"
-                    : density === "cozy"
-                      ? "Cozy"
-                      : "Default"}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <fieldset
-            className="mt-6 border-t border-border pt-5 text-sm"
-            disabled={!settings || busy}
-          >
-            <legend className="pt-5 font-medium">Cards</legend>
-            <label className="mt-3 flex cursor-pointer items-center gap-2">
-              <input
-                type="checkbox"
-                checked={settings?.showCardModels ?? false}
-                onChange={(event) =>
-                  saveSettings({ showCardModels: event.target.checked })
-                }
-                className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              />
-              Show the run and review model on each card
-            </label>
-          </fieldset>
-          <fieldset
-            className="mt-6 border-t border-border pt-5 text-sm"
-            disabled={!settings || busy}
-          >
-            <legend className="pt-5 font-medium">Card details layout</legend>
-            <div className="mt-3 flex gap-5">
-              {(["dialog", "side"] as const).map((layout) => (
-                <label
-                  key={layout}
-                  className="flex cursor-pointer items-center gap-2"
-                >
-                  <input
-                    type="radio"
-                    name="card-details-layout"
-                    checked={settings?.cardDetailsLayout === layout}
-                    onChange={() => saveSettings({ cardDetailsLayout: layout })}
-                    className="accent-primary"
-                  />
-                  {layout === "dialog" ? "Popup" : "Side panel"}
-                </label>
-              ))}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              The side panel stays wide for review. On small screens it opens
-              full-screen.
-            </p>
-          </fieldset>
-          <div className="mt-6 border-t border-border pt-5 text-sm">
-            <div className="font-medium">Pi models</div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Model and thinking level for each kind of Pi run. Blank fields use
-              Pi's own default. A repository can override these in its edit
-              dialog.
-            </p>
-            {settings && (
-              <AgentModelFields
-                key={JSON.stringify(settings.agentModels)}
-                scope="global"
-                value={settings.agentModels ?? emptyAgentModels()}
-                disabled={busy}
-                onSave={(agentModels) => saveSettings({ agentModels })}
-              />
-            )}
-          </div>
-          <p className="mt-6 border-t border-border pt-5 text-xs text-muted-foreground">
-            Auto pickup is set per repository. Use the edit button next to a
-            repository to change it.
-          </p>
-          {error && (
-            <p role="alert" className="mt-3 text-sm text-destructive">
-              {error}
-            </p>
-          )}
-        </DialogContent>
-      </Dialog>
       <Dialog
         open={addingRepo || !!editingBoard}
         onOpenChange={(open) => {
@@ -3246,6 +3193,39 @@ export function App() {
                     </Button>
                   )}
               </label>
+              <label className="mt-3 flex items-center gap-2 text-xs">
+                Agent reviews at the same time
+                <select
+                  aria-label="Agent review concurrency"
+                  value={editingBoard.autoReviewConcurrency ?? 1}
+                  disabled={busy}
+                  onChange={(event) =>
+                    void action(async () => {
+                      updateBoard(
+                        await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({
+                              autoReviewConcurrency: Number(event.target.value),
+                            }),
+                          },
+                        ),
+                      );
+                    })
+                  }
+                  className="rounded-md border border-border bg-background px-2 py-1"
+                >
+                  {[1, 2, 3, 4].map((count) => (
+                    <option key={count} value={count}>
+                      {count}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-muted-foreground">
+                  Each runs the verification command too
+                </span>
+              </label>
               {!mergeLimitValid && (
                 <p role="alert" className="mt-1 text-xs text-destructive">
                   Enter a whole number from 0 to 99.
@@ -3635,7 +3615,7 @@ function ActivityBadge({
         ) : (
           <Hourglass size={10} aria-hidden />
         )}
-        {reviewWaitLabels[card.reviewWait]}
+        {reviewWaitText(card)}
       </span>
     );
   if (needsYourReview(card))

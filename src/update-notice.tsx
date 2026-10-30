@@ -12,6 +12,9 @@ type Status = {
   activeRuns: number;
   cards?: WaitingCard[];
   updates?: Updates | null;
+  version?: string;
+  sha?: string | null;
+  date?: string | null;
 };
 
 const runs = (count: number) => `${count} active run${count === 1 ? "" : "s"}`;
@@ -20,8 +23,10 @@ const runs = (count: number) => `${count} active run${count === 1 ? "" : "s"}`;
 // the wait for active runs to finish before the server restarts to load the new code.
 export function UpdateNotice({
   onOpenCard,
+  onOpenSettings,
 }: {
   onOpenCard?: (card: WaitingCard) => void;
+  onOpenSettings?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
@@ -112,10 +117,19 @@ export function UpdateNotice({
             >
               Update and restart
             </button>
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="ml-2 cursor-pointer px-2 py-1 hover:text-foreground"
+              >
+                Details
+              </button>
+            )}
             <p className="mt-1">
               {status!.activeRuns > 0
                 ? `Restarts after ${runs(status!.activeRuns)} finish.`
-                : "Installs by itself while nothing is running."}
+                : "Nothing is running, so it restarts right away."}
             </p>
           </div>
         </div>
@@ -138,6 +152,119 @@ export function UpdateNotice({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** Settings → Updates: the running version, then the pending commits with the same install action as the notice. */
+export function UpdatesPanel() {
+  const [status, setStatus] = useState<Status | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  useEffect(() => {
+    const poll = () =>
+      api<Status>("/status")
+        .then((next) => {
+          setStatus(next);
+          setFailed(false);
+        })
+        .catch(() => setFailed(true));
+    void poll();
+    const timer = setInterval(poll, 3000);
+    return () => clearInterval(timer);
+  }, []);
+  if (!status)
+    return (
+      <p className="text-sm text-muted-foreground">
+        {failed
+          ? "Bakery is not responding. It may be restarting."
+          : "Loading…"}
+      </p>
+    );
+  const updates = status.updates;
+  const commits = updates?.commits ?? [];
+  const error = requestError ?? updates?.error;
+  const install = () => {
+    setRequestError(null);
+    api<Updates>("/update", { method: "POST" })
+      .then((next) =>
+        setStatus((previous) => previous && { ...previous, updates: next }),
+      )
+      .catch((requestFailure: Error) =>
+        setRequestError(requestFailure.message),
+      );
+  };
+  return (
+    <div className="text-sm">
+      <dl className="grid grid-cols-[7rem_1fr] gap-y-2">
+        <dt className="text-muted-foreground">Version</dt>
+        <dd data-testid="settings-version">{status.version ?? "unknown"}</dd>
+        <dt className="text-muted-foreground">Commit</dt>
+        <dd className="font-mono">
+          {status.sha ?? "unknown"}
+          {status.date && (
+            <span className="ml-2 font-sans text-muted-foreground">
+              {new Date(status.date).toLocaleDateString(undefined, {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+              })}
+            </span>
+          )}
+        </dd>
+      </dl>
+      <div className="mt-6 border-t border-border pt-5">
+        {updates === null || updates === undefined ? (
+          <p className="text-muted-foreground">
+            This server was not started with npm start, so it does not install
+            updates by itself.
+          </p>
+        ) : updates.installing || status.draining ? (
+          <p>
+            {status.draining && status.activeRuns > 0
+              ? `Update ready. Waiting for ${runs(status.activeRuns)} to finish. New runs are paused.`
+              : "Installing update…"}
+          </p>
+        ) : commits.length === 0 ? (
+          <p data-testid="settings-up-to-date">Up to date.</p>
+        ) : (
+          <>
+            <p className="font-medium">
+              {commits.length} update{commits.length === 1 ? "" : "s"} available
+            </p>
+            <ul
+              data-testid="settings-changelog"
+              className="mt-3 max-h-72 overflow-y-auto"
+            >
+              {commits.map((commit) => (
+                <li key={commit.sha} className="py-0.5">
+                  <span className="mr-2 font-mono text-xs opacity-60">
+                    {commit.sha}
+                  </span>
+                  {commit.subject}
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={install}
+              className="mt-4 cursor-pointer rounded border border-border px-3 py-1.5 hover:bg-accent"
+            >
+              Update and restart
+            </button>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {status.activeRuns > 0
+                ? `Restarts after ${runs(status.activeRuns)} finish.`
+                : "Nothing is running, so it restarts right away."}
+            </p>
+          </>
+        )}
+        {error && (
+          <p role="alert" className="mt-3 whitespace-pre-wrap text-destructive">
+            Update failed: {error}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

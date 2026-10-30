@@ -7,7 +7,7 @@ import { RepoBadge } from "./repo-badge.js";
 import { repoName } from "./repo-appearance.js";
 import {
   needsYourReview,
-  reviewWaitLabels,
+  reviewWaitText,
   type Board,
   type Card,
   type Status,
@@ -114,7 +114,7 @@ export function Today({
             boards={boards}
             onOpen={onOpen}
             label={(card) =>
-              card.reviewWait ? reviewWaitLabels[card.reviewWait] : "Started"
+              card.reviewWait ? reviewWaitText(card) : "Started"
             }
           />
         </Section>

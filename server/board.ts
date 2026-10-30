@@ -9,14 +9,14 @@ import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/rep
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewMerges: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewMerges: number; autoReviewConcurrency: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewConcurrency: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, autoReviewMerges: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
-  autoReviewEnabledAt: row.autoReviewEnabledAt, autoReviewMergeLimit: row.autoReviewMergeLimit, autoReviewMerges, pickupConcurrency: row.pickupConcurrency,
+  autoReviewEnabledAt: row.autoReviewEnabledAt, autoReviewMergeLimit: row.autoReviewMergeLimit, autoReviewMerges, autoReviewConcurrency: row.autoReviewConcurrency, pickupConcurrency: row.pickupConcurrency,
   pickupDailyLimit: row.pickupDailyLimit, autoPickupEnabledAt: row.autoPickupEnabledAt, autoPickupError: row.autoPickupError,
   autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, pushMainAfterMerge: row.pushMainAfterMerge !== 0,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
@@ -63,6 +63,8 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   lastActivityAt: string | null;
   /** Set only for Review cards that are not your turn; null means a person is needed (or the card is not in Review). */
   reviewWait: ReviewWait | null;
+  /** Where the card waits for an agent review to start on its board (1 is next); null when it is not queued. */
+  reviewQueue: { position: number; of: number } | null;
   /** A start was asked for during a restart drain and runs after the restart. */
   startQueued: boolean;
   /** Files attached to the card, including those sent with discussion messages. */
@@ -75,12 +77,13 @@ export type CardRef = { id: string; title: string; status: CardStatus };
 const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
-type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
+type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "reviewQueue" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
 /** A file on a card. `messageId` is set when it was sent with a discussion message. */
 export type Attachment = { id: string; cardId: string; messageId: string | null; name: string; type: string; size: number; createdAt: string };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string; attachments: Attachment[] };
 /** A board chat: a general agent session about one repo and its board. Pi keeps the conversation; Bakery keeps what to show. */
-export type Chat = { id: string; boardId: string; title: string; createdAt: string; updatedAt: string };
+/** `title` is the first line of the first message; `topic` is a few-word summary of it, empty until one is written. */
+export type Chat = { id: string; boardId: string; title: string; topic: string; createdAt: string; updatedAt: string };
 /** What an agent turn did, in order: reply text and the tools it ran. */
 export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
@@ -89,7 +92,7 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoReviewConcurrency, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
 export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
@@ -150,7 +153,7 @@ export class Board {
       -- Files the operator attached to a card, or to one of its discussion messages (messageId). The bytes live on disk; see server/attachments.ts.
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), messageId TEXT REFERENCES discussion_messages(id), name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attachments_card ON attachments(cardId, createdAt);
-      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS chats_board ON chats(boardId, updatedAt);
       CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, chatId TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages(chatId, createdAt);
@@ -189,6 +192,7 @@ export class Board {
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
+    if (!(this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).some(column => column.name === "topic")) this.db.exec("ALTER TABLE chats ADD COLUMN topic TEXT NOT NULL DEFAULT ''");
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
     const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
     if (!settingsColumns.has("cardDetailsLayout")) this.db.exec("ALTER TABLE settings ADD COLUMN cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side'))");
@@ -225,6 +229,7 @@ export class Board {
     if (!boardColumns.has("autoPickupEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupEnabled INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("pickupConcurrency")) this.db.exec("ALTER TABLE boards ADD COLUMN pickupConcurrency INTEGER NOT NULL DEFAULT 2");
     if (!boardColumns.has("autoReviewMergeLimit")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewMergeLimit INTEGER NOT NULL DEFAULT 0");
+    if (!boardColumns.has("autoReviewConcurrency")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewConcurrency INTEGER NOT NULL DEFAULT 1");
     if (!boardColumns.has("pickupDailyLimit")) this.db.exec("ALTER TABLE boards ADD COLUMN pickupDailyLimit INTEGER NOT NULL DEFAULT 6");
     if (!boardColumns.has("autoPickupResetRunRowid")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoPickupEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupEnabledAt TEXT");
@@ -619,6 +624,13 @@ export class Board {
     this.db.prepare("UPDATE boards SET autoReviewMergeLimit=? WHERE id=?").run(limit, id);
     return this.getBoard(id)!;
   }
+  /** How many agent reviews this board runs at once. */
+  setAutoReviewConcurrency(id: string, concurrency: number): RepoBoard {
+    if (!this.getBoard(id)) throw new Error("Board not found");
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Agent review concurrency must be between 1 and 4");
+    this.db.prepare("UPDATE boards SET autoReviewConcurrency=? WHERE id=?").run(concurrency, id);
+    return this.getBoard(id)!;
+  }
   /** Whether the board's rolling 24-hour limit on unattended merges is used up. */
   autoReviewMergeLimitReached(repoBoard: RepoBoard): boolean {
     return repoBoard.autoReviewMergeLimit > 0 && this.autoReviewMergesToday(repoBoard.repo) >= repoBoard.autoReviewMergeLimit;
@@ -707,12 +719,23 @@ export class Board {
     const result: { card: Card; run: Run; board: RepoBoard }[] = [];
     // On a github-pr board AutoReview never merges: an agent approval opens the PR, and GitHub decides the merge.
     for (const repoBoard of this.listBoards().filter(item => item.autoReviewEnabled)) {
-      for (const card of this.listCards(repoBoard.repo).filter(item => item.status === "review")) {
-        const run = this.listRuns(card.id)[0];
-        if (run && this.awaitsAutoReview(repoBoard, card.id, run)) result.push({ card, run, board: repoBoard });
+      for (const { cardId, run } of this.reviewsAwaiting(repoBoard)) {
+        const card = this.getCard(cardId);
+        if (card) result.push({ card, run, board: repoBoard });
       }
     }
     return result.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
+  }
+  /** The board's Review cards whose agent review has not started, oldest finished run first: the order they start in. */
+  private reviewsAwaiting(repoBoard: RepoBoard): { cardId: string; run: Run }[] {
+    if (!repoBoard.autoReviewEnabled) return [];
+    const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='review'").all(repoBoard.repo) as { id: string }[];
+    const waiting: { cardId: string; run: Run }[] = [];
+    for (const { id } of ids) {
+      const run = this.listRuns(id)[0];
+      if (run && this.awaitsAutoReview(repoBoard, id, run)) waiting.push({ cardId: id, run });
+    }
+    return waiting.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
   }
   /** The run finished after auto-review was enabled and nothing (a person, an earlier job) has handled it yet. */
   private awaitsAutoReview(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
@@ -722,7 +745,7 @@ export class Board {
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
   }
   /** See `ReviewWait`. Anything this does not recognize as someone else's turn is the person's turn. */
-  private reviewWait(card: Omit<Card, "reviewWait" | "startQueued">, repoBoard: RepoBoard | undefined): ReviewWait | null {
+  private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "startQueued">, repoBoard: RepoBoard | undefined): ReviewWait | null {
     if (card.status !== "review" || !repoBoard) return null;
     const run = this.listRuns(card.id)[0];
     if (run?.status !== "review") return null;
@@ -741,10 +764,19 @@ export class Board {
   }
   private toCards(rows: CardRow[]): Card[] {
     const boards = new Map(this.listBoards().map(item => [item.repo, item]));
+    const reviewQueues = new Map<string, { cardId: string }[]>();
+    const reviewQueue = (card: { id: string; repo: string; status: string }, wait: ReviewWait | null) => {
+      const repoBoard = boards.get(card.repo);
+      if (wait !== "agent_review" || !repoBoard) return null;
+      if (!reviewQueues.has(card.repo)) reviewQueues.set(card.repo, this.reviewsAwaiting(repoBoard));
+      const queue = reviewQueues.get(card.repo)!, index = queue.findIndex(item => item.cardId === card.id);
+      return index < 0 ? null : { position: index + 1, of: queue.length };
+    };
     const queued = new Set((this.db.prepare("SELECT cardId FROM queued_starts").all() as { cardId: string }[]).map(item => item.cardId));
     return rows.map(row => {
       const card = { ...row, createdCardIds: row.createdCardIds === null ? null : JSON.parse(row.createdCardIds) as string[], dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0, locallyMerged: row.locallyMerged !== 0, planOnly: row.planOnly !== 0 };
-      return { ...card, reviewWait: this.reviewWait(card, boards.get(card.repo)), startQueued: queued.has(card.id) };
+      const reviewWait = this.reviewWait(card, boards.get(card.repo));
+      return { ...card, reviewWait, reviewQueue: reviewQueue(card, reviewWait), startQueued: queued.has(card.id) };
     });
   }
   autoReviewMergesToday(repo: string): number {
@@ -955,7 +987,27 @@ export class Board {
     this.db.prepare("UPDATE cards SET title=?, body=?, priority=?, updatedAt=? WHERE id=?").run(input.title, input.body, parsePriority(input.priority ?? card.priority), now(), id);
     return this.getCard(id)!;
   }
-  setStatus(id: string, status: "triage" | "ready" | "done"): Card {
+  /**
+   * Moves a Triage card to Ready together with the Triage cards it waits on, following dependencies through Triage
+   * cards only; anything already Ready or further along stays put. One transaction, so the set never half-moves.
+   * Returns the card first, then the dependencies it brought, oldest first.
+   */
+  moveToReadyWithDependencies(id: string): Card[] {
+    const card = this.getCard(id);
+    if (!card) throw new Error("Card not found");
+    if (card.status !== "triage") return [this.setStatus(id, "ready")];
+    const dependencies = (this.db.prepare(`WITH RECURSIVE reach(id) AS (SELECT ? UNION SELECT d.dependsOn FROM card_dependencies d
+        JOIN reach ON d.cardId=reach.id JOIN cards parent ON parent.id=d.dependsOn WHERE parent.status='triage')
+      SELECT cards.id FROM reach JOIN cards ON cards.id=reach.id WHERE cards.id<>? ORDER BY cards.createdAt, cards.rowid`)
+      .all(id, id) as { id: string }[]).map(row => row.id);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const moved = [this.setStatus(id, "ready"), ...dependencies.map(dep => this.setStatus(dep, "ready", `Moved to Ready because "${card.title}" waits on it`))];
+      this.db.exec("COMMIT");
+      return moved;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  setStatus(id: string, status: "triage" | "ready" | "done", reason?: string): Card {
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
@@ -970,7 +1022,7 @@ export class Board {
       return this.getCard(id)!;
     }
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
-    this.explain(id, card.status === "done" ? "Reopened" : card.status === "failed" ? "Moved back to Ready after a failed run" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage");
+    this.explain(id, reason ?? (card.status === "done" ? "Reopened" : card.status === "failed" ? "Moved back to Ready after a failed run" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage"));
     return this.getCard(id)!;
   }
   // Drops a Triage, Ready, Failed or Review card to Done without merging. Runs, worktree and branch stay, so Reopen can bring it back.
@@ -1069,13 +1121,17 @@ export class Board {
   }
   getChat(id: string): Chat | undefined { return this.db.prepare("SELECT * FROM chats WHERE id=?").get(id) as Chat | undefined; }
   createChat(boardId: string, title = ""): Chat {
-    const time = now(), chat = { id: randomUUID(), boardId, title, createdAt: time, updatedAt: time };
+    const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", createdAt: time, updatedAt: time };
     this.db.prepare("INSERT INTO chats(id, boardId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)").run(chat.id, boardId, title, time, time);
     return chat;
   }
   renameChat(id: string, title: string): Chat {
     this.db.prepare("UPDATE chats SET title=? WHERE id=?").run(title, id);
     return this.getChat(id)!;
+  }
+  setChatTopic(id: string, topic: string): Chat | undefined {
+    this.db.prepare("UPDATE chats SET topic=? WHERE id=?").run(topic, id);
+    return this.getChat(id);
   }
   deleteChat(id: string) {
     this.db.prepare("DELETE FROM chat_messages WHERE chatId=?").run(id);

@@ -14,7 +14,7 @@ import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { discuss, discussionPrompt } from "./discuss.js";
-import { Chats } from "./chat.js";
+import { Chats, writeTopic } from "./chat.js";
 import { draftPullRequest } from "./pr-draft.js";
 import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
 
@@ -55,6 +55,7 @@ const chats = new Chats(board, {
   piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs")}`,
   env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
   models: repo => piModelArgs(board.agentModelFor(repo, "work")),
+  topic: (repoBoard, message) => writeTopic(piBin, repoBoard.repo, piModelArgs(board.agentModelFor(repoBoard.repo, "draft")), message),
 });
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
@@ -76,6 +77,13 @@ const autoReview = new AutoReview(board, integration, piBin, card => worker.star
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
 // Only a hosted server (npm start) updates itself. Under the dev supervisor the checkout is someone's working copy.
+// What this process is running: package.json's version plus the commit it started on (null outside a git checkout).
+const version = (() => {
+  let packageVersion = "unknown", sha: string | null = null, date: string | null = null;
+  try { packageVersion = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version ?? packageVersion; } catch { /* keep unknown */ }
+  try { [sha, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
+  return { version: packageVersion, sha, date };
+})();
 const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
 let updateTimer: NodeJS.Timeout | undefined;
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
@@ -185,10 +193,10 @@ const server = createServer(async (req, res) => {
       const cardIds = new Set<string>();
       if (draining.on) {
         for (const runId of worker.activeRunIds) { const run = board.getRun(runId); if (run) cardIds.add(run.cardId); }
-        if (autoReview.activeCardId) cardIds.add(autoReview.activeCardId);
+        for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + (autoReview.active ? 1 : 0), cards, updates: updates?.state ?? null });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount, cards, updates: updates?.state ?? null, ...version });
       return;
     }
     if (path === "/api/update" && req.method === "POST") {
@@ -362,6 +370,10 @@ const server = createServer(async (req, res) => {
       if ("autoReviewMergeLimit" in input) {
         if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewMergeLimit)) throw new Error("Update autoReviewMergeLimit as an integer (0 for no limit), separately from other board settings");
         send(res, 200, board.setAutoReviewMergeLimit(repoBoard.id, Number(input.autoReviewMergeLimit))); return;
+      }
+      if ("autoReviewConcurrency" in input) {
+        if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewConcurrency)) throw new Error("Update autoReviewConcurrency as an integer from 1 to 4, separately from other board settings");
+        send(res, 200, board.setAutoReviewConcurrency(repoBoard.id, Number(input.autoReviewConcurrency))); return;
       }
       if ("autoReviewEnabled" in input || "verificationCommand" in input) {
         if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
@@ -622,8 +634,10 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "POST" && action === "close") { send(res, 200, board.closeReview(id)); return; }
         if (req.method === "POST" && action === "status") {
-          const { status } = await body(req);
+          const { status, withDependencies } = await body(req);
           if (status !== "triage" && status !== "ready" && status !== "done") throw new Error("Status must be triage, ready, or done");
+          // Drag-to-Ready also brings the Triage cards this one waits on; the reply lists every card that moved, this one first.
+          if (withDependencies === true && status === "ready") { send(res, 200, board.moveToReadyWithDependencies(id)); return; }
           send(res, 200, board.setStatus(id, status)); return;
         }
         if (req.method === "POST" && action === "stop") {
@@ -687,7 +701,7 @@ const startDrain = (onDrained: () => void) => {
   draining.on = true;
   autoPickup.shutdown();
   // Agent reviews count too: a restart would kill the reviewer mid-review.
-  process.send?.({ type: "draining", activeRuns: worker.activeCount + (autoReview.active ? 1 : 0) });
+  process.send?.({ type: "draining", activeRuns: worker.activeCount + autoReview.activeCount });
   void Promise.all([worker.drain(), autoReview.drain()]).then(onDrained);
 };
 process.on("message", (message: unknown) => {

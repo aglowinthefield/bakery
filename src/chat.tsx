@@ -1,11 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { MessageSquarePlus, Square, Trash2 } from "lucide-react";
+import {
+  MessageSquare,
+  MessageSquarePlus,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { api } from "./api.js";
 import { Button } from "./components/ui/button";
 import { Markdown } from "./markdown-view.js";
 import type { Chat, ChatLive, ChatMessage, ChatPart } from "./model.js";
 
 type ChatState = { messages: ChatMessage[]; live: ChatLive };
+
+/** What the sidebar calls a chat: its few-word topic, else its first line. */
+const chatLabel = (chat: Chat) => chat.topic || chat.title || "New chat";
+const railKey = "bakery-chat-sidebar";
 
 /** One tool call from the agent: its command on one line, its output behind a disclosure. */
 function ToolCall({ part }: { part: Extract<ChatPart, { type: "tool" }> }) {
@@ -63,7 +74,12 @@ export function ChatView({
   const [state, setState] = useState<ChatState>({ messages: [], live: null });
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(railKey) === "collapsed",
+  );
   const end = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
   const base = `/boards/${boardId}/chats`;
   const fail = (err: unknown) =>
     onError(err instanceof Error ? err.message : String(err));
@@ -85,6 +101,10 @@ export function ChatView({
     setChats(null);
     void refresh();
   }, [boardId]);
+  useEffect(() => {
+    if (collapsed) localStorage.setItem(railKey, "collapsed");
+    else localStorage.removeItem(railKey);
+  }, [collapsed]);
   useEffect(() => {
     if (chatId) sessionStorage.setItem(`bakery-chat-${boardId}`, chatId);
     else sessionStorage.removeItem(`bakery-chat-${boardId}`);
@@ -114,8 +134,17 @@ export function ChatView({
     source.onmessage = (event) => {
       const data = JSON.parse(event.data) as
         | { type: "live"; live: ChatLive }
-        | { type: "message"; message: ChatMessage };
-      if (data.type === "live") {
+        | { type: "message"; message: ChatMessage }
+        | { type: "chat"; chat: Chat };
+      if (data.type === "chat") {
+        const named = data.chat;
+        setChats(
+          (previous) =>
+            previous?.map((item) =>
+              item.id === named.id ? { ...item, ...named } : item,
+            ) ?? previous,
+        );
+      } else if (data.type === "live") {
         setState((previous) => ({ ...previous, live: data.live }));
         if (data.live === null) void refresh();
       } else {
@@ -141,18 +170,22 @@ export function ChatView({
     state.live?.parts.at(-1),
   ]);
 
+  useEffect(() => {
+    if (focusRequest > 0) input.current?.focus();
+  }, [focusRequest]);
+
   const create = async () => {
     try {
       const chat = await api<Chat>(base, { method: "POST", body: "{}" });
       setChats((previous) => [chat, ...(previous ?? [])]);
       setChatId(chat.id);
+      setFocusRequest((n) => n + 1);
     } catch (err) {
       fail(err);
     }
   };
   const remove = async (chat: Chat) => {
-    if (!confirm(`Delete "${chat.title || "New chat"}" and its history?`))
-      return;
+    if (!confirm(`Delete "${chatLabel(chat)}" and its history?`)) return;
     try {
       await api(`${base}/${chat.id}`, { method: "DELETE" });
       if (chat.id === chatId) setChatId(null);
@@ -191,35 +224,77 @@ export function ChatView({
     <div className="flex h-[calc(100dvh-9rem)] min-h-96">
       <nav
         aria-label="Chats"
-        className="flex w-56 shrink-0 flex-col gap-1 overflow-y-auto border-r border-border p-3"
+        data-collapsed={collapsed ? "true" : undefined}
+        className={`flex shrink-0 flex-col gap-1 overflow-y-auto border-r border-border ${collapsed ? "w-12 items-center px-1.5 py-3" : "w-56 p-3"}`}
       >
-        <Button variant="outline" size="sm" onClick={() => void create()}>
-          <MessageSquarePlus size={14} aria-hidden="true" /> New chat
-        </Button>
-        {chats?.map((chat) => (
-          <div
-            key={chat.id}
-            className={`group flex items-center rounded-md ${chat.id === chatId ? "bg-accent/50" : "hover:bg-accent/30"}`}
+        <div className={`flex gap-1 ${collapsed ? "flex-col" : ""}`}>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={collapsed ? "Expand chat list" : "Collapse chat list"}
+            aria-expanded={!collapsed}
+            title={collapsed ? "Expand chat list" : "Collapse chat list"}
+            onClick={() => setCollapsed((value) => !value)}
           >
+            {collapsed ? (
+              <PanelLeftOpen size={14} aria-hidden="true" />
+            ) : (
+              <PanelLeftClose size={14} aria-hidden="true" />
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="New chat"
+            title="New chat"
+            className={collapsed ? "" : "flex-1"}
+            onClick={() => void create()}
+          >
+            <MessageSquarePlus size={14} aria-hidden="true" />
+            {!collapsed && " New chat"}
+          </Button>
+        </div>
+        {chats?.map((chat) =>
+          collapsed ? (
             <button
+              key={chat.id}
               onClick={() => setChatId(chat.id)}
               aria-current={chat.id === chatId ? "true" : undefined}
-              className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
+              aria-label={chatLabel(chat)}
+              title={chatLabel(chat)}
+              className={`relative rounded-md p-2 text-muted-foreground ${chat.id === chatId ? "bg-accent/50 text-foreground" : "hover:bg-accent/30"}`}
             >
-              {chat.title || "New chat"}
+              <MessageSquare size={14} aria-hidden="true" />
               {chat.pending && (
-                <span className="ml-1 text-muted-foreground">…</span>
+                <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
               )}
             </button>
-            <button
-              aria-label={`Delete ${chat.title || "New chat"}`}
-              onClick={() => void remove(chat)}
-              className="p-1.5 text-muted-foreground opacity-0 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+          ) : (
+            <div
+              key={chat.id}
+              className={`group flex items-center rounded-md ${chat.id === chatId ? "bg-accent/50" : "hover:bg-accent/30"}`}
             >
-              <Trash2 size={13} aria-hidden="true" />
-            </button>
-          </div>
-        ))}
+              <button
+                onClick={() => setChatId(chat.id)}
+                aria-current={chat.id === chatId ? "true" : undefined}
+                title={chat.title || undefined}
+                className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
+              >
+                {chatLabel(chat)}
+                {chat.pending && (
+                  <span className="ml-1 text-muted-foreground">…</span>
+                )}
+              </button>
+              <button
+                aria-label={`Delete ${chatLabel(chat)}`}
+                onClick={() => void remove(chat)}
+                className="p-1.5 text-muted-foreground opacity-0 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+              >
+                <Trash2 size={13} aria-hidden="true" />
+              </button>
+            </div>
+          ),
+        )}
       </nav>
       <section aria-label="Chat" className="flex min-w-0 flex-1 flex-col">
         <ol
@@ -285,6 +360,7 @@ export function ChatView({
           }}
         >
           <textarea
+            ref={input}
             aria-label="Message the agent"
             value={draft}
             rows={3}
