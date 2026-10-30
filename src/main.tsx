@@ -40,6 +40,7 @@ import {
   X,
   Kanban,
   Workflow,
+  MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
   type LucideIcon,
@@ -68,6 +69,7 @@ import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
 import { Visualizer } from "./visualizer/visualizer.js";
+import { ChatView } from "./chat.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
@@ -572,6 +574,7 @@ export function App() {
     return saved === "board" ||
       saved === "pulls" ||
       saved === "visualizer" ||
+      saved === "chat" ||
       saved === "stats" ||
       saved === "logs"
       ? saved
@@ -934,6 +937,11 @@ export function App() {
     openBoard(id);
     setView("visualizer");
     localStorage.setItem("bakery-view", "visualizer");
+  };
+  const openChat = (id: string) => {
+    openBoard(id);
+    setView("chat");
+    localStorage.setItem("bakery-view", "chat");
   };
   const openPage = (page: "stats" | "logs") => {
     setView(page);
@@ -1363,9 +1371,10 @@ export function App() {
               const pullsActive = view === "pulls" && boardId === item.id;
               const visualizerActive =
                 view === "visualizer" && boardId === item.id;
+              const chatActive = view === "chat" && boardId === item.id;
               const open =
                 repoOpen[item.id] ??
-                (active || pullsActive || visualizerActive);
+                (active || pullsActive || visualizerActive || chatActive);
               return (
                 <div key={item.id} className="rounded-lg">
                   <div className="flex items-center rounded-lg hover:bg-accent/30">
@@ -1447,6 +1456,15 @@ export function App() {
                       className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${visualizerActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <Workflow size={13} aria-hidden="true" /> Visualizer
+                    </button>
+                  )}
+                  {open && (
+                    <button
+                      onClick={() => openChat(item.id)}
+                      aria-current={chatActive ? "page" : undefined}
+                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${chatActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                    >
+                      <MessageSquare size={13} aria-hidden="true" /> Chat
                     </button>
                   )}
                 </div>
@@ -1570,11 +1588,25 @@ export function App() {
           />
         </main>
       )}
+      {view === "chat" && boardId && currentBoard && (
+        <main className="min-w-0 flex-1">
+          <header className="border-b border-border px-6 py-6 lg:px-10">
+            <h1 className="text-[27px] font-semibold tracking-[-.05em]">
+              Chat
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {currentBoard.repo}
+            </p>
+          </header>
+          <ChatView boardId={boardId} onError={setError} />
+        </main>
+      )}
       <main
         className="min-w-0 flex-1"
         hidden={
           view === "today" ||
           (view === "visualizer" && !!currentBoard) ||
+          (view === "chat" && !!currentBoard) ||
           view === "stats" ||
           view === "logs" ||
           (view === "pulls" &&
@@ -1943,15 +1975,17 @@ export function App() {
                 : laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
-              const collapsible = cards
+              const idle = cards
                 .filter((c) => laneOf(c, splitReview) === column.id)
                 .every((c) => c.status === "done" || c.status === "archived");
               const override = boardId
                 ? manualCollapse[boardId]?.[column.status]
                 : undefined;
+              // Any lane can be collapsed by hand; only idle lanes
+              // collapse automatically.
               const collapsed =
-                collapsible &&
-                (override ??
+                override ??
+                (idle &&
                   (column.id === "archived" ||
                     (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
               const selecting =
@@ -2020,10 +2054,10 @@ export function App() {
                   ) : (
                     <>
                       <div
-                        className={`mb-2 flex min-h-6 items-center gap-2 px-1 ${collapsible ? "cursor-pointer" : ""}`}
+                        className={`mb-2 flex min-h-6 items-center gap-2 px-1 ${idle ? "cursor-pointer" : ""}`}
                         onClick={(event) => {
                           if (
-                            collapsible &&
+                            idle &&
                             !(event.target as HTMLElement).closest("button")
                           )
                             toggleLane(column.status, false);
@@ -2053,17 +2087,15 @@ export function App() {
                               Select
                             </button>
                           )}
-                        {collapsible && (
-                          <button
-                            type="button"
-                            aria-label={`Collapse ${column.label} lane`}
-                            aria-expanded={true}
-                            onClick={() => toggleLane(column.status, false)}
-                            className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <ChevronDown size={16} />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          aria-label={`Collapse ${column.label} lane`}
+                          aria-expanded={true}
+                          onClick={() => toggleLane(column.status, false)}
+                          className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <ChevronDown size={16} />
+                        </button>
                       </div>
                       {selecting && (
                         <div

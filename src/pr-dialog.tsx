@@ -9,6 +9,7 @@ import {
 } from "./components/ui/dialog";
 import type { Card, PullRequestDraft } from "./model.js";
 import { semanticTitleProblem } from "./pr-title.js";
+import { PushProgressPanel, type PushProgress } from "./push-progress.js";
 
 const field =
   "w-full rounded-md border border-border bg-background px-3 py-2 text-sm";
@@ -24,6 +25,7 @@ export function PullRequestDialog({
   open,
   busy,
   submitError,
+  pushProgress,
   onOpenChange,
   onSubmit,
 }: {
@@ -34,6 +36,8 @@ export function PullRequestDialog({
   busy: boolean;
   /** Why the last Approve failed, shown here because the dialog covers the card's own error line. */
   submitError: string;
+  /** The card's current or last push, so the pre-push hook's output shows here while the dialog covers the card. */
+  pushProgress: PushProgress | null;
   onOpenChange: (open: boolean) => void;
   onSubmit: (title: string, body: string) => void;
 }) {
@@ -93,21 +97,7 @@ export function PullRequestDialog({
           to origin, and runs gh pr create with this title and body. Nothing
           merges locally; the card is Done once the PR merges on GitHub.
         </DialogDescription>
-        {error && (
-          <div role="alert" className="mt-4 text-sm text-destructive">
-            {/* Push failures carry a summary line, then the hook's own output, whose line breaks matter. */}
-            {error.includes("\n") ? (
-              <>
-                <p className="font-medium">{error.split("\n")[0]}</p>
-                <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
-                  {error.split("\n").slice(1).join("\n").trim()}
-                </pre>
-              </>
-            ) : (
-              error
-            )}
-          </div>
-        )}
+        {error && <ErrorMessage error={error} />}
         {!draft && !error && (
           <div
             role="status"
@@ -191,11 +181,12 @@ export function PullRequestDialog({
               Bakery appends “Opened by Bakery for card {card.id}” and the run
               summary.
             </div>
-            {submitError && (
-              <div role="alert" className="text-sm text-destructive">
-                {submitError}
-              </div>
-            )}
+            {pushProgress &&
+              (!pushProgress.finishedAt ||
+                (submitError && pushProgress.error)) && (
+                <PushProgressPanel progress={pushProgress} />
+              )}
+            {submitError && <ErrorMessage error={submitError} />}
             <div className="flex justify-end gap-2">
               <Button
                 type="button"
@@ -212,5 +203,25 @@ export function PullRequestDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Push failures carry a summary line, then the hook's own output, whose line breaks matter. */
+function ErrorMessage({ error }: { error: string }) {
+  const [summary, ...rest] = error.split("\n");
+  const detail = rest.join("\n").trim();
+  return (
+    <div role="alert" className="mt-4 text-sm text-destructive">
+      {detail ? (
+        <>
+          <p className="font-medium">{summary}</p>
+          <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
+            {detail}
+          </pre>
+        </>
+      ) : (
+        error
+      )}
+    </div>
   );
 }

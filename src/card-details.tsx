@@ -1169,6 +1169,7 @@ export function CardDetails({
                 open={prDialog}
                 busy={busy}
                 submitError={error}
+                pushProgress={pushProgress}
                 onOpenChange={(open) => {
                   setPrDialog(open);
                   if (open) setDraftStarted(true);

@@ -282,3 +282,34 @@ export type DiscussionMessage = {
   createdAt: string;
   attachments: Attachment[];
 };
+
+/** A board chat: a general agent session about one repo. `pending` is set while the agent is replying. */
+export type Chat = {
+  id: string;
+  boardId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  pending?: boolean;
+};
+/** What an agent turn did, in order: reply text and the tools it ran. */
+export type ChatPart =
+  | { type: "text"; text: string }
+  | {
+      type: "tool";
+      id: string;
+      name: string;
+      input: string;
+      output: string;
+      status: "running" | "done" | "error";
+    };
+export type ChatMessage = {
+  id: string;
+  chatId: string;
+  role: "user" | "agent" | "error";
+  body: string;
+  parts: ChatPart[];
+  createdAt: string;
+};
+/** The reply being written; null when the agent is idle. */
+export type ChatLive = { startedAt: string; parts: ChatPart[] } | null;

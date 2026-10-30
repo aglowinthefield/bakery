@@ -313,3 +313,27 @@ test("a reached daily cost budget makes pickup wait with a reason while manual s
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupBudgetReached, false, "turning the budget off clears the wait");
   } finally { await item.close(); }
 });
+
+test("a refused push at the run limit keeps the hook output and goes to the agent when a slot frees", async () => {
+  const item = fixture();
+  try {
+    const refused = item.card("Refused push"), busy = item.card("Busy");
+    item.worker.start(refused);
+    item.release();
+    await waitFor(() => item.board.getCard(refused.id)?.status === "review");
+    rmSync(join(item.dir, "release"));
+    item.worker.start(busy);
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.board.recordPushFailure(refused.id, "abc123", "Unused exports (1)\ncountryCode");
+    assert.equal(item.worker.startHookFix(item.board.getCard(refused.id)!), false, "at the limit the fix waits");
+    assert.equal(item.board.getCiFeedback(refused.id)?.source, "push", "the hook output is kept for the waiting run");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(refused.id).length, 1, "still no slot");
+    item.release();
+    await waitFor(() => item.board.getCard(busy.id)?.status === "review");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(refused.id)[0]?.status, "running");
+    assert.equal(item.board.listRuns(refused.id)[0]?.startedBy, "manual", "an operator's Approve asked for it, so it does not count as auto-pickup");
+    assert.equal(item.board.getCiFeedback(refused.id), undefined, "the run took the hook output");
+  } finally { await item.close(); }
+});

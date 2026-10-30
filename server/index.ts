@@ -14,6 +14,7 @@ import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { discuss, discussionPrompt } from "./discuss.js";
+import { Chats } from "./chat.js";
 import { draftPullRequest } from "./pr-draft.js";
 import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, safeFileName, storeUpload } from "./attachments.js";
 
@@ -45,6 +46,15 @@ const piBin = process.env.BAKERY_PI_BIN ?? "pi";
 /** Cards whose discussion reply is being written; one at a time per card. */
 const discussing = new Set<string>();
 // Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
+const port = Number(process.env.BAKERY_PORT ?? 4317);
+const bindHost = process.env.BAKERY_HOST || "127.0.0.1";
+// The chat agent drives the board through bakery-cli, so it needs an address this server answers on.
+const cliHost = bindHost === "0.0.0.0" || bindHost === "::" ? "127.0.0.1" : bindHost;
+const chats = new Chats(board, {
+  piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs")}`,
+  env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
+  models: repo => piModelArgs(board.agentModelFor(repo, "work")),
+});
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
 const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", "to apply the agent reviewer's requested changes"));
@@ -62,27 +72,34 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
   card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, true)));
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
- * as a new run, like failed CI, and the card (now running) is returned. If that run cannot start, the push error stands.
+ * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
+ * slot, and the push error says so. If the run cannot start for another reason, the push error stands.
  */
 async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promise<Card> {
-  try { return await push(); }
+  try {
+    const pushed = await push();
+    // Pushed after all (the operator fixed it by hand, say): an earlier refusal still waiting for a slot is stale.
+    if (board.getCiFeedback(card.id)?.source === "push") board.clearCiFeedback(card.id);
+    return pushed;
+  }
   catch (error) {
     if (!(error instanceof PushHookError)) throw error;
-    try {
-      board.recordPushFailure(card.id, error.sha, error.output);
-      const previous = board.listRuns(card.id)[0];
-      if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
-      worker.start(board.getCard(card.id)!, "manual", "to fix the failing pre-push hook");
-    } catch (startError) {
-      board.clearCiFeedback(card.id);
+    board.recordPushFailure(card.id, error.sha, error.output);
+    const previous = board.listRuns(card.id)[0];
+    let started: boolean;
+    try { started = worker.startHookFix(board.getCard(card.id)!); }
+    catch (startError) {
       throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
     }
+    if (!started) {
+      board.noteCard(card.id, "The pre-push hook refused the push. Its output goes to the agent once a run can start (the repository is at its run limit, or Bakery is restarting)");
+      throw new Error(`${error.message}\n\nBakery cannot start a run yet (the repository is at its run limit, or Bakery is restarting), so it sends this to the agent as soon as one can start.`);
+    }
+    if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
     return board.getCard(card.id)!;
   }
 }
-const port = Number(process.env.BAKERY_PORT ?? 4317);
 // Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
-const bindHost = process.env.BAKERY_HOST || "127.0.0.1";
 const extraHosts = (process.env.BAKERY_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
@@ -407,6 +424,35 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(cardIds) || !cardIds.every(id => typeof id === "string")) throw new Error("cardIds must be an array of card IDs");
       send(res, 200, board.setArchived(repoBoard.repo, cardIds as string[], archiveRoute[2] === "archive")); return;
     }
+    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events))?)?$/);
+    if (chatRoute) {
+      const repoBoard = board.getBoard(chatRoute[1]), chatId = chatRoute[2], action = chatRoute[3];
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      if (!chatId) {
+        if (req.method === "GET") { send(res, 200, board.listChats(repoBoard.id).map(chat => ({ ...chat, pending: chats.live(chat.id) !== null }))); return; }
+        if (req.method === "POST") { send(res, 201, board.createChat(repoBoard.id)); return; }
+      } else {
+        const chat = board.getChat(chatId);
+        if (!chat || chat.boardId !== repoBoard.id) { send(res, 404, { error: "Chat not found on this board" }); return; }
+        if (req.method === "GET" && !action) { send(res, 200, { chat, messages: board.listChatMessages(chatId), live: chats.live(chatId) }); return; }
+        if (req.method === "DELETE" && !action) { chats.delete(chatId); send(res, 200, { ok: true }); return; }
+        if (req.method === "POST" && action === "messages") {
+          const { message } = await body(req);
+          if (typeof message !== "string" || !message.trim() || message.length > 16000) throw new Error("Write a message of up to 16000 characters");
+          send(res, 202, chats.send(repoBoard, chatId, message.trim())); return;
+        }
+        if (req.method === "POST" && action === "stop") { chats.stop(chatId); send(res, 200, { ok: true }); return; }
+        // Server-sent events: the live reply as it is written, and each message once saved.
+        if (req.method === "GET" && action === "events") {
+          res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
+          const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+          write({ type: "live", live: chats.live(chatId) });
+          const unsubscribe = chats.subscribe(chatId, write), ping = setInterval(() => res.write(": ping\n\n"), 20_000);
+          req.once("close", () => { unsubscribe(); clearInterval(ping); });
+          return;
+        }
+      }
+    }
     const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
@@ -597,7 +643,7 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
 });
 // Set once the dev supervisor asks for a drain. /api/status reports it so the UI can say a restart is coming.
 const draining = { on: false };
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); chats.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {
