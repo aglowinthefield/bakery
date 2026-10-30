@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { Button } from "./components/ui/button";
 import { Markdown } from "./markdown-view.js";
-import type { DiscussionMessage } from "./model.js";
+import { AttachmentGrid, FilePicker, uploadAttachment } from "./attachments.js";
+import type { Attachment, DiscussionMessage } from "./model.js";
 
 type Discussion = { messages: DiscussionMessage[]; pending: boolean };
 
@@ -22,6 +23,8 @@ export function DiscussionPanel({
   });
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [files, setFiles] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   const url = `/boards/${boardId}/cards/${cardId}/discussion`;
   useEffect(() => {
@@ -48,14 +51,19 @@ export function DiscussionPanel({
   }, [data.messages.length, data.pending]);
   const send = async () => {
     const message = draft.trim();
-    if (!message || sending || data.pending) return;
+    if ((!message && !files.length) || sending || uploading || data.pending)
+      return;
     setSending(true);
     try {
       const saved = await api<DiscussionMessage>(url, {
         method: "POST",
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({
+          message,
+          attachmentIds: files.map((item) => item.id),
+        }),
       });
       setDraft("");
+      setFiles([]);
       setData((previous) => ({
         messages: [...previous.messages, saved],
         pending: true,
@@ -64,6 +72,19 @@ export function DiscussionPanel({
       onError(err instanceof Error ? err.message : String(err));
     } finally {
       setSending(false);
+    }
+  };
+  const attach = async (picked: File[]) => {
+    setUploading(true);
+    try {
+      for (const file of picked) {
+        const saved = await uploadAttachment(boardId, cardId, file);
+        setFiles((previous) => [...previous, saved]);
+      }
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
     }
   };
   return (
@@ -96,8 +117,9 @@ export function DiscussionPanel({
             {item.role === "agent" ? (
               <Markdown source={item.body} className="leading-6" />
             ) : (
-              <p className="whitespace-pre-wrap">{item.body}</p>
+              item.body && <p className="whitespace-pre-wrap">{item.body}</p>
             )}
+            <AttachmentGrid boardId={boardId} items={item.attachments ?? []} />
           </li>
         ))}
         {data.pending && (
@@ -107,6 +129,16 @@ export function DiscussionPanel({
         )}
         <div ref={end} />
       </ol>
+      <AttachmentGrid
+        boardId={boardId}
+        items={files}
+        onRemove={(item) => {
+          setFiles((previous) => previous.filter((it) => it.id !== item.id));
+          void api(`${url.replace("/discussion", "/attachments")}/${item.id}`, {
+            method: "DELETE",
+          }).catch((err) => onError(String(err)));
+        }}
+      />
       <form
         className="mt-3 flex items-end gap-2"
         onSubmit={(event) => {
@@ -129,11 +161,20 @@ export function DiscussionPanel({
           placeholder="Ask about this card (⌘/Ctrl+Enter to send)"
           className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
         />
+        <FilePicker
+          onPick={(picked) => void attach(picked)}
+          disabled={uploading}
+        />
         <Button
           type="submit"
-          disabled={!draft.trim() || sending || data.pending}
+          disabled={
+            (!draft.trim() && !files.length) ||
+            sending ||
+            uploading ||
+            data.pending
+          }
         >
-          Send
+          {uploading ? "Uploading…" : "Send"}
         </Button>
       </form>
     </section>
