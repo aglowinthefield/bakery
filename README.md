@@ -242,7 +242,7 @@ The board header shows **Last 24h**: the cost of attempts and agent reviews that
 
 ### Automatic pickup
 
-The server starts Ready cards for you, highest priority first (Urgent, High, Normal, Low), then oldest first. Set a card's priority when you create or edit it, or from its details. Lanes list higher-priority cards first, and cards that aren't Normal show a priority badge.
+The server starts Ready cards for you, highest priority first, then oldest first. Priority is a whole number from -100 to 100 (default 0); `low`, `normal`, `high` and `urgent` are shorthands for -10, 0, 50 and 100. Set it when you create or edit a card, or from its details. Lanes list higher-priority cards first, and a card with a non-zero priority shows the number in its footer, warmer the higher it is.
 
 - **Concurrency:** 1 to 4 runs at once (default 2). Manually started runs count toward it.
 - **Daily limit:** 1 to 99 automatic starts in any rolling 24 hours (default 6). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
@@ -277,10 +277,10 @@ flowchart LR
 The CLI talks to the running server's HTTP API, so it goes through the same checks as the UI.
 
 ```sh
-npm run bakery -- add fix the flaky login test [--priority high]
+npm run bakery -- add fix the flaky login test [--priority 80]
 npm run bakery -- boards
 npm run bakery -- cards
-npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority low|normal|high|urgent] [--after CARD_ID]...
+npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority -100..100|low|normal|high|urgent] [--after CARD_ID]...
 npm run bakery -- show CARD_ID
 npm run bakery -- depend CARD_ID --on CARD_ID
 npm run bakery -- undepend CARD_ID --on CARD_ID

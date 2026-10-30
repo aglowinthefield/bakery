@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url))
 const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
 const cards = [
-  { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", priority: 1, attempts: 3, reviewRounds: 2 },
+  { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", priority: 50, attempts: 3, reviewRounds: 2 },
   { id: "card-done", title: "Finished", body: "", repo: board.repo, status: "done", attempts: 0, reviewRounds: 0 },
   { id: "card-old", title: "Old work", body: "", repo: board.repo, status: "archived", attempts: 0, reviewRounds: 0 },
 ];
@@ -119,7 +119,7 @@ test("card creation and status changes go through the API; Ready needs consent w
     assert.equal(urgent.code, 0, urgent.stderr);
     const bad = await f.run("create", "--title", "Nope", "--priority", "critical");
     assert.notEqual(bad.code, 0);
-    assert.match(bad.stderr, /Priority must be low, normal, high, or urgent/);
+    assert.match(bad.stderr, /Priority must be a whole number from -100 to 100/);
     assert.match((await f.run("cards", "--priority", "high")).stderr, /only valid with create/);
     const keyed = await f.run("create", "--title", "Scripted", "--key", "nightly-1");
     assert.equal(keyed.code, 0, keyed.stderr);

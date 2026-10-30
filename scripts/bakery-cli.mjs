@@ -4,12 +4,12 @@ import { resolve, sep } from "node:path";
 
 const usage = `bakery-cli — local Bakery API client
 
-Usage: bakery-cli add TITLE... [--body BODY] [--priority low|normal|high|urgent] [--board ID|PATH] [--json]
+Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|high|urgent] [--board ID|PATH] [--json]
        bakery-cli boards [--json]
        bakery-cli board [ID|PATH] [--integration local|github-pr] [--json]
        bakery-cli pr CARD_ID [URL|off] [--board ID|PATH] [--json]
        bakery-cli cards [--board ID|PATH] [--json]
-       bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority low|normal|high|urgent] [--after CARD_ID]... [--board ID|PATH] [--json]
+       bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority -100..100|low|normal|high|urgent] [--after CARD_ID]... [--board ID|PATH] [--json]
        bakery-cli show CARD_ID [--board ID|PATH] [--json]
        bakery-cli depend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
        bakery-cli undepend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
@@ -123,8 +123,9 @@ function usageTotal(items) {
   return { ...total, incomplete: recorded.length < items.length };
 }
 // Mirrors server/board.ts cardPriorities; the API returns the stored integer.
-const priorities = { low: -1, normal: 0, high: 1, urgent: 2 };
-const priorityName = value => Object.keys(priorities).find(key => priorities[key] === (value ?? 0)) ?? String(value);
+const priorities = { low: -10, normal: 0, high: 50, urgent: 100 };
+const priorityValue = value => Object.hasOwn(priorities, value) ? priorities[value] : /^-?\d+$/.test(String(value)) && Math.abs(Number(value)) <= 100 ? Number(value) : null;
+const priorityName = value => Object.keys(priorities).find(key => priorities[key] === (value ?? 0)) ?? String(value ?? 0);
 const money = cost => typeof cost !== "number" ? "—" : cost > 0 && cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
 const lanes = ["triage", "ready", "running", "review", "failed", "interrupted", "done", "archived"];
 const pickupSummary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
@@ -157,7 +158,7 @@ async function main() {
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
-  if (opts.priority !== undefined && !Object.hasOwn(priorities, opts.priority)) throw new Error("Priority must be low, normal, high, or urgent");
+  if (opts.priority !== undefined && priorityValue(opts.priority) === null) throw new Error("Priority must be a whole number from -100 to 100, or low, normal, high, or urgent");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
   if (opts.integration !== undefined && command !== "board") throw new Error("--integration is only valid with board");
@@ -192,7 +193,7 @@ async function main() {
     if (!opts.title?.trim()) throw new Error(command === "add" ? "add requires a title" : "create requires --title TITLE");
     if (opts.key !== undefined && (!opts.key.trim() || opts.key.length > 200)) throw new Error("--key must be 1 to 200 characters");
     const input = { title: opts.title, body: opts.body ?? "" };
-    if (opts.priority !== undefined) input.priority = opts.priority;
+    if (opts.priority !== undefined) input.priority = Object.hasOwn(priorities, opts.priority) ? opts.priority : Number(opts.priority);
     if (opts.key !== undefined) input.idempotencyKey = opts.key;
     if (opts.after.length) input.dependsOn = opts.after;
     const card = await request(origin, `${path}/cards`, "POST", input);

@@ -53,7 +53,7 @@ import {
 } from "./components/ui/dialog";
 import "highlight.js/styles/github-dark.css";
 import "./style.css";
-import { api, date } from "./api.js";
+import { ago, api, date } from "./api.js";
 import {
   agentPhases,
   emptyAgentModels,
@@ -88,8 +88,11 @@ import {
 } from "./remote-link.js";
 import {
   byPriority,
-  priorities,
+  PRIORITY_MAX,
+  PRIORITY_MIN,
+  parsePriorityInput,
   priorityLabel,
+  priorityTone,
   cardActivity,
   countKey,
   dropTargets,
@@ -2114,16 +2117,13 @@ export function App() {
                           </div>
                         </div>
                       )}
-                      <div className="space-y-3">
+                      <div className="space-y-2">
                         {laneCards.map((item) => {
                           const activity = cardActivity(item);
                           const content = (
                             <>
-                              <div className="flex items-start justify-between gap-2 empty:hidden [&:has(>span:empty)]:hidden mb-4">
+                              <div className="flex items-start justify-between gap-2 empty:hidden [&:has(>span:empty)]:hidden mb-2">
                                 <span className="flex flex-wrap items-center gap-1.5">
-                                  {(item.priority ?? 0) !== 0 && (
-                                    <PriorityBadge priority={item.priority} />
-                                  )}
                                   {item.blocked && (
                                     <WaitingBadge
                                       waiting={waitingOn(item, cards)}
@@ -2167,17 +2167,34 @@ export function App() {
                                   )}
                                 </span>
                               </div>
-                              <div className="text-[14px] font-medium leading-snug text-foreground">
+                              <div className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
                                 {item.title}
                               </div>
-                              <p className="mt-2 line-clamp-2 min-h-9 text-xs leading-relaxed text-muted-foreground">
-                                {markdownToPlainText(item.body) ||
-                                  "No description yet."}
-                              </p>
-                              {(item.runAgent ||
-                                item.reviewAgent ||
+                              {(() => {
+                                // A body that only restates the title adds a line and no information.
+                                const body = markdownToPlainText(item.body);
+                                const norm = (text: string) =>
+                                  text
+                                    .toLowerCase()
+                                    .replace(/\W+/g, " ")
+                                    .trim();
+                                if (
+                                  !body ||
+                                  norm(body).startsWith(
+                                    norm(item.title).slice(0, 60),
+                                  )
+                                )
+                                  return null;
+                                return (
+                                  <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                                    {body}
+                                  </p>
+                                );
+                              })()}
+                              {((settings?.showCardModels &&
+                                (item.runAgent || item.reviewAgent)) ||
                                 item.planOnly) && (
-                                <div className="mt-3 flex flex-wrap gap-1">
+                                <div className="mt-2 flex flex-wrap gap-1">
                                   {item.planOnly && (
                                     <span
                                       className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
@@ -2186,21 +2203,23 @@ export function App() {
                                       Plan
                                     </span>
                                   )}
-                                  {item.runAgent && (
-                                    <AgentBadge
-                                      phase="Run"
-                                      agent={item.runAgent}
-                                    />
-                                  )}
-                                  {item.reviewAgent && (
-                                    <AgentBadge
-                                      phase="Review"
-                                      agent={item.reviewAgent}
-                                    />
-                                  )}
+                                  {settings?.showCardModels &&
+                                    item.runAgent && (
+                                      <AgentBadge
+                                        phase="Run"
+                                        agent={item.runAgent}
+                                      />
+                                    )}
+                                  {settings?.showCardModels &&
+                                    item.reviewAgent && (
+                                      <AgentBadge
+                                        phase="Review"
+                                        agent={item.reviewAgent}
+                                      />
+                                    )}
                                 </div>
                               )}
-                              <div className="mt-5 flex items-center justify-between border-t border-border/70 pt-3 font-mono text-[10px] text-muted-foreground">
+                              <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-muted-foreground">
                                 <span className="flex min-w-0 items-center gap-1 truncate">
                                   <GitBranch size={11} className="shrink-0" />{" "}
                                   {repoName(item.repo)}
@@ -2220,12 +2239,19 @@ export function App() {
                                       : "?"
                                     : item.turns}
                                 </span>
-                                <span>{date(item.createdAt)}</span>
+                                <span className="flex items-center gap-2">
+                                  {(item.priority ?? 0) !== 0 && (
+                                    <PriorityNumber priority={item.priority} />
+                                  )}
+                                  <span title={date(item.createdAt)}>
+                                    {ago(item.createdAt)}
+                                  </span>
+                                </span>
                               </div>
                             </>
                           );
                           const cardClass =
-                            "group block w-full rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+                            "group block w-full rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
                           if (selecting) {
                             const checked = doneSelection.has(item.id);
                             return (
@@ -2235,7 +2261,7 @@ export function App() {
                               >
                                 <input
                                   type="checkbox"
-                                  className="absolute top-4 right-4 size-4 accent-primary"
+                                  className="absolute top-3 right-3 size-4 accent-primary"
                                   aria-label={`Select ${item.title}`}
                                   checked={checked}
                                   onChange={() => toggleDoneSelection(item.id)}
@@ -2262,6 +2288,13 @@ export function App() {
                               }}
                               onDragEnd={endDrag}
                               data-card-tile={item.status}
+                              data-stripe={
+                                needsYourReview(item)
+                                  ? "review"
+                                  : item.status === "failed"
+                                    ? "failed"
+                                    : undefined
+                              }
                               data-activity={activity ?? undefined}
                               data-turn={
                                 needsYourReview(item) ? "yours" : undefined
@@ -2433,6 +2466,23 @@ export function App() {
                 </label>
               ))}
             </div>
+          </fieldset>
+          <fieldset
+            className="mt-6 border-t border-border pt-5 text-sm"
+            disabled={!settings || busy}
+          >
+            <legend className="pt-5 font-medium">Cards</legend>
+            <label className="mt-3 flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={settings?.showCardModels ?? false}
+                onChange={(event) =>
+                  saveSettings({ showCardModels: event.target.checked })
+                }
+                className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              />
+              Show the run and review model on each card
+            </label>
           </fieldset>
           <fieldset
             className="mt-6 border-t border-border pt-5 text-sm"
@@ -3472,20 +3522,14 @@ function WaitingBadge({ waiting }: { waiting: Card[] }) {
     </span>
   );
 }
-function PriorityBadge({ priority }: { priority: Priority }) {
-  const tone =
-    priority > 0
-      ? priority > 1
-        ? "border-red-500/40 bg-red-500/10 text-red-500"
-        : "border-orange-500/40 bg-orange-500/10 text-orange-500"
-      : "border-border bg-muted/40 text-muted-foreground";
+function PriorityNumber({ priority }: { priority: Priority }) {
   return (
     <span
       data-testid="priority-badge"
-      title={`${priorityLabel(priority)} priority`}
-      className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[.1em] ${tone}`}
+      title={priorityLabel(priority)}
+      className={`font-mono text-[11px] font-medium ${priorityTone(priority)}`}
     >
-      {priorityLabel(priority)}
+      {priority > 0 ? `↑${priority}` : `↓${-priority}`}
     </span>
   );
 }
@@ -3560,17 +3604,18 @@ function CardForm({
       </label>
       <label className="block text-xs font-medium">
         Priority
-        <select
+        <input
+          type="number"
+          min={PRIORITY_MIN}
+          max={PRIORITY_MAX}
+          step={1}
           value={priority}
-          onChange={(e) => setPriority(Number(e.target.value) as Priority)}
+          onChange={(e) => {
+            const next = parsePriorityInput(e.target.value);
+            if (next !== null) setPriority(next);
+          }}
           className={`mt-2 ${input}`}
-        >
-          {priorities.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </select>
+        />
       </label>
       <p className="text-xs leading-5 text-muted-foreground">
         This card uses the selected repository. New cards start in Triage. Move

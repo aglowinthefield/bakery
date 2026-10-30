@@ -171,18 +171,20 @@ const server = createServer(async (req, res) => {
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
-      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("agentModels" in input)) throw new Error("Specify a setting to update");
+      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input)) throw new Error("Specify a setting to update");
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("notifyOnReview" in input && typeof input.notifyOnReview !== "boolean") throw new Error("notifyOnReview must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
       if ("theme" in input && !isTheme(input.theme)) throw new Error(`theme must be one of: ${themeNames.join(", ")}`);
       if ("density" in input && input.density !== "compact" && input.density !== "default" && input.density !== "cozy") throw new Error("density must be compact, default, or cozy");
+      if ("showCardModels" in input && typeof input.showCardModels !== "boolean") throw new Error("showCardModels must be a boolean");
       send(res, 200, board.updateSettings({
         confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
         notifyOnReview: "notifyOnReview" in input ? input.notifyOnReview as boolean : undefined,
         cardDetailsLayout: "cardDetailsLayout" in input ? input.cardDetailsLayout as "dialog" | "side" : undefined,
         theme: "theme" in input ? input.theme as ThemeName : undefined,
         density: "density" in input ? input.density as "compact" | "default" | "cozy" : undefined,
+        showCardModels: "showCardModels" in input ? input.showCardModels as boolean : undefined,
         agentModels: "agentModels" in input ? validateAgentModels(input.agentModels) : undefined,
       })); return;
     }

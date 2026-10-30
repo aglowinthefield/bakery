@@ -24,7 +24,9 @@ import { parsePlan, type Subtask } from "./plan.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
 import { PullRequestDialog } from "./pr-dialog.js";
 import {
-  priorities,
+  PRIORITY_MAX,
+  PRIORITY_MIN,
+  parsePriorityInput,
   type AutoReviewJob,
   type BakerySettings,
   type Card,
@@ -450,17 +452,29 @@ export function CardDetails({
               {card && (
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   Priority
-                  <select
+                  <input
                     aria-label="Card priority"
-                    value={card.priority ?? 0}
+                    type="number"
+                    min={PRIORITY_MIN}
+                    max={PRIORITY_MAX}
+                    step={1}
+                    key={card.priority ?? 0}
+                    defaultValue={card.priority ?? 0}
                     disabled={busy || card.status === "running"}
                     title={
                       card.status === "running"
                         ? "Priority cannot change while a run is active"
-                        : "Higher priority Ready cards are picked up first"
+                        : "Higher priority Ready cards are picked up first (-100 to 100)"
                     }
-                    onChange={(event) => {
-                      const priority = Number(event.target.value) as Priority;
+                    onBlur={(event) => {
+                      const priority = parsePriorityInput(event.target.value);
+                      if (
+                        priority === null ||
+                        priority === (card.priority ?? 0)
+                      ) {
+                        event.target.value = String(card.priority ?? 0);
+                        return;
+                      }
                       void action(() =>
                         api<Card>(`/boards/${boardId}/cards/${card.id}`, {
                           method: "PATCH",
@@ -472,14 +486,11 @@ export function CardDetails({
                         }),
                       );
                     }}
-                    className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
-                  >
-                    {priorities.map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.currentTarget.blur();
+                    }}
+                    className="w-20 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+                  />
                 </label>
               )}
               <Button
