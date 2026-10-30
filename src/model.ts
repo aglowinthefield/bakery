@@ -54,6 +54,8 @@ export type Board = {
   agentModels?: AgentModels;
   /** Per status; `review` counts only Review cards that need you, `reviewWaiting` the rest. */
   cardCounts?: Partial<Record<CountKey, number>>;
+  /** Cards created outside this UI that the operator has not opened the board to see yet. */
+  newCards?: number;
 };
 export type AutoReviewJob = {
   cardId: string;
@@ -240,7 +242,9 @@ export function cardActivity(
       ? "quiet"
       : "working";
   if (card.status === "review" && card.reviewWait)
-    return card.reviewWait === "agent_review" && !card.reviewQueue ? "working" : "waiting";
+    return card.reviewWait === "agent_review" && !card.reviewQueue
+      ? "working"
+      : "waiting";
   return null;
 }
 /**
