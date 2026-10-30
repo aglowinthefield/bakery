@@ -9,6 +9,7 @@ const routes: Route[] = [
   { view: "board", boardId: "b1", cardId: null },
   { view: "pulls", boardId: "b1", cardId: null },
   { view: "visualizer", boardId: "b1", cardId: null },
+  { view: "chat", boardId: "b1", cardId: null },
   { view: "visualizer", boardId: "b 1", cardId: null },
   { view: "board", boardId: "b 1", cardId: "c/2" },
 ];
