@@ -143,3 +143,51 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
     await server.close();
   }
 });
+
+test("quick model and thinking picks both persist, and Send waits for them to save", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    let saved = { ...chat }, patchesDone = 0;
+    const patches: unknown[] = [], log: string[] = [];
+    await page.route("**/api/**", async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/models") return route.fulfill({ json: { models: ["anthropic/claude-sonnet-4-5"] } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [saved] });
+      if (path === "/api/boards/b1/chats/c1" && request.method() === "PATCH") {
+        const input = request.postDataJSON();
+        patches.push(input); log.push("patch");
+        await new Promise(resolve => setTimeout(resolve, 300));
+        saved = { ...saved, ...input }; patchesDone++;
+        return route.fulfill({ json: saved });
+      }
+      if (path === "/api/boards/b1/chats/c1/messages") { log.push(`message after ${patchesDone} saves`); return route.fulfill({ status: 202, json: {} }); }
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat: saved, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c1/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "live", live: null })}\n\n` });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const model = page.getByLabel("Chat model"), thinking = page.getByLabel("Chat thinking");
+    await model.waitFor();
+    await thinking.selectOption("high");
+    await model.fill("anthropic/claude-sonnet-4-5");
+    await page.getByLabel("Message the agent").fill("hello");
+    await page.getByRole("button", { name: "Send" }).click();
+    for (let i = 0; i < 50 && !log.some(entry => entry.startsWith("message")); i++) await page.waitForTimeout(100);
+    assert.deepEqual(log.at(-1), `message after ${patches.length} saves`);
+    assert.deepEqual(patches.at(-1), { model: "anthropic/claude-sonnet-4-5", thinking: "high" }, "the newest choice is the last one saved");
+    assert.equal(patchesDone, patches.length, "no save was still pending when the message was sent");
+    assert.equal(await thinking.inputValue(), "high");
+    await page.reload();
+    await model.waitFor();
+    assert.equal(await model.inputValue(), "anthropic/claude-sonnet-4-5");
+    assert.equal(await thinking.inputValue(), "high");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});

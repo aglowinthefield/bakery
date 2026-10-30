@@ -180,31 +180,74 @@ export function ChatView({
   ]);
 
   const current = chats?.find((chat) => chat.id === chatId);
-  const choice: AgentModel = current
-    ? { model: current.model, thinking: current.thinking }
-    : newChoice;
+  // Choices the operator made that the server has not confirmed yet, per chat. They win over the saved values on screen.
+  const [wanted, setWanted] = useState<Record<string, AgentModel>>({});
+  const latest = useRef<Record<string, AgentModel>>({});
+  // Saves run one at a time per chat, each sending the newest choice, so a slow response never overwrites a newer pick.
+  const saves = useRef<Record<string, Promise<boolean>>>({});
+  const choice: AgentModel =
+    (chatId && wanted[chatId]) ||
+    (current
+      ? { model: current.model, thinking: current.thinking }
+      : newChoice);
   const [modelDraft, setModelDraft] = useState(choice.model);
   useEffect(() => setModelDraft(choice.model), [chatId, choice.model]);
-  const choose = async (next: AgentModel) => {
-    next = { ...next, model: next.model.trim() };
-    if (!current) return setNewChoice(next);
-    if (next.model === current.model && next.thinking === current.thinking)
-      return setModelDraft(current.model);
-    try {
-      const saved = await api<Chat>(`${base}/${current.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(next),
+  const settle = (id: string, sent: AgentModel | null) => {
+    // Forget the wanted choice unless the operator has picked again since this save began.
+    const latestChoice = latest.current[id];
+    if (!sent || (latestChoice && same(latestChoice, sent))) {
+      delete latest.current[id];
+      setWanted((previous) => {
+        const { [id]: _, ...rest } = previous;
+        return rest;
       });
-      setChats(
-        (previous) =>
-          previous?.map((chat) =>
-            chat.id === saved.id ? { ...chat, ...saved } : chat,
-          ) ?? null,
-      );
-    } catch (err) {
-      setModelDraft(current.model);
-      fail(err);
     }
+  };
+  const same = (a: AgentModel, b: AgentModel) =>
+    a.model === b.model && a.thinking === b.thinking;
+  const choose = (next: AgentModel) => {
+    next = { ...next, model: next.model.trim() };
+    if (!current || !chatId) return setNewChoice(next);
+    const id = chatId;
+    if (same(next, choice)) return setModelDraft(choice.model);
+    latest.current[id] = next;
+    setWanted((previous) => ({ ...previous, [id]: next }));
+    saves.current[id] = (saves.current[id] ?? Promise.resolve(true)).then(
+      async () => {
+        const sending = latest.current[id];
+        if (!sending) return true;
+        try {
+          const saved = await api<Chat>(`${base}/${id}`, {
+            method: "PATCH",
+            body: JSON.stringify(sending),
+          });
+          setChats(
+            (previous) =>
+              previous?.map((chat) =>
+                chat.id === id
+                  ? { ...chat, model: saved.model, thinking: saved.thinking }
+                  : chat,
+              ) ?? null,
+          );
+          settle(id, sending);
+          return true;
+        } catch (err) {
+          settle(id, null);
+          fail(err);
+          return false;
+        }
+      },
+    );
+  };
+  /** Resolves once every choice made for this chat is saved; false if a save failed. */
+  const flushChoice = async (id: string) => {
+    let ok = true;
+    while (latest.current[id]) {
+      const pending = saves.current[id];
+      ok = (await pending) && ok;
+      if (saves.current[id] === pending && latest.current[id]) break;
+    }
+    return ok;
   };
   const loadModels = () =>
     void listModels().then((result) => setModels(result.models));
@@ -241,6 +284,7 @@ export function ChatView({
     setSending(true);
     try {
       let id = chatId;
+      if (id && !(await flushChoice(id))) return;
       if (!id) {
         const chat = await api<Chat>(base, {
           method: "POST",
