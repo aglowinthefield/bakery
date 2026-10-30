@@ -155,7 +155,11 @@ fn create_remote(app: &tauri::AppHandle, url: url::Url) -> Result<WebviewWindow,
                         .map(|origin| server::same_origin(origin, target))
                 })
                 .unwrap_or(false);
-            if allowed {
+            if allowed && target.path() == "/__desktop/connection" {
+                // The Settings > Server section links here: open the native connection window.
+                show_connection(&navigation_app);
+                false
+            } else if allowed {
                 true
             } else {
                 open_in_browser(&navigation_app, target);
@@ -187,6 +191,23 @@ fn create_remote(app: &tauri::AppHandle, url: url::Url) -> Result<WebviewWindow,
         }
     });
     Ok(remote)
+}
+
+/// Cmd-, opens the hosted Settings page. Without a connected server there is nothing to open,
+/// so it falls back to the connection window.
+fn open_settings(app: &tauri::AppHandle) {
+    let Some(remote) = remote_window(app) else {
+        show_connection(app);
+        return;
+    };
+    let script = "if (!location.pathname.startsWith('/settings')) { history.pushState(null, '', '/settings/general'); dispatchEvent(new PopStateEvent('popstate')); }";
+    if remote.eval(script).is_err() {
+        show_connection(app);
+        return;
+    }
+    if let Err(error) = remote.show().and_then(|_| remote.set_focus()) {
+        eprintln!("Cannot show Bakery: {error}");
+    }
 }
 
 fn main() {
@@ -232,12 +253,14 @@ fn main() {
                     }
                 }
             });
-            let settings = MenuItem::with_id(
+            let settings =
+                MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+            let connection_item = MenuItem::with_id(
                 app,
                 "connection",
-                "Connection settings…",
+                "Connect to another server…",
                 true,
-                Some("CmdOrCtrl+,"),
+                None::<&str>,
             )?;
             let reload =
                 MenuItem::with_id(app, "reload", "Reload Bakery", true, Some("CmdOrCtrl+R"))?;
@@ -246,7 +269,7 @@ fn main() {
             let separator = PredefinedMenuItem::separator(app)?;
             let quit = PredefinedMenuItem::quit(app, None)?;
             let mut bakery_items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
-                vec![&settings, &reload, &browser, &separator];
+                vec![&settings, &connection_item, &reload, &browser, &separator];
             // A custom menu replaces the default one, so restore macOS's Cmd+H items.
             #[cfg(target_os = "macos")]
             let (hide, hide_others, show_all, hide_separator) = (
@@ -290,6 +313,7 @@ fn main() {
             app.set_menu(Menu::with_items(app, &[&bakery, &edit, &window])?)?;
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "connection" => show_connection(app),
+                "settings" => open_settings(app),
                 "reload" => {
                     if let Some(window) = remote_window(app) {
                         if let Err(error) = window.reload() {
