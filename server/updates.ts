@@ -1,7 +1,8 @@
 import { execFile, execFileSync } from "node:child_process";
 
 // Updates for a hosted Bakery checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
-// brought in so the UI can show a changelog, and installs it on request or by itself while nothing is running.
+// brought in, plus anything merged into the checked-out main since the server started (approving a card merges it
+// locally), so the UI can show a changelog. It installs on request or by itself while nothing is running.
 // Installing leaves the restart to the caller, which drains active runs first.
 
 export type UpdateCommit = { sha: string; subject: string };
@@ -21,18 +22,27 @@ export class Updates {
   private commits: UpdateCommit[] = [];
   private installing = false;
   private error: string | null = null;
-  // origin/main at the last failed install, so the idle check does not retry the same failure every tick.
+  // HEAD and origin/main at the last failed install, so the idle check does not retry the same failure every tick.
   private failedAt: string | null = null;
+  // The commit the server started on. Local merges move HEAD past it without touching origin/main.
+  private startHead: string | null;
 
-  constructor(private root: string, private install: Install, private onInstalled: () => void) {}
+  constructor(private root: string, private install: Install, private onInstalled: () => void) {
+    this.startHead = this.revParse("HEAD");
+  }
 
   get state(): UpdateState { return { commits: this.commits, installing: this.installing, error: this.error }; }
 
-  /** Re-reads the commits on origin/main that the checked-out main lacks. Only `main` checkouts update. */
+  /**
+   * Re-reads the pending commits: those on origin/main that the checked-out main lacks, and those merged into main
+   * since the server started. Only `main` checkouts update.
+   */
   refresh(): void {
     try {
       if (this.git("rev-parse", "--abbrev-ref", "HEAD") !== "main") { this.commits = []; return; }
-      const log = this.git("log", "--format=%h%x09%s", "HEAD..refs/remotes/origin/main");
+      // Newest first: what origin/main would bring in, then what was merged locally since startup.
+      const ranges = [this.originMain() && "HEAD..refs/remotes/origin/main", this.startHead && `${this.startHead}..HEAD`];
+      const log = ranges.filter((range): range is string => !!range).map(range => this.git("log", "--format=%h%x09%s", range)).filter(Boolean).join("\n");
       this.commits = log ? log.split("\n").map(line => { const [sha, ...subject] = line.split("\t"); return { sha, subject: subject.join("\t") }; }) : [];
     } catch (error) {
       this.commits = [];
@@ -43,7 +53,7 @@ export class Updates {
   /** Called on a timer. Installs pending commits without asking when `idle` (no runs and no agent review). */
   async tick(idle: boolean): Promise<void> {
     this.refresh();
-    if (!idle || this.installing || this.commits.length === 0 || this.originMain() === this.failedAt) return;
+    if (!idle || this.installing || this.commits.length === 0 || this.target() === this.failedAt) return;
     console.log(`Installing ${this.commits.length} update${this.commits.length === 1 ? "" : "s"} while idle.`);
     await this.apply();
   }
@@ -56,25 +66,31 @@ export class Updates {
     if (this.commits.length === 0) throw new Error("Already up to date");
     this.installing = true;
     this.error = null;
-    return this.run(this.originMain());
+    return this.run();
   }
 
-  private async run(target: string | null): Promise<void> {
+  private async run(): Promise<void> {
     try {
       await this.install();
     } catch (error) {
       this.installing = false;
-      this.failedAt = target;
+      // Read after the attempt: a fast-forward may have moved HEAD before a later step failed.
+      this.failedAt = this.target();
       this.error = error instanceof Error ? error.message : String(error);
       console.error(`Update failed: ${this.error}`);
       return;
     }
-    console.log(`Installed update to ${target?.slice(0, 7)}; restarting once active runs finish.`);
+    console.log(`Installed update (${this.commits.length} commit${this.commits.length === 1 ? "" : "s"}); restarting once active runs finish.`);
     this.onInstalled();
   }
 
-  private originMain(): string | null {
-    try { return this.git("rev-parse", "refs/remotes/origin/main"); } catch { return null; }
+  /** What an install would move to: the checked-out main and the fetched origin/main. */
+  private target(): string { return `${this.revParse("HEAD")} ${this.originMain()}`; }
+
+  private originMain(): string | null { return this.revParse("refs/remotes/origin/main"); }
+
+  private revParse(ref: string): string | null {
+    try { return this.git("rev-parse", "--verify", "-q", ref); } catch { return null; }
   }
 
   private git(...args: string[]): string {
