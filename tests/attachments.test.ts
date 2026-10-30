@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { attachmentPath, safeFileName, sweepOrphanAttachments } from "../server/attachments.js";
+import { attachmentPath, removeCardAttachmentFiles, safeFileName, sweepOrphanAttachments } from "../server/attachments.js";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 
@@ -151,4 +151,35 @@ test("the startup sweep removes attachment folders no row points to and keeps th
   assert.ok(!existsSync(join(data, "attachments", "card2")));
   assert.equal(sweepOrphanAttachments(join(data, "none"), []), 0);
   rmSync(data, { recursive: true, force: true });
+});
+
+test("purging an archived card's attachments removes its rows and folder, and refuses other cards", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-purge-"));
+  const repo = join(dir, "repo"), data = join(dir, "data");
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const put = (cardId: string, id: string) => {
+      const file = board.addAttachment({ id, cardId, name: "a.txt", type: "text/plain", size: 5 });
+      const path = attachmentPath(data, file);
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "hello");
+      return path;
+    };
+    const archived = board.createCard({ title: "Old", body: "", repo }), other = board.createCard({ title: "Live", body: "", repo });
+    const gone = [put(archived.id, "a1"), put(archived.id, "a2")], kept = put(other.id, "b1");
+    board.setStatus(archived.id, "done");
+    // A card that is not archived is refused, and nothing changes.
+    assert.throws(() => board.purgeAttachments(repo, [archived.id]), /Only archived cards/);
+    board.setArchived(repo, [archived.id], true);
+    assert.throws(() => board.purgeAttachments(repo, [archived.id, other.id]), /Only archived cards/);
+    assert.equal(board.listAttachments(archived.id).length, 2);
+    assert.deepEqual(board.purgeAttachments(repo, [archived.id]), [{ cardId: archived.id, files: 2, bytes: 10 }]);
+    removeCardAttachmentFiles(data, archived.id);
+    assert.deepEqual(board.listAttachments(archived.id), []);
+    assert.ok(gone.every(file => !existsSync(file)));
+    assert.ok(!existsSync(join(data, "attachments", archived.id)));
+    assert.ok(existsSync(kept));
+    assert.equal(board.listAttachments(other.id).length, 1);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

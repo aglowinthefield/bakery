@@ -16,7 +16,7 @@ export function safeFileName(name: string): string {
 
 /**
  * Where an attachment's bytes live: `<data dir>/attachments/<card id>/<attachment id>/<name>`. The name keeps its extension for the agent.
- * Only deleting the attachment removes them. Cards are never deleted, and archiving a card or removing its board can be undone, so both keep the files.
+ * Deleting the attachment removes them, and so does purging an archived card's attachments. Cards are never deleted, and archiving a card or removing its board can be undone, so both keep the files.
  */
 export const attachmentPath = (dataDir: string, item: Pick<Attachment, "cardId" | "id" | "name">) =>
   join(dataDir, "attachments", item.cardId, item.id, safeFileName(item.name));
@@ -50,12 +50,17 @@ export function removeAttachmentFiles(dataDir: string, item: Pick<Attachment, "c
   rmSync(join(dataDir, "attachments", item.cardId, item.id), { recursive: true, force: true });
 }
 
+/** Removes everything stored for a card: `<data dir>/attachments/<card id>/`. Cannot be undone. */
+export function removeCardAttachmentFiles(dataDir: string, cardId: string) {
+  rmSync(join(dataDir, "attachments", cardId), { recursive: true, force: true });
+}
+
 /**
  * Removes attachment folders no row points to: an upload cut off by a crash (only a `.part` file), or one stored just
  * before its row failed to insert. Run it at startup, before any upload can be in flight. Returns how many it removed.
  *
- * Nothing else deletes a card's files on purpose. Removing a board and archiving a card can both be undone, so their
- * files stay, and cards are never deleted. If hard deletion of cards or boards is ever added, it must remove
+ * Only deleting one attachment or purging an archived card's attachments removes files on purpose. Removing a board and
+ * archiving a card can both be undone, so their files stay, and cards are never deleted. If hard deletion of cards or boards is ever added, it must remove
  * `<data dir>/attachments/<card>` along with the rows.
  */
 export function sweepOrphanAttachments(dataDir: string, known: Pick<Attachment, "cardId" | "id">[]): number {

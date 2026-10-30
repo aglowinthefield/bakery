@@ -17,6 +17,7 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|hi
        bakery-cli undepend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
        bakery-cli edit CARD_ID [--title TITLE] [--body BODY] [--board ID|PATH] [--json]
        bakery-cli archive CARD_ID... [--board ID|PATH] [--json]
+       bakery-cli purge-attachments CARD_ID... --yes [--board ID|PATH] [--json]
        bakery-cli close CARD_ID [--board ID|PATH] [--json]
        bakery-cli restore CARD_ID [--board ID|PATH] [--json]
        bakery-cli stats [--board ID|PATH] [--json]
@@ -44,6 +45,8 @@ show prints a card with its dependencies, dependents, attempts and latest auto-r
 title and/or description.
 close moves a Review card to Done without merging; its worktree and branch stay.
 archive accepts only Done cards and archives all or none; restore moves one archived card back to Done.
+purge-attachments permanently deletes the attached files and records of archived cards, all or none. It cannot be
+undone, even if the card is restored, so it needs --yes.
 stats prints card counts per lane and the pickup state.
 board prints a board's integration mode; --integration github-pr makes a card Done when its GitHub pull request
 merges onto origin/main (needs gh and a GitHub remote link), --integration local merges on Approve.
@@ -155,7 +158,7 @@ async function main() {
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
   const expected = { doctor: 0, board: 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
-  const variadic = ["start", "archive", "add"];
+  const variadic = ["start", "archive", "add", "purge-attachments"];
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
   if (command === "board" && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command === "board" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
@@ -169,13 +172,14 @@ async function main() {
   if (opts.integration !== undefined && !["local", "github-pr"].includes(opts.integration)) throw new Error("Integration must be local or github-pr");
   if (command === "board" && args.length && opts.board) throw new Error("Name the board once, as ID|PATH or with --board");
   if (command === "pr") cardId(args[0]);
-  if (["show", "edit", "archive", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
+  if (["show", "edit", "archive", "purge-attachments", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
   if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
   if (opts.on.length && command !== "depend" && command !== "undepend") throw new Error("--on is only valid with depend or undepend");
   if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
   [...opts.after, ...opts.on].forEach(cardId);
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
-  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start")) throw new Error("--yes is only valid with ready, start or pickup");
+  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "purge-attachments")) throw new Error("--yes is only valid with ready, start, pickup or purge-attachments");
+  if (command === "purge-attachments" && !opts.yes) throw new Error("Purging deletes the attached files from disk and cannot be undone, even if the card is restored. Repeat with --yes to confirm.");
   if (command === "start") {
     args.forEach(cardId);
     if (!opts.yes) throw new Error(`Starting ${args.length === 1 ? "a run" : `${args.length} runs`} uses paid Pi. Repeat with --yes to confirm.`);
@@ -270,6 +274,9 @@ async function main() {
   } else if (command === "archive" || command === "restore") {
     const cards = await request(origin, `${path}/cards/${command === "archive" ? "archive" : "unarchive"}`, "POST", { cardIds: args });
     print(cards, opts.json, cards.map(cardLine));
+  } else if (command === "purge-attachments") {
+    const purged = await request(origin, `${path}/cards/purge-attachments`, "POST", { cardIds: args });
+    print(purged, opts.json, purged.map(item => `${item.cardId}\tpurged ${item.files} file${item.files === 1 ? "" : "s"}, ${item.bytes} bytes`));
   } else if (command === "stats") {
     const counts = Object.fromEntries(lanes.map(lane => [lane, board.cardCounts?.[lane] ?? 0]));
     const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
