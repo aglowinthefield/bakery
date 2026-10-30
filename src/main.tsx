@@ -122,6 +122,7 @@ import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
 import { themeNames, themes } from "./themes.js";
 import { UpdateNotice } from "./update-notice.js";
+import { ConfirmHost, confirmAction } from "./confirm.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1185,12 +1186,12 @@ export function App() {
       setBusy(false);
     }
   };
-  const resetPickupLimit = (target: Board) => {
+  const resetPickupLimit = async (target: Board) => {
     if (!target.autoPickupEnabled) return;
     if (
-      !window.confirm(
+      !(await confirmAction(
         `Reset the ${target.pickupDailyLimit}-start rolling limit for ${target.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs will remain in history.`,
-      )
+      ))
     )
       return;
     void action(async () => {
@@ -1202,7 +1203,7 @@ export function App() {
     });
   };
   // The budget is optional (blank means off). Raising or clearing a reached budget can start runs at once.
-  const saveCostBudget = (event: FormEvent, target: Board) => {
+  const saveCostBudget = async (event: FormEvent, target: Board) => {
     event.preventDefault();
     const text = budgetDraft.trim().replace(/^\$/, "");
     const budget = text ? Number(text) : null;
@@ -1219,9 +1220,9 @@ export function App() {
       target.autoPickupEnabled &&
       target.autoPickupBudgetReached &&
       (budget === null || budget > (target.cost24h ?? 0)) &&
-      !window.confirm(
+      !(await confirmAction(
         `${budget === null ? "Turn off" : "Raise"} the daily cost budget for ${target.repo}? Ready cards may start immediately and spend model tokens.`,
-      )
+      ))
     )
       return;
     void action(async () => {
@@ -1236,11 +1237,11 @@ export function App() {
       updateBoard(updated);
     });
   };
-  const removeBoard = (item: Board) => {
+  const removeBoard = async (item: Board) => {
     if (
-      !window.confirm(
+      !(await confirmAction(
         `Remove the board for ${item.repo}? Cards and worktrees remain on disk. Add this repository again to restore the board.`,
-      )
+      ))
     )
       return;
     void action(async () => {
@@ -1296,7 +1297,7 @@ export function App() {
     });
   };
   // Each drop calls the same endpoint as the matching button in the card's details.
-  const moveCard = (card: Card, to: Status, along: Card[] = []) => {
+  const moveCard = async (card: Card, to: Status, along: Card[] = []) => {
     if (!boardId || !dropTargets(card).includes(to)) return;
     const path = `/boards/${boardId}/cards`;
     if (to === "ready" && along.length > 0) {
@@ -1304,9 +1305,9 @@ export function App() {
       if (
         currentBoard?.autoPickupEnabled &&
         settings?.confirmRunStart &&
-        !window.confirm(
+        !(await confirmAction(
           `Move ${total} cards to Ready ("${card.title}" and the ${along.length} ${along.length === 1 ? "card" : "cards"} it waits on)? Auto pickup is on, so they may start and use paid model tokens. Cards that wait on others start after them.`,
-        )
+        ))
       )
         return;
       void action(async () => {
@@ -1326,9 +1327,9 @@ export function App() {
     if (to === "running") {
       if (
         settings?.confirmRunStart &&
-        !window.confirm(
+        !(await confirmAction(
           `Start Pi on "${card.title}"? This run may use paid model tokens and can edit its Git worktree.`,
-        )
+        ))
       )
         return;
       void action(() => api(`${path}/${card.id}/start`, { method: "POST" }));
@@ -1378,6 +1379,7 @@ export function App() {
         aria-hidden="true"
         className="desktop-titlebar"
       />
+      <ConfirmHost />
       {sidebarHidden && (
         <button
           aria-label="Show sidebar"
@@ -2961,14 +2963,14 @@ export function App() {
                   aria-label="Auto pickup daily start limit"
                   value={pickupBoard.pickupDailyLimit}
                   disabled={busy}
-                  onChange={(event) => {
+                  onChange={async (event) => {
                     const limit = Number(event.target.value);
                     if (
                       (limit === 0 || limit > pickupBoard.pickupDailyLimit) &&
                       pickupBoard.autoPickupEnabled &&
-                      !window.confirm(
+                      !(await confirmAction(
                         `Raise automatic starts to ${limit === 0 ? "no limit" : `${limit} per 24 hours`} for ${pickupBoard.repo}? Ready cards may start immediately and spend model tokens.`,
-                      )
+                      ))
                     )
                       return;
                     void action(async () => {
@@ -3060,13 +3062,13 @@ export function App() {
                 className="mt-3"
                 variant={pickupBoard.autoPickupEnabled ? "outline" : "default"}
                 disabled={busy}
-                onClick={() => {
+                onClick={async () => {
                   const enable = !pickupBoard.autoPickupEnabled;
                   if (
                     enable &&
-                    !window.confirm(
+                    !(await confirmAction(
                       `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
-                    )
+                    ))
                   )
                     return;
                   void action(async () => {
@@ -3195,16 +3197,16 @@ export function App() {
                   !mergeLimitValid ||
                   (!editingBoard.autoReviewEnabled && !verificationDraft.trim())
                 }
-                onClick={() => {
+                onClick={async () => {
                   const enable =
                     !editingBoard.autoReviewEnabled ||
                     verificationDraft.trim() !==
                       editingBoard.verificationCommand;
                   if (
                     enable &&
-                    !window.confirm(
+                    !(await confirmAction(
                       `Enable unattended agent review and ${mergeLimit === 0 ? "local merges with no limit per 24 hours" : `up to ${mergeLimit} local merge${mergeLimit === 1 ? "" : "s"} per 24 hours`} for ${editingBoard.repo}? This may spend model tokens. Only new reviews after enabling are eligible.`,
-                    )
+                    ))
                   )
                     return;
                   void action(async () => {

@@ -11,6 +11,7 @@ import { api } from "./api.js";
 import { Button } from "./components/ui/button";
 import { Markdown } from "./markdown-view.js";
 import type { Chat, ChatLive, ChatMessage, ChatPart } from "./model.js";
+import { confirmAction } from "./confirm.js";
 
 type ChatState = { messages: ChatMessage[]; live: ChatLive };
 
@@ -185,7 +186,8 @@ export function ChatView({
     }
   };
   const remove = async (chat: Chat) => {
-    if (!confirm(`Delete "${chatLabel(chat)}" and its history?`)) return;
+    if (!(await confirmAction(`Delete "${chatLabel(chat)}" and its history?`)))
+      return;
     try {
       await api(`${base}/${chat.id}`, { method: "DELETE" });
       if (chat.id === chatId) setChatId(null);

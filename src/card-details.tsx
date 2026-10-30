@@ -44,6 +44,7 @@ import {
   PushProgressPanel,
   type PushProgress,
 } from "./push-progress.js";
+import { confirmAction } from "./confirm.js";
 
 type Props = {
   boardId: string;
@@ -1040,12 +1041,12 @@ export function CardDetails({
                       ? "Waiting on unfinished cards. Start this card after they are Done."
                       : undefined
                   }
-                  onClick={() => {
+                  onClick={async () => {
                     if (
                       settings?.confirmRunStart &&
-                      !window.confirm(
+                      !(await confirmAction(
                         "Start Pi on this card? This run may use paid model tokens and can edit its Git worktree.",
-                      )
+                      ))
                     )
                       return;
                     void action(() =>
@@ -1089,11 +1090,11 @@ export function CardDetails({
                       item.runId === runs[0]?.id && item.state === "running",
                   )
                 }
-                onClick={() => {
+                onClick={async () => {
                   if (
-                    !window.confirm(
+                    !(await confirmAction(
                       "Accept this run's report and move the card to Done? The run changed no files, so nothing is merged or pushed.",
-                    )
+                    ))
                   )
                     return;
                   void action(() =>
@@ -1130,7 +1131,7 @@ export function CardDetails({
                       item.runId === runs[0]?.id && item.state === "draft",
                   )
                 }
-                onClick={() => {
+                onClick={async () => {
                   // A new PR's title and body are drafted from the repository's rules and edited in a dialog.
                   if (
                     currentReview &&
@@ -1143,13 +1144,13 @@ export function CardDetails({
                   }
                   if (
                     !currentReview ||
-                    !window.confirm(
+                    !(await confirmAction(
                       integration === "github-pr" && card.prState === "OPEN"
                         ? `Approve the reviewed diff and push it to pull request #${card.prNumber}? Bakery commits unignored files on bakery/${card.id} and pushes that branch to origin, which updates the open PR. The card is Done once the PR merges on GitHub.`
                         : integration === "github-pr"
                           ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
                           : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
-                    )
+                    ))
                   )
                     return;
                   onConflict(null);
@@ -1265,11 +1266,11 @@ export function CardDetails({
               <Button
                 variant="ghost"
                 disabled={busy}
-                onClick={() => {
+                onClick={async () => {
                   if (
-                    !window.confirm(
+                    !(await confirmAction(
                       "Withdraw the pending approval? The card's Git commits and worktree remain. You can revise the card and try again.",
-                    )
+                    ))
                   )
                     return;
                   void action(() =>
@@ -1320,11 +1321,11 @@ export function CardDetails({
               <Button
                 variant="outline"
                 disabled={busy}
-                onClick={() => {
+                onClick={async () => {
                   if (
-                    !window.confirm(
+                    !(await confirmAction(
                       "Close this card without merging? Its worktree and branch stay, and Reopen brings it back.",
-                    )
+                    ))
                   )
                     return;
                   void action(() =>
@@ -1374,9 +1375,9 @@ export function CardDetails({
               <Button
                 variant="outline"
                 disabled={busy}
-                onClick={() => {
+                onClick={async () => {
                   if (
-                    window.confirm(
+                    await confirmAction(
                       "Permanently delete all attachments of this card from disk? This cannot be undone, even if you restore the card.",
                     )
                   )
@@ -1403,9 +1404,9 @@ export function CardDetails({
                 size="sm"
                 variant="outline"
                 disabled={busy}
-                onClick={() => {
+                onClick={async () => {
                   if (
-                    window.confirm(
+                    await confirmAction(
                       "I inspected the worktree and confirmed the old Pi process has stopped. Release this card for retry?",
                     )
                   )

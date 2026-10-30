@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button } from "./components/ui/button";
 import { api } from "./api.js";
 import type { Card } from "./model.js";
+import { confirmAction } from "./confirm.js";
 
 /** Local main has commits origin/main lacks. `resettable` means they are only published card merges. */
 export type MainRecovery = {
@@ -59,9 +60,9 @@ export function MainReset({
         disabled={busy}
         onClick={async () => {
           if (
-            !window.confirm(
+            !(await confirmAction(
               `Reset local main from ${main.tip.slice(0, 12)} to origin/main ${main.originMain.slice(0, 12)}? The old tip is saved as ${main.recoveryBranch}.`,
-            )
+            ))
           )
             return;
           setBusy(true);
