@@ -462,7 +462,7 @@ const server = createServer(async (req, res) => {
       for (const item of purged) removeCardAttachmentFiles(dataDir, item.cardId);
       send(res, 200, purged); return;
     }
-    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events))?)?$/);
+    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events|discard))?)?$/);
     if (chatRoute) {
       const repoBoard = board.getBoard(chatRoute[1]), chatId = chatRoute[2], action = chatRoute[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -479,6 +479,8 @@ const server = createServer(async (req, res) => {
           if (typeof message !== "string" || !message.trim() || message.length > 16000) throw new Error("Write a message of up to 16000 characters");
           send(res, 202, chats.send(repoBoard, chatId, message.trim())); return;
         }
+        // Automatic cleanup of an abandoned empty chat; unlike DELETE it refuses when a message was saved or a reply is running.
+        if (req.method === "POST" && action === "discard") { send(res, 200, { discarded: chats.discardIfEmpty(chatId) }); return; }
         if (req.method === "POST" && action === "stop") { chats.stop(chatId); send(res, 200, { ok: true }); return; }
         // Server-sent events: the live reply as it is written, and each message once saved.
         if (req.method === "GET" && action === "events") {

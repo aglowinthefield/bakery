@@ -218,5 +218,12 @@ export class Chats {
     for (const file of readdirSync(this.options.sessionDir).filter(name => name.endsWith(`_${chatId}.jsonl`))) unlinkSync(join(this.options.sessionDir, file));
   }
 
+  /** Deletes the chat only if it has no saved message and no reply running. Checked and deleted in one synchronous step, so a send cannot slip in between. */
+  discardIfEmpty(chatId: string): boolean {
+    if (this.turns.has(chatId) || !this.board.getChat(chatId) || this.board.listChatMessages(chatId).length > 0) return false;
+    this.delete(chatId);
+    return true;
+  }
+
   shutdown() { for (const id of this.turns.keys()) this.stop(id); }
 }
