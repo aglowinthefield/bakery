@@ -1453,12 +1453,15 @@ export function App() {
                 (active || pullsActive || visualizerActive || chatActive);
               return (
                 <div key={item.id} className="rounded-md">
-                  <div className="rounded-md hover:bg-accent/30">
+                  {/* The whole row toggles; keyboard clicks on the button bubble up to it. */}
+                  <div
+                    className="cursor-pointer rounded-md pb-1.5 hover:bg-accent/30"
+                    onClick={() => {
+                      toggleRepoOpen(item.id, open);
+                      if (!open) openBoard(item.id);
+                    }}
+                  >
                     <button
-                      onClick={() => {
-                        toggleRepoOpen(item.id, open);
-                        if (!open) openBoard(item.id);
-                      }}
                       aria-expanded={open}
                       className="flex w-full min-w-0 items-start gap-2.5 px-3 pb-0 pt-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
                       title={item.repo}
@@ -1470,7 +1473,7 @@ export function App() {
                     </button>
                     <ul
                       aria-label="Card counts"
-                      className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-[3.375rem] pr-3 mb-1.5"
+                      className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-[3.375rem] pr-3"
                     >
                       {sidebarCounts.map((group) => {
                         const Icon = group.icon;
