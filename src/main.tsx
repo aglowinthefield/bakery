@@ -1399,7 +1399,7 @@ export function App() {
           }}
           className="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize hover:bg-primary/30 lg:block"
         />
-        <div className="flex items-center gap-3 px-6 py-7">
+        <div className="flex items-center gap-3 px-5 py-5">
           <BrandIcon />
           <span className="text-[18px] font-semibold tracking-[-.04em]">
             bakery<span className="text-primary">.</span>
@@ -1413,15 +1413,15 @@ export function App() {
             <PanelLeftClose size={15} />
           </button>
         </div>
-        <div className="px-4 pt-5">
+        <div className="px-2 pt-1">
           <button
             onClick={openToday}
-            className={`mb-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+            className={`mb-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
-            <Sun size={16} aria-hidden="true" className="text-primary" />
+            <Sun size={16} aria-hidden="true" />
             Today
             {needsYouCount > 0 && (
-              <span className="ml-auto rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary">
+              <span className="ml-auto text-[length:var(--text-sidebar-meta)] tabular-nums text-muted-foreground">
                 {needsYouCount}
               </span>
             )}
@@ -1430,7 +1430,7 @@ export function App() {
             onClick={toggleRepos}
             aria-expanded={!reposCollapsed}
             aria-controls="sidebar-repositories"
-            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[length:var(--text-sidebar-heading)] font-medium uppercase tracking-[.08em] text-muted-foreground hover:text-foreground"
+            className="mb-1 flex w-full items-center gap-1 rounded px-3 py-1 text-left text-[length:var(--text-sidebar)] text-muted-foreground/80 hover:text-foreground"
           >
             Repositories
             {reposCollapsed ? (
@@ -1450,15 +1450,15 @@ export function App() {
                 repoOpen[item.id] ??
                 (active || pullsActive || visualizerActive || chatActive);
               return (
-                <div key={item.id} className="rounded-lg">
-                  <div className="flex items-center rounded-lg hover:bg-accent/30">
+                <div key={item.id} className="rounded-md">
+                  <div className="flex items-center rounded-md hover:bg-accent/30">
                     <button
                       onClick={() => {
                         toggleRepoOpen(item.id, open);
                         if (!open) openBoard(item.id);
                       }}
                       aria-expanded={open}
-                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-[length:var(--text-sidebar)]"
+                      className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
                       title={item.repo}
                     >
                       <RepoBadge board={item} />
@@ -1546,7 +1546,7 @@ export function App() {
             })}
             <Button
               variant="ghost"
-              className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
+              className="mt-1 w-full justify-start text-[length:var(--text-sidebar)] font-normal text-muted-foreground hover:text-foreground"
               onClick={() => {
                 setError("");
                 setAddingRepo(true);
@@ -1558,22 +1558,22 @@ export function App() {
           <button
             onClick={() => openPage("stats")}
             aria-current={view === "stats" ? "page" : undefined}
-            className={`mt-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+            className={`mt-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
-            <BarChart3 size={16} aria-hidden="true" className="text-primary" />
+            <BarChart3 size={16} aria-hidden="true" />
             Statistics
           </button>
           <button
             onClick={() => openPage("logs")}
             aria-current={view === "logs" ? "page" : undefined}
-            className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "logs" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+            className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "logs" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
-            <ScrollText size={16} aria-hidden="true" className="text-primary" />
+            <ScrollText size={16} aria-hidden="true" />
             Logs
           </button>
           <Button
             variant="ghost"
-            className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
+            className="mt-1 w-full justify-start text-[length:var(--text-sidebar)] font-normal text-muted-foreground hover:text-foreground"
             onClick={() => {
               setError("");
               openPage("settings");
@@ -1583,7 +1583,7 @@ export function App() {
             <Settings2 size={15} /> Settings
           </Button>
         </div>
-        <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
+        <div className="mt-auto hidden border-t border-border px-5 py-3 lg:block">
           <div className="flex items-center gap-2 text-[length:var(--text-sidebar-meta)] text-muted-foreground">
             <span className="size-1.5 rounded-full bg-status-review" />{" "}
             <ServerHost /> <span className="ml-auto font-mono">v0.1</span>
