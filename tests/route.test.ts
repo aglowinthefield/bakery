@@ -6,6 +6,8 @@ const routes: Route[] = [
   { view: "today", boardId: null, cardId: null },
   { view: "stats", boardId: null, cardId: null },
   { view: "logs", boardId: null, cardId: null },
+  { view: "settings", boardId: null, cardId: null, section: "general" },
+  { view: "settings", boardId: null, cardId: null, section: "updates" },
   { view: "board", boardId: "b1", cardId: null },
   { view: "pulls", boardId: "b1", cardId: null },
   { view: "visualizer", boardId: "b1", cardId: null },

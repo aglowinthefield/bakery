@@ -38,6 +38,7 @@ test("density picker rescales spacing and type, saves, and paints the cached den
   try {
     await page.goto(url);
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Appearance" }).click();
     const group = page.getByRole("group", { name: "Density" });
     assert.equal(await group.getByRole("radio", { name: "Default" }).isChecked(), true);
     const base = await page.evaluate(measure);
@@ -61,6 +62,7 @@ test("density picker rescales spacing and type, saves, and paints the cached den
     release();
 
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("group", { name: "Density" }).getByRole("radio", { name: "Default" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.density === undefined && localStorage.getItem("bakery-density") === "default");
     assert.deepEqual(await page.evaluate(measure), base);

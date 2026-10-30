@@ -47,7 +47,8 @@ test("Settings switches between the preserved default and Compline after reload"
     });
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     await page.getByRole("button", { name: "Settings" }).click();
-    const dialog = page.getByRole("dialog");
+    await page.getByRole("button", { name: "Appearance" }).click();
+    const dialog = page.locator("main:visible");
     assert.equal(await dialog.getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).isChecked(), true);
     const background = await page.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor);
     const defaultSidebar = await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor);
@@ -71,12 +72,12 @@ test("Settings switches between the preserved default and Compline after reload"
       return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
     });
     assert.ok(contrast.every((ratio) => ratio >= 4.5), `Text contrast below 4.5: ${contrast}`);
-    assert.equal(await dialog.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(38, 42, 47)");
     await dialog.getByRole("radio", { name: "Compline Dark", exact: true }).focus();
     await page.keyboard.press("Shift+Tab");
     await page.keyboard.press("Tab");
     assert.equal(await dialog.getByRole("radio", { name: "Compline Dark", exact: true }).evaluate((el) => getComputedStyle(el).outlineColor), "rgb(163, 173, 183)");
-    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.goBack();
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: /Review card/ }).click();
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(165, 181, 170)");
@@ -94,9 +95,10 @@ test("Settings switches between the preserved default and Compline after reload"
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Settings" }).click();
-    assert.equal(await page.getByRole("dialog").getByRole("radio", { name: "Compline Dark", exact: true }).isChecked(), true);
+    await page.getByRole("button", { name: "Appearance" }).click();
+    assert.equal(await page.locator("main:visible").getByRole("radio", { name: "Compline Dark", exact: true }).isChecked(), true);
     assert.equal(await page.locator("html").getAttribute("data-theme"), "compline");
-    await page.getByRole("dialog").getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).check();
+    await page.locator("main:visible").getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default");
     assert.equal(await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor), defaultSidebar);
     await page.close();
@@ -133,7 +135,8 @@ test("Compline (match system) follows the system light/dark setting", async () =
     await page.reload();
     assert.equal(await page.locator("html").getAttribute("data-theme"), "compline");
     await page.getByRole("button", { name: "Settings" }).click();
-    assert.equal(await page.getByRole("dialog").getByRole("radio", { name: "Compline (match system)" }).isChecked(), true);
+    await page.getByRole("button", { name: "Appearance" }).click();
+    assert.equal(await page.locator("main:visible").getByRole("radio", { name: "Compline (match system)" }).isChecked(), true);
     await page.close();
   } finally {
     await browser?.close();

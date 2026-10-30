@@ -58,6 +58,7 @@ test("database theme still loads when browser storage rejects writes", async () 
   try {
     await page.goto(new URL("/board/board", url).href);
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Appearance" }).click();
     assert.equal(await page.getByRole("radio", { name: "Light", exact: true }).isChecked(), true);
     assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(245, 243, 238)");
   } finally { await page.close(); }
@@ -120,10 +121,13 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.equal(dark.add, "rgb(25, 53, 41)");
     assert.equal(dark.remove, "rgb(59, 37, 40)");
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("radio", { name: "Light", exact: true }).check();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
-    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+    await page.goBack();
+    // Going back reopens the card this screen left; close it so the next click opens it fresh.
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: /Review card/ }).click();
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
@@ -144,19 +148,25 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(56, 104, 74)");
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
-    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+    await page.goBack();
+    // Going back reopens the card this screen left; close it so the next click opens it fresh.
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: /Review card/ }).click();
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), dark);
     failPatch = true;
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Appearance" }).click();
     // click, not check: the rejected save reverts the radio, which check() reports as a failure when it lands first.
     await page.getByRole("radio", { name: "Light", exact: true }).click();
     await page.getByRole("alert").filter({ hasText: "Save rejected" }).waitFor();
-    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+    await page.goBack();
+    // Going back reopens the card this screen left; close it so the next click opens it fresh.
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: /Review card/ }).click();
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();

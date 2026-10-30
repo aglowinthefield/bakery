@@ -14,7 +14,7 @@ import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { discuss, discussionPrompt } from "./discuss.js";
-import { Chats } from "./chat.js";
+import { Chats, writeTopic } from "./chat.js";
 import { draftPullRequest } from "./pr-draft.js";
 import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
 
@@ -54,6 +54,7 @@ const cliHost = bindHost === "0.0.0.0" || bindHost === "::" ? "127.0.0.1" : bind
 const chats = new Chats(board, {
   piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs")}`,
   env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
+  topic: (repoBoard, message) => writeTopic(piBin, repoBoard.repo, piModelArgs(board.agentModelFor(repoBoard.repo, "draft")), message),
 });
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
@@ -75,6 +76,13 @@ const autoReview = new AutoReview(board, integration, piBin, card => worker.star
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
 // Only a hosted server (npm start) updates itself. Under the dev supervisor the checkout is someone's working copy.
+// What this process is running: package.json's version plus the commit it started on (null outside a git checkout).
+const version = (() => {
+  let packageVersion = "unknown", sha: string | null = null, date: string | null = null;
+  try { packageVersion = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version ?? packageVersion; } catch { /* keep unknown */ }
+  try { [sha, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
+  return { version: packageVersion, sha, date };
+})();
 const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
 let updateTimer: NodeJS.Timeout | undefined;
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
@@ -187,7 +195,7 @@ const server = createServer(async (req, res) => {
         if (autoReview.activeCardId) cardIds.add(autoReview.activeCardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + (autoReview.active ? 1 : 0), cards, updates: updates?.state ?? null });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + (autoReview.active ? 1 : 0), cards, updates: updates?.state ?? null, ...version });
       return;
     }
     if (path === "/api/update" && req.method === "POST") {

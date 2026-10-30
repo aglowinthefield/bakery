@@ -56,6 +56,7 @@ test("Review notifications require opt-in and a newly observed status change", a
     assert.equal(await checkbox.isChecked(), true);
     assert.equal(notifyOnReview, true);
     assert.deepEqual(await notices(), []);
+    await page.goBack();
     statuses.changing = "review";
     await page.waitForFunction(() => (window as unknown as { notices: unknown[] }).notices.length === 1);
     assert.deepEqual(await notices(), [{ title: "Card ready for review", body: "changing card" }]);

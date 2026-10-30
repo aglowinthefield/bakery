@@ -305,7 +305,10 @@ export type DiscussionMessage = {
   attachments: Attachment[];
 };
 
-/** A board chat: a general agent session about one repo. `pending` is set while the agent is replying. */
+/**
+ * A board chat: a general agent session about one repo. `title` is the first line of the first message, `topic` a
+ * few-word summary of it (empty until written). `pending` is set while the agent is replying.
+ */
 export type Chat = {
   id: string;
   boardId: string;
@@ -313,6 +316,7 @@ export type Chat = {
   /** Pi model and thinking level for this chat's turns; "" leaves it to Pi's default. */
   model: string;
   thinking: ThinkingLevel | "";
+  topic?: string;
   createdAt: string;
   updatedAt: string;
   pending?: boolean;
