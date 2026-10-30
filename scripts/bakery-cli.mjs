@@ -8,7 +8,7 @@ const usage = `bakery-cli — local Bakery API client
 Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|high|urgent] [--board ID|PATH] [--json]
        bakery-cli doctor [--json]
        bakery-cli boards [--json]
-       bakery-cli board [ID|PATH] [--integration local|github-pr] [--json]
+       bakery-cli board [ID|PATH] [--integration local|github-pr] [--merge-limit 0-99] [--json]
        bakery-cli pr CARD_ID [URL|off] [--board ID|PATH] [--json]
        bakery-cli cards [--board ID|PATH] [--json]
        bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority -100..100|low|normal|high|urgent] [--after CARD_ID]... [--board ID|PATH] [--json]
@@ -50,6 +50,8 @@ undone, even if the card is restored, so it needs --yes.
 stats prints card counts per lane and the pickup state.
 board prints a board's integration mode; --integration github-pr makes a card Done when its GitHub pull request
 merges onto origin/main (needs gh and a GitHub remote link), --integration local merges on Approve.
+--merge-limit sets the most unattended review merges per rolling 24 hours (0 means no limit); at the limit
+cards wait in Review for a person.
 pr links a card to a pull request URL instead of the bakery/CARD_ID branch lookup; off removes the link.
 --yes is required before start, enabling or resetting pickup, or moving a card to Ready on a pickup-enabled
 board; each can start paid Pi runs. No command approves a merge.`;
@@ -58,7 +60,7 @@ function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
   // These may repeat; each occurrence adds one card ID.
   const lists = new Set(["after", "on"]);
-  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration", "merge-limit"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
@@ -170,6 +172,8 @@ async function main() {
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
   if (opts.integration !== undefined && command !== "board") throw new Error("--integration is only valid with board");
   if (opts.integration !== undefined && !["local", "github-pr"].includes(opts.integration)) throw new Error("Integration must be local or github-pr");
+  if (opts["merge-limit"] !== undefined && command !== "board") throw new Error("--merge-limit is only valid with board");
+  if (opts["merge-limit"] !== undefined && !/^\d{1,2}$/.test(opts["merge-limit"])) throw new Error("Merge limit must be a whole number from 0 (no limit) to 99");
   if (command === "board" && args.length && opts.board) throw new Error("Name the board once, as ID|PATH or with --board");
   if (command === "pr") cardId(args[0]);
   if (["show", "edit", "archive", "purge-attachments", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
@@ -286,8 +290,10 @@ async function main() {
       ...lanes.map(lane => `${lane}\t${counts[lane]}`), `total\t${total}`, pickupSummary(board),
     ]);
   } else if (command === "board") {
-    const updated = opts.integration === undefined ? board : await request(origin, `${path}/settings`, "PATCH", { integration: opts.integration });
-    print(updated, opts.json, [`${updated.id}\t${updated.repo}\tintegration:${updated.integration ?? "local"}${updated.remoteUrl ? `\tremote:${updated.remoteUrl}` : ""}${updated.integrationError ? `\terror:${updated.integrationError}` : ""}`]);
+    let updated = board;
+    if (opts.integration !== undefined) updated = await request(origin, `${path}/settings`, "PATCH", { integration: opts.integration });
+    if (opts["merge-limit"] !== undefined) updated = await request(origin, `${path}/settings`, "PATCH", { autoReviewMergeLimit: Number(opts["merge-limit"]) });
+    print(updated, opts.json, [`${updated.id}\t${updated.repo}\tintegration:${updated.integration ?? "local"}\treview-merges:${updated.autoReviewMerges ?? 0}/${updated.autoReviewMergeLimit ? updated.autoReviewMergeLimit : "no limit"} in 24h${updated.remoteUrl ? `\tremote:${updated.remoteUrl}` : ""}${updated.integrationError ? `\terror:${updated.integrationError}` : ""}`]);
   } else if (command === "pr") {
     const card = args.length === 1 ? await findCard(origin, path, args[0])
       : await request(origin, `${path}/cards/${encodeURIComponent(args[0])}/pull-request`, "PUT", { url: args[1] === "off" ? "" : args[1] });

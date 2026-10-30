@@ -38,6 +38,8 @@ export type Board = {
   autoReviewEnabled: boolean;
   verificationCommand: string;
   autoReviewEnabledAt: string | null;
+  autoReviewMergeLimit?: number;
+  autoReviewMerges?: number;
   autoPickupEnabled: boolean;
   pickupConcurrency: number;
   pickupDailyLimit: number;

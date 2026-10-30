@@ -268,6 +268,7 @@ flowchart LR
 - It's set per repository. Open the repository's edit (pencil) dialog, enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
 - Bakery only considers runs that reach Review after you enable it. Cards already in Review don't merge.
 - Failed reviews aren't retried.
+- Each board has a limit on unattended merges per rolling 24 hours (0, the default, means no limit). Set it next to the toggle or with `bakery-cli board --merge-limit N`. Once it's reached, new cards wait in Review with the reason, and no verification or reviewer tokens are spent on them.
 - Turning the setting off stops a review in progress from merging.
 - The verification command runs locally with your permissions.
 - The reviewer is a full Pi agent in the card's worktree, with the same tools, extensions, skills, and context files as a card run. It can read code and run builds or tests, and runs locally with your permissions. It's told not to change anything; if the work changes during review, the card is left for you.
@@ -295,7 +296,7 @@ npm run bakery -- start CARD_ID... --yes
 npm run bakery -- runs CARD_ID
 npm run bakery -- conflicts
 npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
-npm run bakery -- board [--integration local|github-pr]
+npm run bakery -- board [--integration local|github-pr] [--merge-limit 0-99]
 npm run bakery -- pr CARD_ID [URL|off]
 ```
 
@@ -313,7 +314,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
-- `board [--integration local|github-pr]` shows the board, or switches its integration mode. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
+- `board [--integration local|github-pr] [--merge-limit 0-99]` shows the board, switches its integration mode, or sets its unattended-merge limit. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
 - To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get a `bakery-cli` command on your `PATH`, run `npm link`.
 
 ## Boards and lanes
