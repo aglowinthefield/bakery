@@ -269,6 +269,26 @@ export const waitingOn = (card: Card, cards: Card[]) =>
         .map((id) => cards.find((item) => item.id === id))
         .filter((item): item is Card => !!item && !finished(item.status))
     : [];
+/**
+ * The Triage cards that move to Ready along with a Triage card: everything it waits on that is still in
+ * Triage, and what those wait on in turn. Cards already further along are left out and not followed.
+ */
+export const readyCompanions = (card: Card, cards: Card[]): Card[] => {
+  if (card.status !== "triage") return [];
+  const byId = new Map(cards.map((item) => [item.id, item]));
+  const seen = new Set([card.id]);
+  const found: Card[] = [];
+  const queue = [card];
+  for (let next = queue.shift(); next; next = queue.shift())
+    for (const id of next.dependsOn ?? []) {
+      const parent = byId.get(id);
+      if (!parent || parent.status !== "triage" || seen.has(id)) continue;
+      seen.add(id);
+      found.push(parent);
+      queue.push(parent);
+    }
+  return found;
+};
 export type Run = {
   id: string;
   attempt: number;
@@ -305,11 +325,15 @@ export type DiscussionMessage = {
   attachments: Attachment[];
 };
 
-/** A board chat: a general agent session about one repo. `pending` is set while the agent is replying. */
+/**
+ * A board chat: a general agent session about one repo. `title` is the first line of the first message, `topic` a
+ * few-word summary of it (empty until written). `pending` is set while the agent is replying.
+ */
 export type Chat = {
   id: string;
   boardId: string;
   title: string;
+  topic?: string;
   createdAt: string;
   updatedAt: string;
   pending?: boolean;

@@ -80,7 +80,8 @@ type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "startQueued"
 export type Attachment = { id: string; cardId: string; messageId: string | null; name: string; type: string; size: number; createdAt: string };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string; attachments: Attachment[] };
 /** A board chat: a general agent session about one repo and its board. Pi keeps the conversation; Bakery keeps what to show. */
-export type Chat = { id: string; boardId: string; title: string; createdAt: string; updatedAt: string };
+/** `title` is the first line of the first message; `topic` is a few-word summary of it, empty until one is written. */
+export type Chat = { id: string; boardId: string; title: string; topic: string; createdAt: string; updatedAt: string };
 /** What an agent turn did, in order: reply text and the tools it ran. */
 export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
@@ -148,7 +149,7 @@ export class Board {
       -- Files the operator attached to a card, or to one of its discussion messages (messageId). The bytes live on disk; see server/attachments.ts.
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), messageId TEXT REFERENCES discussion_messages(id), name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attachments_card ON attachments(cardId, createdAt);
-      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS chats_board ON chats(boardId, updatedAt);
       CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, chatId TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages(chatId, createdAt);
@@ -185,6 +186,7 @@ export class Board {
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
+    if (!(this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).some(column => column.name === "topic")) this.db.exec("ALTER TABLE chats ADD COLUMN topic TEXT NOT NULL DEFAULT ''");
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
     const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
     if (!settingsColumns.has("cardDetailsLayout")) this.db.exec("ALTER TABLE settings ADD COLUMN cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side'))");
@@ -929,7 +931,27 @@ export class Board {
     this.db.prepare("UPDATE cards SET title=?, body=?, priority=?, updatedAt=? WHERE id=?").run(input.title, input.body, parsePriority(input.priority ?? card.priority), now(), id);
     return this.getCard(id)!;
   }
-  setStatus(id: string, status: "triage" | "ready" | "done"): Card {
+  /**
+   * Moves a Triage card to Ready together with the Triage cards it waits on, following dependencies through Triage
+   * cards only; anything already Ready or further along stays put. One transaction, so the set never half-moves.
+   * Returns the card first, then the dependencies it brought, oldest first.
+   */
+  moveToReadyWithDependencies(id: string): Card[] {
+    const card = this.getCard(id);
+    if (!card) throw new Error("Card not found");
+    if (card.status !== "triage") return [this.setStatus(id, "ready")];
+    const dependencies = (this.db.prepare(`WITH RECURSIVE reach(id) AS (SELECT ? UNION SELECT d.dependsOn FROM card_dependencies d
+        JOIN reach ON d.cardId=reach.id JOIN cards parent ON parent.id=d.dependsOn WHERE parent.status='triage')
+      SELECT cards.id FROM reach JOIN cards ON cards.id=reach.id WHERE cards.id<>? ORDER BY cards.createdAt, cards.rowid`)
+      .all(id, id) as { id: string }[]).map(row => row.id);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const moved = [this.setStatus(id, "ready"), ...dependencies.map(dep => this.setStatus(dep, "ready", `Moved to Ready because "${card.title}" waits on it`))];
+      this.db.exec("COMMIT");
+      return moved;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  setStatus(id: string, status: "triage" | "ready" | "done", reason?: string): Card {
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
@@ -944,7 +966,7 @@ export class Board {
       return this.getCard(id)!;
     }
     this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), id);
-    this.explain(id, card.status === "done" ? "Reopened" : card.status === "failed" ? "Moved back to Ready after a failed run" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage");
+    this.explain(id, reason ?? (card.status === "done" ? "Reopened" : card.status === "failed" ? "Moved back to Ready after a failed run" : status === "done" ? "Marked done without a run" : status === "ready" ? "Moved to Ready" : "Moved back to Triage"));
     return this.getCard(id)!;
   }
   // Drops a Triage, Ready, Failed or Review card to Done without merging. Runs, worktree and branch stay, so Reopen can bring it back.
@@ -1043,13 +1065,17 @@ export class Board {
   }
   getChat(id: string): Chat | undefined { return this.db.prepare("SELECT * FROM chats WHERE id=?").get(id) as Chat | undefined; }
   createChat(boardId: string, title = ""): Chat {
-    const time = now(), chat = { id: randomUUID(), boardId, title, createdAt: time, updatedAt: time };
+    const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", createdAt: time, updatedAt: time };
     this.db.prepare("INSERT INTO chats(id, boardId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)").run(chat.id, boardId, title, time, time);
     return chat;
   }
   renameChat(id: string, title: string): Chat {
     this.db.prepare("UPDATE chats SET title=? WHERE id=?").run(title, id);
     return this.getChat(id)!;
+  }
+  setChatTopic(id: string, topic: string): Chat | undefined {
+    this.db.prepare("UPDATE chats SET topic=? WHERE id=?").run(topic, id);
+    return this.getChat(id);
   }
   deleteChat(id: string) {
     this.db.prepare("DELETE FROM chat_messages WHERE chatId=?").run(id);
