@@ -25,7 +25,7 @@ test("POST /start during a drain answers 202 queued, starts no run, and persists
   // An IPC channel lets the test play the dev supervisor and send the drain message.
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port) },
+    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";

@@ -59,7 +59,7 @@ async function withReplay(options: { commit: boolean }, check: (state: Replay) =
     const launch = async () => {
       const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
         cwd: process.cwd(),
-        env: { ...process.env, HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi },
+        env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi },
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       });
       children.push(child);
