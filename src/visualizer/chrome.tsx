@@ -1,3 +1,4 @@
+import { Info, Minimize2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { DoneFilter, VisualState } from "./graph.js";
 import { type Look, readLook } from "./look.js";
@@ -193,29 +194,44 @@ export function Legend({ look }: { look: Look }) {
     setOpen(!open);
   };
   return (
-    <div className="absolute right-3 bottom-12 flex flex-col items-end gap-1">
-      {open && (
-        <ul
-          aria-label="Legend"
-          className="pointer-events-none grid gap-1 rounded-lg border bg-popover/85 px-3 py-2 text-xs backdrop-blur"
+    <div className="absolute right-3 bottom-12 text-xs">
+      {open ? (
+        <div className="relative rounded-lg border bg-popover/85 backdrop-blur">
+          <button
+            type="button"
+            aria-label="Hide legend"
+            title="Hide legend"
+            onClick={toggle}
+            className="absolute top-1.5 right-1.5 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <Minimize2 size={12} aria-hidden="true" />
+          </button>
+          <ul
+            aria-label="Legend"
+            className="pointer-events-none grid gap-1 px-3 py-2 pr-7"
+          >
+            {stateOrder.map((state) => (
+              <li key={state} className="flex items-center gap-2">
+                <Swatch state={state} look={look} />
+                <span className="text-foreground">{stateNames[state]}</span>
+                <span className="text-muted-foreground">
+                  {stateHints[state]}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <button
+          type="button"
+          aria-label="Show legend"
+          title="Show legend"
+          onClick={toggle}
+          className="cursor-pointer rounded-md border bg-popover/85 p-1.5 text-muted-foreground backdrop-blur hover:text-foreground"
         >
-          {stateOrder.map((state) => (
-            <li key={state} className="flex items-center gap-2">
-              <Swatch state={state} look={look} />
-              <span className="text-foreground">{stateNames[state]}</span>
-              <span className="text-muted-foreground">{stateHints[state]}</span>
-            </li>
-          ))}
-        </ul>
+          <Info size={14} aria-hidden="true" />
+        </button>
       )}
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={toggle}
-        className="cursor-pointer rounded-md border bg-popover/85 px-2 py-0.5 text-xs text-muted-foreground backdrop-blur hover:text-foreground"
-      >
-        {open ? "Hide legend" : "Legend"}
-      </button>
     </div>
   );
 }
