@@ -14,7 +14,10 @@ export function safeFileName(name: string): string {
   return clean || "file";
 }
 
-/** Where an attachment's bytes live: `<data dir>/attachments/<card id>/<attachment id>/<name>`. The name keeps its extension for the agent. */
+/**
+ * Where an attachment's bytes live: `<data dir>/attachments/<card id>/<attachment id>/<name>`. The name keeps its extension for the agent.
+ * Only deleting the attachment removes them. Cards are never deleted, and archiving a card or removing its board can be undone, so both keep the files.
+ */
 export const attachmentPath = (dataDir: string, item: Pick<Attachment, "cardId" | "id" | "name">) =>
   join(dataDir, "attachments", item.cardId, item.id, safeFileName(item.name));
 
