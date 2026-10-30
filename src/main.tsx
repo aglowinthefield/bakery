@@ -1462,7 +1462,7 @@ export function App() {
                       title={item.repo}
                     >
                       <RepoBadge board={item} />
-                      <span className="truncate">{repoName(item.repo)}</span>
+                      <span className="truncate text-[14px] font-medium text-foreground">{repoName(item.repo)}</span>
                     </button>
                     <ul
                       aria-label="Card counts"
