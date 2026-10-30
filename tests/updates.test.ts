@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Updates } from "../server/updates.js";
+import { Updates, promoteStagedUi } from "../server/updates.js";
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { encoding: "utf8" }).trim();
@@ -152,4 +152,22 @@ test("an install that fast-forwards and then fails its build is not retried auto
     await updates.tick(true);
     assert.equal(installs, 1);
   } finally { close(); }
+});
+
+// The install builds into dist-next so a draining server keeps serving the UI that matches its API.
+test("a restarted server swaps the staged UI build into dist", () => {
+  const root = mkdtempSync(join(tmpdir(), "bakery-ui-"));
+  try {
+    assert.equal(promoteStagedUi(root), false);
+    mkdirSync(join(root, "dist", "assets"), { recursive: true });
+    writeFileSync(join(root, "dist", "index.html"), "old");
+    writeFileSync(join(root, "dist", "assets", "old.js"), "old");
+    mkdirSync(join(root, "dist-next"));
+    writeFileSync(join(root, "dist-next", "index.html"), "new");
+    assert.equal(promoteStagedUi(root), true);
+    assert.equal(readFileSync(join(root, "dist", "index.html"), "utf8"), "new");
+    assert.equal(existsSync(join(root, "dist", "assets", "old.js")), false);
+    assert.equal(existsSync(join(root, "dist-next")), false);
+    assert.equal(promoteStagedUi(root), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

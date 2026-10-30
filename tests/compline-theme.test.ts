@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chromium } from "playwright";
+
+// The focus-ring check relies on Chromium's Tab order; Safari skips radios and buttons by default.
+process.env.BAKERY_TEST_BROWSER = "chromium";
 import { createServer } from "vite";
 
 test("Settings switches between the preserved default and Compline after reload", async () => {
