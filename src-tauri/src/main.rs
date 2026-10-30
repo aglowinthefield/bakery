@@ -218,18 +218,27 @@ fn main() {
                 MenuItem::with_id(app, "reload", "Reload Bakery", true, Some("CmdOrCtrl+R"))?;
             let browser =
                 MenuItem::with_id(app, "browser", "Open Bakery in browser", true, None::<&str>)?;
-            let bakery = Submenu::with_items(
-                app,
-                "Bakery",
-                true,
-                &[
-                    &settings,
-                    &reload,
-                    &browser,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::quit(app, None)?,
-                ],
-            )?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let quit = PredefinedMenuItem::quit(app, None)?;
+            let mut bakery_items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
+                vec![&settings, &reload, &browser, &separator];
+            // A custom menu replaces the default one, so restore macOS's Cmd+H items.
+            #[cfg(target_os = "macos")]
+            let (hide, hide_others, show_all, hide_separator) = (
+                PredefinedMenuItem::hide(app, None)?,
+                PredefinedMenuItem::hide_others(app, None)?,
+                PredefinedMenuItem::show_all(app, None)?,
+                PredefinedMenuItem::separator(app)?,
+            );
+            #[cfg(target_os = "macos")]
+            bakery_items.extend([
+                &hide as &dyn tauri::menu::IsMenuItem<_>,
+                &hide_others,
+                &show_all,
+                &hide_separator,
+            ]);
+            bakery_items.push(&quit);
+            let bakery = Submenu::with_items(app, "Bakery", true, &bakery_items)?;
             let edit = Submenu::with_items(
                 app,
                 "Edit",
@@ -244,7 +253,16 @@ fn main() {
                     &PredefinedMenuItem::select_all(app, None)?,
                 ],
             )?;
-            app.set_menu(Menu::with_items(app, &[&bakery, &edit])?)?;
+            let window = Submenu::with_items(
+                app,
+                "Window",
+                true,
+                &[
+                    &PredefinedMenuItem::minimize(app, None)?,
+                    &PredefinedMenuItem::fullscreen(app, None)?,
+                ],
+            )?;
+            app.set_menu(Menu::with_items(app, &[&bakery, &edit, &window])?)?;
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "connection" => show_connection(app),
                 "reload" => {
