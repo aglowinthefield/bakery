@@ -383,7 +383,7 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 `npm start` has no file watcher. `deploy/bakery-update.service` and `deploy/bakery-update.timer` run `scripts/update.sh` every 2 minutes, which only fetches `origin/main`. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
 
-When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. While no run or review is active, it installs pending updates by itself within 30 seconds. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
+When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI into `dist-next`). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Until then it keeps serving the UI that matches its own API; the restarted server moves `dist-next` over `dist`. While no run or review is active, it installs pending updates by itself within 30 seconds. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
 
 ## Safety
 
