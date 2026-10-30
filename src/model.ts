@@ -1,7 +1,7 @@
 import type { SemanticTitleRules } from "./pr-title.js";
 import type { ThemeName } from "./themes.js";
 import type { UsageFields } from "./usage.js";
-import type { AgentModels } from "../server/agent-models.js";
+import type { AgentModels, ThinkingLevel } from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
 
 export type Status =
@@ -347,6 +347,9 @@ export type Chat = {
   id: string;
   boardId: string;
   title: string;
+  /** Pi model and thinking level for this chat's turns; "" leaves it to Pi's default. */
+  model: string;
+  thinking: ThinkingLevel | "";
   topic?: string;
   createdAt: string;
   updatedAt: string;

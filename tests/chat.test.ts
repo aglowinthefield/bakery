@@ -57,7 +57,7 @@ echo '{"type":"tool_execution_end","toolCallId":"t","toolName":"bash","isError":
 echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"done"}}'
 echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
 echo '{"type":"agent_settled","aborted":false}'`);
-    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const chat = board.createChat(repoBoard.id);
     const finished = settle(chats, chat.id);
     chats.send(repoBoard, chat.id, "what is on the board?\nsecond line");
@@ -70,15 +70,88 @@ echo '{"type":"agent_settled","aborted":false}'`);
     assert.equal(board.getChat(chat.id)?.title, "what is on the board?");
     const args = readFileSync(join(dir, "args"), "utf8");
     assert.ok(args.includes(`--session-id ${chat.id}`) && args.includes("--print") && args.includes("-- what is on the board?"));
+    assert.ok(args.includes("--model openai/gpt-6.1-sol --thinking low --"), "a new chat runs on the cheap chat default");
     assert.equal(chats.live(chat.id), null);
   } finally { done(); }
+});
+
+test("a chat keeps its own model, separate from card runs, and switching applies to the next turn", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    board.setAgentModels(repoBoard.id, { work: { model: "anthropic/claude-opus-4-5", thinking: "high" } });
+    const chat = board.createChat(repoBoard.id);
+    assert.deepEqual([chat.model, chat.thinking], ["openai/gpt-6.1-sol", "low"]);
+    const switched = board.setChatModel(chat.id, { model: "anthropic/claude-sonnet-4-5", thinking: "medium" });
+    assert.deepEqual([switched.model, switched.thinking], ["anthropic/claude-sonnet-4-5", "medium"]);
+    assert.deepEqual(board.listChats(repoBoard.id).map(item => [item.model, item.thinking]), [["anthropic/claude-sonnet-4-5", "medium"]]);
+    assert.throws(() => board.setChatModel(chat.id, { model: "--evil", thinking: "low" }), /Pi model pattern/);
+    assert.throws(() => board.setChatModel(chat.id, { model: "a/b", thinking: "huge" }), /thinking must be/);
+    const picked = board.createChat(repoBoard.id, "", { model: "", thinking: "" });
+    assert.deepEqual([picked.model, picked.thinking], ["openai/gpt-6.1-sol", "low"], "an empty pick means the chat default");
+
+    const pi = fakePi(dir, `for last; do :; done; echo "$@" > "${dir}/args-$last"
+echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ok"}}'
+echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
+echo '{"type":"agent_settled","aborted":false}'`);
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    let finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "first");
+    await finished;
+    board.setChatModel(chat.id, { model: "openai/gpt-6.1-sol", thinking: "minimal" });
+    finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "second");
+    await finished;
+    finished = settle(chats, picked.id);
+    chats.send(repoBoard, picked.id, "third");
+    await finished;
+    const [first, second, third] = ["first", "second", "third"].map(message => readFileSync(join(dir, `args-${message}`), "utf8"));
+    assert.ok(first.includes("--model anthropic/claude-sonnet-4-5 --thinking medium --") && !first.includes("opus"), first);
+    assert.ok(second.includes("--model openai/gpt-6.1-sol --thinking minimal --"), second);
+    assert.ok(third.includes("--model openai/gpt-6.1-sol --thinking low --"), third);
+  } finally { done(); }
+});
+
+test("clearing the picker on a resumed session restores the defaults, not the session's earlier choice", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    // Like Pi: a resumed session keeps its earlier model/thinking for any flag that is omitted.
+    const pi = fakePi(dir, `model=$(cat "${dir}/model" 2>/dev/null); thinking=$(cat "${dir}/thinking" 2>/dev/null)
+while [ $# -gt 0 ]; do case "$1" in --model) model=$2; shift;; --thinking) thinking=$2; shift;; esac; shift; done
+echo "$model" > "${dir}/model"; echo "$thinking" > "${dir}/thinking"; echo "$model $thinking" >> "${dir}/effective"
+echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
+echo '{"type":"agent_settled","aborted":false}'`);
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const chat = board.createChat(repoBoard.id, "", { model: "anthropic/claude-sonnet-4-5", thinking: "high" });
+    for (const [message, choice] of [["one", undefined], ["two", { model: "", thinking: "" }]] as const) {
+      if (choice) board.setChatModel(chat.id, choice);
+      const finished = settle(chats, chat.id);
+      chats.send(repoBoard, chat.id, message);
+      await finished;
+    }
+    assert.deepEqual(readFileSync(join(dir, "effective"), "utf8").trim().split("\n"), ["anthropic/claude-sonnet-4-5 high", "openai/gpt-6.1-sol low"]);
+  } finally { done(); }
+});
+
+test("chats saved before the picker move to the cheap chat default", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-chat-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    new Board(path).close();
+    const db = new DatabaseSync(path);
+    db.exec("CREATE TABLE chats_old AS SELECT id, boardId, title, createdAt, updatedAt FROM chats; DROP TABLE chats; ALTER TABLE chats_old RENAME TO chats;");
+    db.prepare("INSERT INTO chats VALUES ('c1', 'b1', 'Old', '2025-01-01', '2025-01-01')").run();
+    db.close();
+    const board = new Board(path);
+    assert.deepEqual({ ...board.getChat("c1") }, { id: "c1", boardId: "b1", title: "Old", topic: "", createdAt: "2025-01-01", updatedAt: "2025-01-01", model: "openai/gpt-6.1-sol", thinking: "low" });
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a failed or stopped turn leaves an error message and keeps what streamed", async () => {
   const { dir, board, repoBoard, done } = fixture();
   try {
     const bad = fakePi(dir, `echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"partial"}}'\necho oops >&2\nexit 3`);
-    const chats = new Chats(board, { piBin: bad, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chats = new Chats(board, { piBin: bad, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const chat = board.createChat(repoBoard.id);
     let finished = settle(chats, chat.id);
     chats.send(repoBoard, chat.id, "hi");
@@ -86,7 +159,7 @@ test("a failed or stopped turn leaves an error message and keeps what streamed",
     assert.deepEqual(board.listChatMessages(chat.id).map(item => [item.role, item.body]), [["user", "hi"], ["agent", "partial"], ["error", "Pi failed (3): oops"]]);
 
     const slow = fakePi(dir, "sleep 30");
-    const stopping = new Chats(board, { piBin: slow, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const stopping = new Chats(board, { piBin: slow, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const other = board.createChat(repoBoard.id);
     finished = settle(stopping, other.id);
     stopping.send(repoBoard, other.id, "go");
@@ -129,7 +202,7 @@ test("the first message names the chat once, and a failed name is retried on the
     const pi = fakePi(dir, `echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'\necho '{"type":"agent_settled","aborted":false}'`);
     const asked: string[] = [];
     let fail = true;
-    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [],
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env,
       topic: async (_repoBoard, message) => { asked.push(message); if (fail) throw new Error("no model"); return "Blocked cards"; } });
     const warn = console.warn; console.warn = () => {};
     const chat = board.createChat(repoBoard.id);
@@ -171,7 +244,7 @@ test("a database from before topics gains an empty topic on its chats", () => {
 test("deleting a chat removes its messages and its Pi session file", () => {
   const { dir, board, repoBoard, done } = fixture();
   try {
-    const chats = new Chats(board, { piBin: "pi", sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chats = new Chats(board, { piBin: "pi", sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const chat = board.createChat(repoBoard.id);
     board.addChatMessage(chat.id, "user", "hello");
     writeFileSync(join(dir, "sessions", `2026-01-01T00-00-00Z_${chat.id}.jsonl`), "{}");
@@ -184,7 +257,7 @@ test("deleting a chat removes its messages and its Pi session file", () => {
 test("discardIfEmpty deletes only a chat with no saved message and no running reply", () => {
   const { dir, board, repoBoard, done } = fixture();
   try {
-    const chats = new Chats(board, { piBin: "pi", sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chats = new Chats(board, { piBin: "pi", sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const empty = board.createChat(repoBoard.id), used = board.createChat(repoBoard.id);
     board.addChatMessage(used.id, "user", "hello");
     // A client with a stale view asks about the chat that gained a message elsewhere.

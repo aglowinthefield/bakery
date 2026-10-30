@@ -7,7 +7,13 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import { api } from "./api.js";
+import { api, listModels } from "./api.js";
+import {
+  defaultChatModel,
+  thinkingLevels,
+  type AgentModel,
+  type ThinkingLevel,
+} from "../server/agent-models.js";
 import { Button } from "./components/ui/button";
 import { Markdown } from "./markdown-view.js";
 import type { Chat, ChatLive, ChatMessage, ChatPart } from "./model.js";
@@ -74,6 +80,9 @@ export function ChatView({
   const [state, setState] = useState<ChatState>({ messages: [], live: null });
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  // The model for the next new chat; an open chat shows and changes its own.
+  const [newChoice, setNewChoice] = useState<AgentModel>(defaultChatModel);
+  const [models, setModels] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(railKey) === "collapsed",
   );
@@ -196,13 +205,90 @@ export function ChatView({
     state.live?.parts.at(-1),
   ]);
 
+  const current = chats?.find((chat) => chat.id === chatId);
+  // Choices the operator made that the server has not confirmed yet, per chat. They win over the saved values on screen.
+  const [wanted, setWanted] = useState<Record<string, AgentModel>>({});
+  const wantedRef = useRef<Record<string, AgentModel>>({});
+  // Saves run one at a time per chat, each sending the newest choice, so a slow response never overwrites a newer pick.
+  const saves = useRef<Record<string, Promise<boolean>>>({});
+  const choice: AgentModel =
+    (chatId && wanted[chatId]) ||
+    (current
+      ? { model: current.model, thinking: current.thinking }
+      : newChoice);
+  const [modelDraft, setModelDraft] = useState(choice.model);
+  useEffect(() => setModelDraft(choice.model), [chatId, choice.model]);
+  const settle = (id: string, sent: AgentModel | null) => {
+    // Forget the wanted choice unless the operator has picked again since this save began.
+    const latestChoice = wantedRef.current[id];
+    if (!sent || (latestChoice && same(latestChoice, sent))) {
+      delete wantedRef.current[id];
+      setWanted((previous) => {
+        const { [id]: _, ...rest } = previous;
+        return rest;
+      });
+    }
+  };
+  const same = (a: AgentModel, b: AgentModel) =>
+    a.model === b.model && a.thinking === b.thinking;
+  const choose = (next: AgentModel) => {
+    next = { ...next, model: next.model.trim() };
+    if (!current || !chatId) return setNewChoice(next);
+    const id = chatId;
+    if (same(next, choice)) return setModelDraft(choice.model);
+    wantedRef.current[id] = next;
+    setWanted((previous) => ({ ...previous, [id]: next }));
+    saves.current[id] = (saves.current[id] ?? Promise.resolve(true)).then(
+      async () => {
+        const sending = wantedRef.current[id];
+        if (!sending) return true;
+        try {
+          const saved = await api<Chat>(`${base}/${id}`, {
+            method: "PATCH",
+            body: JSON.stringify(sending),
+          });
+          setChats(
+            (previous) =>
+              previous?.map((chat) =>
+                chat.id === id
+                  ? { ...chat, model: saved.model, thinking: saved.thinking }
+                  : chat,
+              ) ?? null,
+          );
+          settle(id, sending);
+          return true;
+        } catch (err) {
+          // Drop the pick only if nothing newer was chosen; a newer pick is saved by the next queued request.
+          const newer = wantedRef.current[id];
+          if (!newer || same(newer, sending)) settle(id, sending);
+          fail(err);
+          return false;
+        }
+      },
+    );
+  };
+  /** Resolves once every choice made for this chat is saved; false if a save failed. */
+  const flushChoice = async (id: string) => {
+    let ok = true;
+    while (wantedRef.current[id]) {
+      const pending = saves.current[id];
+      ok = (await pending) && ok;
+      if (saves.current[id] === pending && wantedRef.current[id]) break;
+    }
+    return ok;
+  };
+  const loadModels = () =>
+    void listModels().then((result) => setModels(result.models));
   useEffect(() => {
     if (focusRequest > 0) input.current?.focus();
   }, [focusRequest]);
 
   const create = async () => {
     try {
-      const chat = await api<Chat>(base, { method: "POST", body: "{}" });
+      const chat = await api<Chat>(base, {
+        method: "POST",
+        body: JSON.stringify(newChoice),
+      });
       setChats((previous) => [chat, ...(previous ?? [])]);
       setChatId(chat.id);
       setFocusRequest((n) => n + 1);
@@ -226,8 +312,13 @@ export function ChatView({
     setSending(true);
     let id = chatId;
     try {
+      if (id && !(await flushChoice(id))) return;
       if (!id) {
-        const chat = await api<Chat>(base, { method: "POST", body: "{}" });
+        const chat = await api<Chat>(base, {
+          method: "POST",
+          body: JSON.stringify(newChoice),
+        });
+        setChats((previous) => [chat, ...(previous ?? [])]);
         id = chat.id;
         setChatId(id);
       }
@@ -384,8 +475,54 @@ export function ChatView({
           )}
           <div ref={end} />
         </ol>
+        <div className="flex items-center gap-2 border-t border-border px-3 pt-2 text-xs lg:px-8">
+          <datalist id="chat-models">
+            {models.map((model) => (
+              <option key={model} value={model} />
+            ))}
+          </datalist>
+          <input
+            aria-label="Chat model"
+            list="chat-models"
+            value={modelDraft}
+            disabled={!!chatId && !current}
+            onFocus={loadModels}
+            onChange={(event) => setModelDraft(event.target.value)}
+            onBlur={() => void choose({ ...choice, model: modelDraft })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void choose({ ...choice, model: modelDraft });
+              }
+            }}
+            placeholder={defaultChatModel.model}
+            className="w-64 min-w-0 rounded-md border border-border bg-background px-2 py-1 font-mono"
+          />
+          <select
+            aria-label="Chat thinking"
+            value={choice.thinking}
+            disabled={!!chatId && !current}
+            onChange={(event) =>
+              void choose({
+                model: modelDraft,
+                thinking: event.target.value as ThinkingLevel | "",
+              })
+            }
+            className="rounded-md border border-border bg-background px-2 py-1"
+          >
+            <option value="">Default ({defaultChatModel.thinking})</option>
+            {thinkingLevels.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+          <span className="text-muted-foreground">
+            {current ? "Used from this chat's next message" : "For new chats"}
+          </span>
+        </div>
         <form
-          className="flex items-end gap-2 border-t border-border p-3 lg:px-8"
+          className="flex items-end gap-2 p-3 pt-2 lg:px-8"
           onSubmit={(event) => {
             event.preventDefault();
             void send();

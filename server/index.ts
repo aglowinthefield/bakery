@@ -54,7 +54,6 @@ const cliHost = bindHost === "0.0.0.0" || bindHost === "::" ? "127.0.0.1" : bind
 const chats = new Chats(board, {
   piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs")}`,
   env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
-  models: repo => piModelArgs(board.agentModelFor(repo, "work")),
   topic: (repoBoard, message) => writeTopic(piBin, repoBoard.repo, piModelArgs(board.agentModelFor(repoBoard.repo, "draft")), message),
 });
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
@@ -480,12 +479,19 @@ const server = createServer(async (req, res) => {
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       if (!chatId) {
         if (req.method === "GET") { send(res, 200, board.listChats(repoBoard.id).map(chat => ({ ...chat, pending: chats.live(chat.id) !== null }))); return; }
-        if (req.method === "POST") { send(res, 201, board.createChat(repoBoard.id)); return; }
+        if (req.method === "POST") {
+          const { model, thinking } = await body(req);
+          send(res, 201, model === undefined && thinking === undefined ? board.createChat(repoBoard.id) : board.createChat(repoBoard.id, "", { model, thinking })); return;
+        }
       } else {
         const chat = board.getChat(chatId);
         if (!chat || chat.boardId !== repoBoard.id) { send(res, 404, { error: "Chat not found on this board" }); return; }
         if (req.method === "GET" && !action) { send(res, 200, { chat, messages: board.listChatMessages(chatId), live: chats.live(chatId) }); return; }
         if (req.method === "DELETE" && !action) { chats.delete(chatId); send(res, 200, { ok: true }); return; }
+        if (req.method === "PATCH" && !action) {
+          const { model, thinking } = await body(req);
+          send(res, 200, board.setChatModel(chatId, { model, thinking })); return;
+        }
         if (req.method === "POST" && action === "messages") {
           const { message } = await body(req);
           if (typeof message !== "string" || !message.trim() || message.length > 16000) throw new Error("Write a message of up to 16000 characters");

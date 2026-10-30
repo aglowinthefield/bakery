@@ -4,7 +4,7 @@ import { chromium, type Locator, type Page, type Route } from "playwright";
 import { createServer } from "vite";
 
 const boards = [{ id: "b1", repo: "/tmp/b1", remoteUrl: "", autoCollapseEmptySwimlanes: false }];
-const chat = { id: "c1", boardId: "b1", title: "What is blocked?", createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" };
+const chat = { id: "c1", boardId: "b1", title: "What is blocked?", model: "openai/gpt-6.1-sol", thinking: "low", createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" };
 const messages = [
   { id: "m1", chatId: "c1", role: "user", body: "What is blocked?", parts: [], createdAt: "2025-01-01T00:00:00Z" },
   { id: "m2", chatId: "c1", role: "agent", body: "Card B waits on A.", createdAt: "2025-01-01T00:00:01Z",
@@ -94,6 +94,139 @@ test("the chat list shows each chat's topic, updates it live, and collapses to a
     assert.equal(await nav.getAttribute("data-collapsed"), null, "the choice survives a reload, and expanding restores the list");
     assert.ok((await nav.boundingBox())!.width > 200);
     await nav.getByRole("button", { name: "Delete Triage cleanup" }).waitFor({ state: "attached" });
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("the chat model picker shows the chat's model and saves a switch", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    const patches: unknown[] = [];
+    await page.route("**/api/**", async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/models") return route.fulfill({ json: { models: ["openai/gpt-6.1-sol", "anthropic/claude-sonnet-4-5"] } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [chat] });
+      if (path === "/api/boards/b1/chats/c1" && request.method() === "PATCH") {
+        const input = request.postDataJSON();
+        patches.push(input);
+        return route.fulfill({ json: { ...chat, ...input } });
+      }
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c1/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "live", live: null })}\n\n` });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const model = page.getByLabel("Chat model"), thinking = page.getByLabel("Chat thinking");
+    await model.waitFor();
+    assert.equal(await model.inputValue(), "openai/gpt-6.1-sol");
+    assert.equal(await thinking.inputValue(), "low");
+    await thinking.selectOption("high");
+    await model.fill("anthropic/claude-sonnet-4-5");
+    await model.press("Enter");
+    await thinking.selectOption("medium");
+    await page.waitForTimeout(200);
+    assert.deepEqual(patches, [
+      { model: "openai/gpt-6.1-sol", thinking: "high" },
+      { model: "anthropic/claude-sonnet-4-5", thinking: "high" },
+      { model: "anthropic/claude-sonnet-4-5", thinking: "medium" },
+    ]);
+    assert.equal(await thinking.inputValue(), "medium");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("a failed save does not discard a corrected pick queued behind it", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    let saved = { ...chat };
+    const patches: { model: string; thinking: string }[] = [];
+    await page.route("**/api/**", async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [saved] });
+      if (path === "/api/boards/b1/chats/c1" && request.method() === "PATCH") {
+        const input = request.postDataJSON();
+        patches.push(input);
+        if (patches.length === 1) { await new Promise(resolve => setTimeout(resolve, 400)); return route.fulfill({ status: 400, json: { error: "bad model" } }); }
+        saved = { ...saved, ...input };
+        return route.fulfill({ json: saved });
+      }
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat: saved, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c1/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "live", live: null })}\n\n` });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const thinking = page.getByLabel("Chat thinking");
+    await thinking.waitFor();
+    await thinking.selectOption("high");
+    await thinking.selectOption("medium");
+    for (let i = 0; i < 50 && patches.length < 2; i++) await page.waitForTimeout(100);
+    assert.equal(patches.length, 2, "the corrected pick is still sent after the first save fails");
+    assert.equal(patches[1].thinking, "medium");
+    await page.reload();
+    await thinking.waitFor();
+    assert.equal(await thinking.inputValue(), "medium");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("quick model and thinking picks both persist, and Send waits for them to save", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    let saved = { ...chat }, patchesDone = 0;
+    const patches: unknown[] = [], log: string[] = [];
+    await page.route("**/api/**", async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/models") return route.fulfill({ json: { models: ["anthropic/claude-sonnet-4-5"] } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [saved] });
+      if (path === "/api/boards/b1/chats/c1" && request.method() === "PATCH") {
+        const input = request.postDataJSON();
+        patches.push(input); log.push("patch");
+        await new Promise(resolve => setTimeout(resolve, 300));
+        saved = { ...saved, ...input }; patchesDone++;
+        return route.fulfill({ json: saved });
+      }
+      if (path === "/api/boards/b1/chats/c1/messages") { log.push(`message after ${patchesDone} saves`); return route.fulfill({ status: 202, json: {} }); }
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat: saved, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c1/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "live", live: null })}\n\n` });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const model = page.getByLabel("Chat model"), thinking = page.getByLabel("Chat thinking");
+    await model.waitFor();
+    await thinking.selectOption("high");
+    await model.fill("anthropic/claude-sonnet-4-5");
+    await page.getByLabel("Message the agent").fill("hello");
+    await page.getByRole("button", { name: "Send" }).click();
+    for (let i = 0; i < 50 && !log.some(entry => entry.startsWith("message")); i++) await page.waitForTimeout(100);
+    assert.deepEqual(log.at(-1), `message after ${patches.length} saves`);
+    assert.deepEqual(patches.at(-1), { model: "anthropic/claude-sonnet-4-5", thinking: "high" }, "the newest choice is the last one saved");
+    assert.equal(patchesDone, patches.length, "no save was still pending when the message was sent");
+    assert.equal(await thinking.inputValue(), "high");
+    await page.reload();
+    await model.waitFor();
+    assert.equal(await model.inputValue(), "anthropic/claude-sonnet-4-5");
+    assert.equal(await thinking.inputValue(), "high");
   } finally {
     await browser.close();
     await server.close();

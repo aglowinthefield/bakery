@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { addAgent, type Usage } from "./agent.js";
-import { parseAgentModels, resolveAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
+import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import type { ThemeName } from "../src/themes.js";
 import { parsePlan } from "../src/plan.js";
@@ -82,8 +82,8 @@ type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "reviewQueue"
 export type Attachment = { id: string; cardId: string; messageId: string | null; name: string; type: string; size: number; createdAt: string };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string; attachments: Attachment[] };
 /** A board chat: a general agent session about one repo and its board. Pi keeps the conversation; Bakery keeps what to show. */
-/** `title` is the first line of the first message; `topic` is a few-word summary of it, empty until one is written. */
-export type Chat = { id: string; boardId: string; title: string; topic: string; createdAt: string; updatedAt: string };
+/** `title` is the first line of the first message; `topic` is a few-word summary of it, empty until one is written. `model` and `thinking` are this chat's Pi choice; "" leaves that flag to Pi's own default. */
+export type Chat = { id: string; boardId: string; title: string; topic: string; model: string; thinking: AgentModel["thinking"]; createdAt: string; updatedAt: string };
 /** What an agent turn did, in order: reply text and the tools it ran. */
 export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
@@ -124,6 +124,11 @@ export function reportFromOutput(output: string): string | null {
   return output.slice(marker.index + marker[0].length).trim() || null;
 }
 
+/** Pi restores a resumed session's earlier model and thinking when a flag is omitted, so an empty field means the chat default, never "no flag". */
+function chatChoice(choice: unknown): AgentModel {
+  const { model, thinking } = validateAgentModel(choice, "chat");
+  return { model: model || defaultChatModel.model, thinking: thinking || defaultChatModel.thinking };
+}
 /** A chat's title from its first message: the first line, cut to 80 characters. */
 export function chatTitle(message: string): string {
   const line = message.trim().split("\n")[0].trim();
@@ -153,7 +158,7 @@ export class Board {
       -- Files the operator attached to a card, or to one of its discussion messages (messageId). The bytes live on disk; see server/attachments.ts.
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), messageId TEXT REFERENCES discussion_messages(id), name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attachments_card ON attachments(cardId, createdAt);
-      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', thinking TEXT NOT NULL DEFAULT '');
       CREATE INDEX IF NOT EXISTS chats_board ON chats(boardId, updatedAt);
       CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, chatId TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages(chatId, createdAt);
@@ -252,6 +257,14 @@ export class Board {
     if (!boardColumns.has("integrationChosen")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationChosen INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("githubMainProtected")) this.db.exec("ALTER TABLE boards ADD COLUMN githubMainProtected INTEGER");
     if (!boardColumns.has("integrationNote")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationNote TEXT NOT NULL DEFAULT ''");
+
+    // Chats made before the picker move to the cheap chat default rather than the card-run model they used to share.
+    const chatColumns = new Set((this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).map(column => column.name));
+    if (!chatColumns.has("model")) {
+      this.db.exec("ALTER TABLE chats ADD COLUMN model TEXT NOT NULL DEFAULT ''");
+      this.db.exec("ALTER TABLE chats ADD COLUMN thinking TEXT NOT NULL DEFAULT ''");
+      this.db.prepare("UPDATE chats SET model=?, thinking=?").run(defaultChatModel.model, defaultChatModel.thinking);
+    }
 
     const runColumns = new Set((this.db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map(column => column.name));
     if (!runColumns.has("turns")) {
@@ -1114,10 +1127,18 @@ export class Board {
     return this.db.prepare("SELECT * FROM chats WHERE boardId=? ORDER BY updatedAt DESC, rowid DESC").all(boardId) as Chat[];
   }
   getChat(id: string): Chat | undefined { return this.db.prepare("SELECT * FROM chats WHERE id=?").get(id) as Chat | undefined; }
-  createChat(boardId: string, title = ""): Chat {
-    const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", createdAt: time, updatedAt: time };
-    this.db.prepare("INSERT INTO chats(id, boardId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)").run(chat.id, boardId, title, time, time);
+  /** Creates a chat with the given model choice, or the cheap chat default. */
+  createChat(boardId: string, title = "", choice: unknown = defaultChatModel): Chat {
+    const { model, thinking } = chatChoice(choice);
+    const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", model, thinking, createdAt: time, updatedAt: time };
+    this.db.prepare("INSERT INTO chats(id, boardId, title, model, thinking, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)").run(chat.id, boardId, title, model, thinking, time, time);
     return chat;
+  }
+  /** Switches the model for the chat's next turns; Pi keeps the conversation across the switch. */
+  setChatModel(id: string, choice: unknown): Chat {
+    const { model, thinking } = chatChoice(choice);
+    this.db.prepare("UPDATE chats SET model=?, thinking=? WHERE id=?").run(model, thinking, id);
+    return this.getChat(id)!;
   }
   renameChat(id: string, title: string): Chat {
     this.db.prepare("UPDATE chats SET title=? WHERE id=?").run(title, id);
