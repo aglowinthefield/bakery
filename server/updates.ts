@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 // Updates for a hosted Bakery checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
 // brought in, plus anything merged into the checked-out main since the server started (approving a card merges it
-// locally), so the UI can show a changelog. It installs on request or by itself while nothing is running.
+// locally), so the UI can show a changelog. It installs only on request.
 // Installing leaves the restart to the caller, which drains active runs first.
 
 export type UpdateCommit = { sha: string; subject: string };
@@ -24,8 +24,6 @@ export class Updates {
   private commits: UpdateCommit[] = [];
   private installing = false;
   private error: string | null = null;
-  // HEAD and origin/main at the last failed install, so the idle check does not retry the same failure every tick.
-  private failedAt: string | null = null;
   // The commit the server started on. Local merges move HEAD past it without touching origin/main.
   private startHead: string | null;
 
@@ -52,14 +50,6 @@ export class Updates {
     }
   }
 
-  /** Called on a timer. Installs pending commits without asking when `idle` (no runs and no agent review). */
-  async tick(idle: boolean): Promise<void> {
-    this.refresh();
-    if (!idle || this.installing || this.commits.length === 0 || this.target() === this.failedAt) return;
-    console.log(`Installing ${this.commits.length} update${this.commits.length === 1 ? "" : "s"} while idle.`);
-    await this.apply();
-  }
-
   /** Installs pending commits, then hands over to `onInstalled` to drain and restart. */
   /** Throws right away when nothing is pending, so the API can answer 400. */
   apply(): Promise<void> {
@@ -76,8 +66,6 @@ export class Updates {
       await this.install();
     } catch (error) {
       this.installing = false;
-      // Read after the attempt: a fast-forward may have moved HEAD before a later step failed.
-      this.failedAt = this.target();
       this.error = error instanceof Error ? error.message : String(error);
       console.error(`Update failed: ${this.error}`);
       return;
@@ -87,7 +75,6 @@ export class Updates {
   }
 
   /** What an install would move to: the checked-out main and the fetched origin/main. */
-  private target(): string { return `${this.revParse("HEAD")} ${this.originMain()}`; }
 
   private originMain(): string | null { return this.revParse("refs/remotes/origin/main"); }
 

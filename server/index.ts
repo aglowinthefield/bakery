@@ -640,7 +640,7 @@ server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockP
 server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
   if (updates) {
     updates.refresh();
-    updateTimer = setInterval(() => void updates.tick(!draining.on && worker.activeCount === 0 && !autoReview.active), 30_000);
+    updateTimer = setInterval(() => updates.refresh(), 30_000);
   }
   // Starts queued while the previous server drained for a restart.
   for (const cardId of board.takeQueuedStarts()) {

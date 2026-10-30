@@ -44,32 +44,6 @@ test("lists the fetched commits newest first as the changelog", () => {
   } finally { close(); }
 });
 
-test("installs by itself only while idle, then hands over to restart", async () => {
-  const { repo, close } = fixture();
-  try {
-    let installs = 0, restarts = 0;
-    const updates = new Updates(repo, async () => { installs++; }, () => { restarts++; });
-    await updates.tick(false);
-    assert.equal(installs, 0);
-    await updates.tick(true);
-    assert.deepEqual([installs, restarts], [1, 1]);
-  } finally { close(); }
-});
-
-test("a failed install shows its error and is not retried automatically until origin/main moves", async () => {
-  const { repo, close } = fixture();
-  try {
-    let installs = 0, restarts = 0;
-    const updates = new Updates(repo, async () => { installs++; throw new Error("Not possible to fast-forward, aborting."); }, () => { restarts++; });
-    await updates.tick(true);
-    await updates.tick(true);
-    assert.deepEqual([installs, restarts], [1, 0]);
-    assert.deepEqual([updates.state.installing, updates.state.error], [false, "Not possible to fast-forward, aborting."]);
-    await updates.apply();
-    assert.equal(installs, 2, "the button still retries");
-  } finally { close(); }
-});
-
 test("asking to install with nothing pending is refused", () => {
   const { repo, close } = fixture();
   try {
@@ -104,53 +78,6 @@ test("combines origin/main updates with local merges, newest first", () => {
     mergeLocally(repo, "Merge approved card");
     updates.refresh();
     assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Fix typo", "Add pending updates notice", "Merge approved card"]);
-  } finally { close(); }
-});
-
-test("installs local merges by itself while idle, then hands over to restart", async () => {
-  const { repo, close } = fixture();
-  try {
-    git(repo, "merge", "-q", "--ff-only", "origin/main");
-    let installs = 0, restarts = 0;
-    const updates = new Updates(repo, async () => { installs++; }, () => { restarts++; });
-    await updates.tick(true);
-    assert.deepEqual([installs, restarts], [0, 0], "nothing merged since startup");
-    mergeLocally(repo, "Merge approved card");
-    await updates.tick(false);
-    assert.equal(installs, 0);
-    await updates.tick(true);
-    assert.deepEqual([installs, restarts], [1, 1]);
-  } finally { close(); }
-});
-
-test("a failed local install is not retried automatically until main moves again", async () => {
-  const { repo, close } = fixture();
-  try {
-    git(repo, "merge", "-q", "--ff-only", "origin/main");
-    let installs = 0;
-    const updates = new Updates(repo, async () => { installs++; throw new Error("vite build failed"); }, () => {});
-    mergeLocally(repo, "Merge broken card");
-    await updates.tick(true);
-    await updates.tick(true);
-    assert.equal(installs, 1);
-    mergeLocally(repo, "Merge fix");
-    await updates.tick(true);
-    assert.equal(installs, 2);
-  } finally { close(); }
-});
-
-test("an install that fast-forwards and then fails its build is not retried automatically", async () => {
-  const { repo, close } = fixture();
-  try {
-    let installs = 0;
-    const updates = new Updates(repo, async () => {
-      installs++;
-      git(repo, "merge", "-q", "--ff-only", "origin/main");
-      throw new Error("vite build failed");
-    }, () => {});
-    await updates.tick(true);
-    await updates.tick(true);
-    assert.equal(installs, 1);
   } finally { close(); }
 });
 
