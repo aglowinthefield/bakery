@@ -48,6 +48,32 @@ npm run desktop:build
 
 Installers appear under `src-tauri/target/release/bundle/`. For an unbundled debug executable, use `npm run desktop:build -- --debug --no-bundle`. Production distribution still requires platform signing and macOS notarization.
 
+## Test Windows from a headless server
+
+The `Windows desktop installer` GitHub Actions workflow builds an unsigned x64 NSIS installer on `windows-latest`. It runs the Rust tests on Windows and uploads the installer as an artifact for 14 days. It does not publish a release or require signing secrets. A successful build does not verify desktop interactions.
+
+1. Push the branch containing `.github/workflows/desktop-windows.yml` and the desktop client. Changes to the workflow, desktop files, Rust files, or npm dependency files trigger a build on any branch.
+2. On GitHub, open **Actions > Windows desktop installer** and select the run for your commit.
+3. After the run succeeds, download the `bakery-windows-x64-<commit>` artifact on your Windows PC, extract the ZIP, and run the `.exe` installer. Windows may warn because the installer is unsigned. Only run an artifact from your own trusted build. If WebView2 is missing, the installer downloads its runtime.
+
+Once the workflow is on the repository's default branch, you can also use **Run workflow** and choose a branch. For the first branch-only build, use the push trigger; the manual-run button might not be available yet.
+
+You do not need Node, Rust, or Visual Studio on your Windows PC to run the installer. To connect through SSH, run this in a separate Windows PowerShell window and keep it open:
+
+```powershell
+ssh -N -L 4317:127.0.0.1:4317 your-user@your-server
+```
+
+Enter `http://127.0.0.1:4317` in the desktop client. This assumes the server serves both the API and built UI on port 4317. If the server runs `npm run dev`, forward to the supervisor's public UI port instead. Port 5173 proxies Vite's internal port 15173:
+
+```powershell
+ssh -N -L 4317:127.0.0.1:5173 your-user@your-server
+```
+
+The desktop address stays `http://127.0.0.1:4317`. The loopback HTTP connection travels through the encrypted SSH tunnel. No public listener or extra allowed hostname is needed.
+
+On Windows, check that you can connect, drag cards between lanes, upload and download attachments, open external links, switch servers, and recover through **Connection settings** after closing the Bakery window. Avoid starting agent runs unless you intend to use paid model tokens.
+
 ## Tests
 
 ```sh
