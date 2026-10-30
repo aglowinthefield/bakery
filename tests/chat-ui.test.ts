@@ -99,3 +99,73 @@ test("the chat list shows each chat's topic, updates it live, and collapses to a
     await server.close();
   }
 });
+
+test("unread replies show per chat and as board totals, and looking at a chat clears them", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    // The page starts unfocused, so opening the first chat does not read it yet.
+    await page.addInitScript(() => {
+      (window as unknown as { focused: boolean }).focused = false;
+      document.hasFocus = () => (window as unknown as { focused: boolean }).focused;
+    });
+    const list = [{ ...chat, topic: "First", unread: 1 }, { ...chat, id: "c2", topic: "Second", unread: 2 }];
+    const views: string[] = [];
+    const read = (id: string) => { list.find(item => item.id === id)!.unread = 0; };
+    await page.route("**/api/**", async route => {
+      const url = new URL(route.request().url()), path = url.pathname;
+      const total = list.reduce((sum, item) => sum + item.unread, 0);
+      if (path === "/api/boards") return route.fulfill({ json: [{ ...boards[0], chatUnread: total }] });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: list });
+      const match = path.match(/^\/api\/boards\/b1\/chats\/(c\d)(?:\/(events|view))?$/);
+      if (match?.[2] === "events") {
+        views.push(`${match[1]} open looking=${url.searchParams.get("looking")}`);
+        if (url.searchParams.get("looking") === "1") read(match[1]);
+        return route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" });
+      }
+      if (match?.[2] === "view") {
+        const { looking } = route.request().postDataJSON() as { looking: boolean };
+        views.push(`${match[1]} view looking=${looking}`);
+        if (looking) read(match[1]);
+        return route.fulfill({ json: { ok: true } });
+      }
+      if (match) return route.fulfill({ json: { chat: list.find(item => item.id === match[1]), messages: [], live: null } });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const nav = page.getByRole("navigation", { name: "Chats" });
+    const sidebarChat = page.getByRole("button", { name: /^Chat\b/ });
+    const unreadOf = (label: string) => nav.locator("div", { has: page.getByRole("button", { name: label, exact: true }) }).locator("[data-unread]");
+    await sidebarChat.locator("[data-chat-unread='3']").waitFor();
+    await unreadOf("First").filter({ hasText: "1" }).waitFor();
+    await unreadOf("Second").filter({ hasText: "2" }).waitFor();
+    assert.deepEqual(views, ["c1 open looking=0"]);
+
+    await page.evaluate(() => { (window as unknown as { focused: boolean }).focused = true; window.dispatchEvent(new Event("focus")); });
+    await page.waitForFunction(() => !document.querySelector("nav[aria-label='Chats'] [data-unread='1']"));
+    await sidebarChat.locator("[data-chat-unread='2']").waitFor();
+    assert.deepEqual(views, ["c1 open looking=0", "c1 view looking=true"]);
+
+    await nav.getByRole("button", { name: "Second", exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector("nav[aria-label='Chats'] [data-unread]"));
+    await page.waitForFunction(() => !document.querySelector("[data-chat-unread]"));
+    assert.deepEqual(views.slice(2), ["c2 open looking=1"]);
+
+    // A turn that finishes in another chat shows up on the next poll of the board totals.
+    list[0].unread = 1;
+    await unreadOf("First").filter({ hasText: "1" }).waitFor();
+    await sidebarChat.locator("[data-chat-unread='1']").waitFor();
+
+    const row = page.getByRole("button", { name: /^b1/ });
+    assert.equal(await row.locator("[data-chat-unread]").count(), 0, "an open repository shows the total on its Chat entry only");
+    await row.click();
+    await row.locator("[data-chat-unread='1']").waitFor();
+    assert.equal(await sidebarChat.count(), 0, "a collapsed repository hides its Chat entry and shows the total on its row");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});

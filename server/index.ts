@@ -257,7 +257,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/repository-root" && req.method === "GET") {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
-    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {} }))); return; }
+    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), unread = board.chatUnreadCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, chatUnread: unread[item.id] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
       // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
@@ -462,7 +462,7 @@ const server = createServer(async (req, res) => {
       for (const item of purged) removeCardAttachmentFiles(dataDir, item.cardId);
       send(res, 200, purged); return;
     }
-    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events))?)?$/);
+    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events|view))?)?$/);
     if (chatRoute) {
       const repoBoard = board.getBoard(chatRoute[1]), chatId = chatRoute[2], action = chatRoute[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -480,13 +480,23 @@ const server = createServer(async (req, res) => {
           send(res, 202, chats.send(repoBoard, chatId, message.trim())); return;
         }
         if (req.method === "POST" && action === "stop") { chats.stop(chatId); send(res, 200, { ok: true }); return; }
+        // A browser view says whether the operator is looking at this chat; looking marks it read.
+        if (req.method === "POST" && action === "view") {
+          const { viewer, looking } = await body(req);
+          if (typeof viewer !== "string" || !/^[\w-]{1,64}$/.test(viewer) || typeof looking !== "boolean") throw new Error("Send a viewer id and whether it is looking");
+          chats.view(chatId, viewer, looking); send(res, 200, { ok: true }); return;
+        }
         // Server-sent events: the live reply as it is written, and each message once saved.
         if (req.method === "GET" && action === "events") {
           res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
           const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
           write({ type: "live", live: chats.live(chatId) });
           const unsubscribe = chats.subscribe(chatId, write), ping = setInterval(() => res.write(": ping\n\n"), 20_000);
-          req.once("close", () => { unsubscribe(); clearInterval(ping); });
+          // The stream carries the view's id and whether it is looking, so a turn finishing right after it opens is judged correctly.
+          const params = new URL(req.url ?? "/", "http://localhost").searchParams, viewer = params.get("viewer");
+          const viewing = viewer && /^[\w-]{1,64}$/.test(viewer) ? viewer : null;
+          if (viewing) chats.view(chatId, viewing, params.get("looking") === "1");
+          req.once("close", () => { unsubscribe(); clearInterval(ping); if (viewing) chats.unview(chatId, viewing); });
           return;
         }
       }

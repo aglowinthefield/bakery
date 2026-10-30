@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -97,6 +99,91 @@ test("a failed or stopped turn leaves an error message and keeps what streamed",
   } finally { done(); }
 });
 
+const okPi = (dir: string) => fakePi(dir, `echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"done"}}'
+echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
+echo '{"type":"agent_settled","aborted":false}'`);
+
+test("a turn that finishes while nobody looks bumps the chat's unread count, once per turn", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chat = board.createChat(repoBoard.id);
+    assert.equal(chat.unread, 0);
+    chats.view(chat.id, "tab1", false);
+    let finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "one");
+    const events = await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 1);
+    assert.ok(events.some(event => event.type === "chat" && event.chat.unread === 1), "subscribers hear the new count");
+    finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "two");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 2);
+    assert.equal(board.listChats(repoBoard.id)[0].unread, 2);
+  } finally { done(); }
+});
+
+test("a turn that finishes while a view is looking, or that the operator stopped, does not count", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chat = board.createChat(repoBoard.id);
+    chats.view(chat.id, "away", false);
+    chats.view(chat.id, "here", true);
+    let finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "hi");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 0, "one looking view is enough");
+    chats.unview(chat.id, "here");
+    finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "again");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 1, "once that view closes, turns count again");
+
+    const stopping = new Chats(board, { piBin: fakePi(dir, "sleep 30"), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const other = board.createChat(repoBoard.id);
+    finished = settle(stopping, other.id);
+    stopping.send(repoBoard, other.id, "go");
+    stopping.stop(other.id);
+    await finished;
+    assert.equal(board.getChat(other.id)?.unread, 0);
+  } finally { done(); }
+});
+
+test("looking at a chat clears its count and tells subscribers", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chat = board.createChat(repoBoard.id);
+    board.bumpChatUnread(chat.id); board.bumpChatUnread(chat.id);
+    const seen: ChatEvent[] = [];
+    const off = chats.subscribe(chat.id, event => seen.push(event));
+    chats.view(chat.id, "tab1", false);
+    assert.equal(board.getChat(chat.id)?.unread, 2, "an open but unfocused view does not read it");
+    chats.view(chat.id, "tab1", true);
+    off();
+    assert.equal(board.getChat(chat.id)?.unread, 0);
+    assert.deepEqual(seen.map(event => event.type === "chat" && event.chat.unread), [0]);
+    chats.view(chat.id, "tab1", true);
+    assert.equal(seen.length, 1, "clearing an already read chat announces nothing");
+  } finally { done(); }
+});
+
+test("each board's unread total sums its chats", () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    mkdirSync(join(dir, "other"));
+    const otherBoard = board.addRepo(join(dir, "other"));
+    const [a, b, c, d] = [board.createChat(repoBoard.id), board.createChat(repoBoard.id), board.createChat(repoBoard.id), board.createChat(otherBoard.id)];
+    for (const id of [a.id, a.id, b.id, d.id]) board.bumpChatUnread(id);
+    assert.deepEqual(board.chatUnreadCounts(), { [repoBoard.id]: 3, [otherBoard.id]: 1 });
+    board.clearChatUnread(a.id);
+    board.clearChatUnread(d.id);
+    assert.deepEqual(board.chatUnreadCounts(), { [repoBoard.id]: 1 }, "boards with nothing unread are left out");
+    assert.equal(board.getChat(c.id)?.unread, 0);
+  } finally { done(); }
+});
+
 const reply = (text: string) => [
   JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] } }),
   JSON.stringify({ type: "agent_settled", aborted: false }),
@@ -154,7 +241,7 @@ test("the first message names the chat once, and a failed name is retried on the
   } finally { done(); }
 });
 
-test("a database from before topics gains an empty topic on its chats", () => {
+test("a database from before topics and unread counts gains them on its chats", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-chat-"));
   try {
     const old = new DatabaseSync(join(dir, "board.sqlite"));
@@ -163,6 +250,7 @@ test("a database from before topics gains an empty topic on its chats", () => {
     const board = new Board(join(dir, "board.sqlite"));
     try {
       assert.equal(board.getChat("c1")?.topic, "");
+      assert.equal(board.getChat("c1")?.unread, 0);
       assert.equal(board.setChatTopic("c1", "Old topic")?.topic, "Old topic");
     } finally { board.close(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -178,8 +266,61 @@ test("deleting a chat removes its messages and its Pi session file", () => {
     chats.delete(chat.id);
     assert.equal(board.getChat(chat.id), undefined);
     assert.deepEqual(board.listChatMessages(chat.id), []);
-    assert.equal(readdirSyncSafe(join(dir, "sessions")).length, 0);
+    assert.equal(readdirSync(join(dir, "sessions")).length, 0);
   } finally { done(); }
 });
-import { readdirSync } from "node:fs";
-const readdirSyncSafe = (path: string) => readdirSync(path);
+
+test("the API reports each board's unread chat total, and a looking view clears it", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bakery-chat-api-"));
+  const repo = join(home, "repo");
+  mkdirSync(repo);
+  execFileSync("git", ["init", "-q", repo]);
+  const pi = okPi(home);
+  const listener = createNetServer();
+  await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const port = (listener.address() as { port: number }).port;
+  await new Promise<void>(resolve => listener.close(() => resolve()));
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: pi },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stderr?.on("data", chunk => { output += chunk.toString(); });
+  const url = `http://127.0.0.1:${port}/api`;
+  const request = async (path: string, method = "GET", input?: unknown) => {
+    const response = await fetch(`${url}${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
+    return { status: response.status, data: await response.json() };
+  };
+  const until = async (check: () => Promise<boolean>, what: string) => {
+    const deadline = Date.now() + 10_000;
+    while (!(await check())) {
+      if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Timed out waiting for ${what}: ${output}`);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  };
+  const stream = new AbortController();
+  try {
+    await until(() => fetch(`${url}/boards`).then(() => true, () => false), "the server");
+    const repoBoard = (await request("/boards", "POST", { repo })).data;
+    assert.equal((await request("/boards")).data[0].chatUnread, 0);
+    const chat = (await request(`/boards/${repoBoard.id}/chats`, "POST", {})).data;
+    const chatUrl = `/boards/${repoBoard.id}/chats/${chat.id}`;
+    // An open but unfocused view: the turn still counts.
+    const events = await fetch(`${url}${chatUrl}/events?viewer=tab1&looking=0`, { signal: stream.signal });
+    assert.equal(events.status, 200);
+    assert.equal((await request(`${chatUrl}/messages`, "POST", { message: "hello" })).status, 202);
+    await until(async () => (await request("/boards")).data[0].chatUnread === 1, "the unread total");
+    assert.equal((await request(`/boards/${repoBoard.id}/chats`)).data[0].unread, 1);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "bad id!", looking: true })).status, 400);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: "yes" })).status, 400);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: true })).status, 200);
+    assert.equal((await request("/boards")).data[0].chatUnread, 0);
+    assert.equal((await request(`/boards/${repoBoard.id}/chats`)).data[0].unread, 0);
+  } finally {
+    stream.abort();
+    child.kill("SIGTERM");
+    await new Promise(resolve => child.once("exit", resolve));
+    rmSync(home, { recursive: true, force: true });
+  }
+});

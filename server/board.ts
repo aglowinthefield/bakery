@@ -80,8 +80,11 @@ type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "startQueued"
 export type Attachment = { id: string; cardId: string; messageId: string | null; name: string; type: string; size: number; createdAt: string };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string; attachments: Attachment[] };
 /** A board chat: a general agent session about one repo and its board. Pi keeps the conversation; Bakery keeps what to show. */
-/** `title` is the first line of the first message; `topic` is a few-word summary of it, empty until one is written. */
-export type Chat = { id: string; boardId: string; title: string; topic: string; createdAt: string; updatedAt: string };
+/**
+ * `title` is the first line of the first message; `topic` is a few-word summary of it, empty until one is written.
+ * `unread` counts agent turns that finished while nobody was looking at the chat.
+ */
+export type Chat = { id: string; boardId: string; title: string; topic: string; unread: number; createdAt: string; updatedAt: string };
 /** What an agent turn did, in order: reply text and the tools it ran. */
 export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
@@ -149,7 +152,7 @@ export class Board {
       -- Files the operator attached to a card, or to one of its discussion messages (messageId). The bytes live on disk; see server/attachments.ts.
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), messageId TEXT REFERENCES discussion_messages(id), name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attachments_card ON attachments(cardId, createdAt);
-      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', unread INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS chats_board ON chats(boardId, updatedAt);
       CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, chatId TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages(chatId, createdAt);
@@ -186,7 +189,9 @@ export class Board {
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
-    if (!(this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).some(column => column.name === "topic")) this.db.exec("ALTER TABLE chats ADD COLUMN topic TEXT NOT NULL DEFAULT ''");
+    const chatColumns = (this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).map(column => column.name);
+    if (!chatColumns.includes("topic")) this.db.exec("ALTER TABLE chats ADD COLUMN topic TEXT NOT NULL DEFAULT ''");
+    if (!chatColumns.includes("unread")) this.db.exec("ALTER TABLE chats ADD COLUMN unread INTEGER NOT NULL DEFAULT 0");
     if (!commentColumns.has("fileLine")) this.db.exec("ALTER TABLE review_comments ADD COLUMN fileLine INTEGER");
     const settingsColumns = new Set((this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map(column => column.name));
     if (!settingsColumns.has("cardDetailsLayout")) this.db.exec("ALTER TABLE settings ADD COLUMN cardDetailsLayout TEXT NOT NULL DEFAULT 'dialog' CHECK(cardDetailsLayout IN ('dialog', 'side'))");
@@ -1045,7 +1050,7 @@ export class Board {
   }
   getChat(id: string): Chat | undefined { return this.db.prepare("SELECT * FROM chats WHERE id=?").get(id) as Chat | undefined; }
   createChat(boardId: string, title = ""): Chat {
-    const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", createdAt: time, updatedAt: time };
+    const time = now(), chat = { id: randomUUID(), boardId, title, topic: "", unread: 0, createdAt: time, updatedAt: time };
     this.db.prepare("INSERT INTO chats(id, boardId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)").run(chat.id, boardId, title, time, time);
     return chat;
   }
@@ -1056,6 +1061,21 @@ export class Board {
   setChatTopic(id: string, topic: string): Chat | undefined {
     this.db.prepare("UPDATE chats SET topic=? WHERE id=?").run(topic, id);
     return this.getChat(id);
+  }
+  /** Counts one more finished turn the operator has not seen. */
+  bumpChatUnread(id: string): Chat | undefined {
+    this.db.prepare("UPDATE chats SET unread=unread+1 WHERE id=?").run(id);
+    return this.getChat(id);
+  }
+  /** Marks the chat read. Returns the chat only when it had unread turns, so callers can skip announcing a no-op. */
+  clearChatUnread(id: string): Chat | undefined {
+    const changed = this.db.prepare("UPDATE chats SET unread=0 WHERE id=? AND unread>0").run(id).changes;
+    return changed ? this.getChat(id) : undefined;
+  }
+  /** Unread turns per board id, summed over its chats. Boards with none are left out. */
+  chatUnreadCounts(): Record<string, number> {
+    const rows = this.db.prepare("SELECT boardId, SUM(unread) AS unread FROM chats WHERE unread>0 GROUP BY boardId").all() as { boardId: string; unread: number }[];
+    return Object.fromEntries(rows.map(row => [row.boardId, Number(row.unread)]));
   }
   deleteChat(id: string) {
     this.db.prepare("DELETE FROM chat_messages WHERE chatId=?").run(id);

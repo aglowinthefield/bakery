@@ -276,6 +276,27 @@ const remoteIcons: Record<RemoteHost, LucideIcon> = {
   other: Globe2,
 };
 
+/** A board's chat turns that finished while nobody was looking, summed over its chats. */
+function ChatUnreadBadge({
+  count,
+  className = "",
+}: {
+  count: number;
+  className?: string;
+}) {
+  return (
+    <span
+      data-chat-unread={count}
+      aria-label={`${count} unread chat ${count === 1 ? "reply" : "replies"}`}
+      title={`${count} unread chat ${count === 1 ? "reply" : "replies"}`}
+      className={`flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary ${className}`}
+    >
+      <MessageSquare size={10} aria-hidden="true" />
+      {count}
+    </span>
+  );
+}
+
 function RemoteLink({ url }: { url: string }) {
   const remote = describeRemote(url);
   const Icon = remoteIcons[remote.host];
@@ -1433,6 +1454,9 @@ export function App() {
                     >
                       <RepoBadge board={item} />
                       <span className="truncate">{repoName(item.repo)}</span>
+                      {!open && !!item.chatUnread && (
+                        <ChatUnreadBadge count={item.chatUnread} />
+                      )}
                     </button>
                     <ul
                       aria-label="Card counts"
@@ -1509,6 +1533,12 @@ export function App() {
                       className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${chatActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <MessageSquare size={13} aria-hidden="true" /> Chat
+                      {!!item.chatUnread && (
+                        <ChatUnreadBadge
+                          count={item.chatUnread}
+                          className="ml-auto"
+                        />
+                      )}
                     </button>
                   )}
                 </div>
@@ -1665,7 +1695,25 @@ export function App() {
               {currentBoard.repo}
             </p>
           </header>
-          <ChatView boardId={boardId} onError={setError} />
+          <ChatView
+            boardId={boardId}
+            onError={setError}
+            boardUnread={currentBoard.chatUnread ?? 0}
+            onUnreadChange={(total) =>
+              setBoards((previous) =>
+                previous.some(
+                  (item) =>
+                    item.id === boardId && (item.chatUnread ?? 0) !== total,
+                )
+                  ? previous.map((item) =>
+                      item.id === boardId
+                        ? { ...item, chatUnread: total }
+                        : item,
+                    )
+                  : previous,
+              )
+            }
+          />
         </main>
       )}
       <main

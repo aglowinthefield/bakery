@@ -17,6 +17,32 @@ type ChatState = { messages: ChatMessage[]; live: ChatLive };
 /** What the sidebar calls a chat: its few-word topic, else its first line. */
 const chatLabel = (chat: Chat) => chat.topic || chat.title || "New chat";
 const railKey = "bakery-chat-sidebar";
+/** The operator is looking at the page: it is visible and has focus. */
+const looking = () =>
+  document.visibilityState === "visible" && document.hasFocus();
+/** Sums the unread turns over a board's chats. */
+export const unreadTotal = (chats: Pick<Chat, "unread">[]) =>
+  chats.reduce((sum, chat) => sum + (chat.unread ?? 0), 0);
+
+/** A small count of finished turns the operator has not seen. */
+function UnreadBadge({
+  count,
+  className = "",
+}: {
+  count: number;
+  className?: string;
+}) {
+  return (
+    <span
+      data-unread={count}
+      aria-label={`${count} unread`}
+      title={`${count} unread ${count === 1 ? "reply" : "replies"}`}
+      className={`shrink-0 rounded-full bg-primary px-1.5 font-mono text-[10px] leading-4 text-primary-foreground ${className}`}
+    >
+      {count}
+    </span>
+  );
+}
 
 /** One tool call from the agent: its command on one line, its output behind a disclosure. */
 function ToolCall({ part }: { part: Extract<ChatPart, { type: "tool" }> }) {
@@ -63,9 +89,14 @@ function Parts({ parts }: { parts: ChatPart[] }) {
 export function ChatView({
   boardId,
   onError,
+  boardUnread,
+  onUnreadChange,
 }: {
   boardId: string;
   onError: (message: string) => void;
+  /** The board's unread total as last polled; when it changes, another chat finished a turn, so the list reloads. */
+  boardUnread?: number;
+  onUnreadChange?: (total: number) => void;
 }) {
   const [chats, setChats] = useState<Chat[] | null>(null);
   const [chatId, setChatId] = useState<string | null>(() =>
@@ -80,6 +111,13 @@ export function ChatView({
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const [focusRequest, setFocusRequest] = useState(0);
+  // This view's id for the server, which counts a finished turn as unread only when no view is looking at the chat.
+  const viewer = useRef(
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+  ).current;
+  const [isLooking, setIsLooking] = useState(looking);
+  const lookingNow = useRef(isLooking);
+  lookingNow.current = isLooking;
   const base = `/boards/${boardId}/chats`;
   const fail = (err: unknown) =>
     onError(err instanceof Error ? err.message : String(err));
@@ -101,6 +139,52 @@ export function ChatView({
     setChats(null);
     void refresh();
   }, [boardId]);
+  const polledUnread = useRef(boardUnread);
+  useEffect(() => {
+    if (polledUnread.current === boardUnread) return;
+    polledUnread.current = boardUnread;
+    void refresh();
+  }, [boardUnread]);
+  useEffect(() => {
+    if (!chats) return;
+    // The parent's total follows this list, which is already current, so that echo should not reload it.
+    polledUnread.current = unreadTotal(chats);
+    onUnreadChange?.(polledUnread.current);
+  }, [chats]);
+  useEffect(() => {
+    const update = () => setIsLooking(looking());
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+  // Looking at a chat marks it read; the server also skips counting turns that finish while it is looked at.
+  const reported = useRef<{ chatId: string; looking: boolean } | null>(null);
+  useEffect(() => {
+    if (!chatId) return;
+    if (isLooking)
+      setChats(
+        (previous) =>
+          previous?.map((item) =>
+            item.id === chatId && item.unread ? { ...item, unread: 0 } : item,
+          ) ?? previous,
+      );
+    // The event stream reports the state it opens with, so only later changes need a request.
+    if (reported.current?.chatId !== chatId) {
+      reported.current = { chatId, looking: isLooking };
+      return;
+    }
+    if (reported.current.looking === isLooking) return;
+    reported.current = { chatId, looking: isLooking };
+    void api(`${base}/${chatId}/view`, {
+      method: "POST",
+      body: JSON.stringify({ viewer, looking: isLooking }),
+    }).catch(fail);
+  }, [chatId, isLooking]);
   useEffect(() => {
     if (collapsed) localStorage.setItem(railKey, "collapsed");
     else localStorage.removeItem(railKey);
@@ -130,14 +214,29 @@ export function ChatView({
         }));
       })
       .catch((err) => current && fail(err));
-    const source = new EventSource(`/api${url}/events`);
+    const opened = lookingNow.current;
+    const source = new EventSource(
+      `/api${url}/events?viewer=${viewer}&looking=${opened ? 1 : 0}`,
+    );
+    // A reconnect reuses the first URL, so correct the server if the operator looked away or back since.
+    source.onopen = () => {
+      if (lookingNow.current !== opened)
+        void api(`${url}/view`, {
+          method: "POST",
+          body: JSON.stringify({ viewer, looking: lookingNow.current }),
+        }).catch(() => undefined);
+    };
     source.onmessage = (event) => {
       const data = JSON.parse(event.data) as
         | { type: "live"; live: ChatLive }
         | { type: "message"; message: ChatMessage }
         | { type: "chat"; chat: Chat };
       if (data.type === "chat") {
-        const named = data.chat;
+        // A count that arrives while the operator is looking is already being cleared.
+        const named =
+          lookingNow.current && data.chat.id === chatId
+            ? { ...data.chat, unread: 0 }
+            : data.chat;
         setChats(
           (previous) =>
             previous?.map((item) =>
@@ -260,13 +359,20 @@ export function ChatView({
               key={chat.id}
               onClick={() => setChatId(chat.id)}
               aria-current={chat.id === chatId ? "true" : undefined}
-              aria-label={chatLabel(chat)}
+              aria-label={`${chatLabel(chat)}${chat.unread ? `, ${chat.unread} unread` : ""}`}
               title={chatLabel(chat)}
               className={`relative rounded-md p-2 text-muted-foreground ${chat.id === chatId ? "bg-accent/50 text-foreground" : "hover:bg-accent/30"}`}
             >
               <MessageSquare size={14} aria-hidden="true" />
-              {chat.pending && (
-                <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
+              {chat.unread ? (
+                <UnreadBadge
+                  count={chat.unread}
+                  className="absolute right-0 top-0 px-1 text-[9px] leading-3"
+                />
+              ) : (
+                chat.pending && (
+                  <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
+                )
               )}
             </button>
           ) : (
@@ -285,6 +391,7 @@ export function ChatView({
                   <span className="ml-1 text-muted-foreground">…</span>
                 )}
               </button>
+              {!!chat.unread && <UnreadBadge count={chat.unread} />}
               <button
                 aria-label={`Delete ${chatLabel(chat)}`}
                 onClick={() => void remove(chat)}
