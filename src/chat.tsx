@@ -78,12 +78,34 @@ export function ChatView({
     () => localStorage.getItem(railKey) === "collapsed",
   );
   const end = useRef<HTMLDivElement>(null);
+  // Whether the open chat is known to hold a message (messages are never removed, so this cannot go stale the wrong way), and the chats with a first send in flight.
+  const latest = useRef({ count: 0, live: false });
+  latest.current.count = state.messages.length;
+  latest.current.live = !!state.live;
+  const sendsInFlight = useRef(new Set<string>());
+  const openId = useRef<string | null>(chatId);
+  openId.current = chatId;
   const input = useRef<HTMLTextAreaElement>(null);
   const [focusRequest, setFocusRequest] = useState(0);
   const base = `/boards/${boardId}/chats`;
   const fail = (err: unknown) =>
     onError(err instanceof Error ? err.message : String(err));
 
+  const discard = async (id: string) => {
+    if (sendsInFlight.current.has(id)) return; // send() retries once its request settles
+    try {
+      const result = await api<{ discarded: boolean }>(
+        `${base}/${id}/discard`,
+        { method: "POST", body: "{}" },
+      );
+      if (result.discarded)
+        setChats(
+          (previous) => previous?.filter((c) => c.id !== id) ?? previous,
+        );
+    } catch {
+      // Cleanup is best effort; the chat stays listed.
+    }
+  };
   const refresh = async () => {
     try {
       const next = await api<Chat[]>(base);
@@ -160,6 +182,10 @@ export function ChatView({
     return () => {
       current = false;
       source.close();
+      // Leaving a chat (another chat, page or board) asks the server to discard it if it is still empty.
+      // The server decides, so a stale view here cannot delete a message sent from another tab.
+      const { count, live } = latest.current;
+      if (count === 0 && !live) void discard(chatId);
     };
   }, [chatId, boardId]);
   useEffect(() => {
@@ -198,13 +224,14 @@ export function ChatView({
     const message = draft.trim();
     if (!message || sending || state.live) return;
     setSending(true);
+    let id = chatId;
     try {
-      let id = chatId;
       if (!id) {
         const chat = await api<Chat>(base, { method: "POST", body: "{}" });
         id = chat.id;
         setChatId(id);
       }
+      sendsInFlight.current.add(id);
       await api(`${base}/${id}/messages`, {
         method: "POST",
         body: JSON.stringify({ message }),
@@ -215,6 +242,11 @@ export function ChatView({
       fail(err);
     } finally {
       setSending(false);
+      if (id) {
+        sendsInFlight.current.delete(id);
+        // Left while the send was pending: the server keeps the chat if the message was saved, discards it if the send failed.
+        if (openId.current !== id) void discard(id);
+      }
     }
   };
   const busy = !!state.live;

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { chromium, type Locator, type Page, type Route } from "playwright";
 import { createServer } from "vite";
 
 const boards = [{ id: "b1", repo: "/tmp/b1", remoteUrl: "", autoCollapseEmptySwimlanes: false }];
@@ -99,3 +99,120 @@ test("the chat list shows each chat's topic, updates it live, and collapses to a
     await server.close();
   }
 });
+
+type Harness = { page: Page; nav: Locator; discards: string[]; deletes: string[]; close: () => Promise<void> };
+const fresh = { ...chat, id: "c2", title: "", createdAt: "2025-01-02T00:00:00Z", updatedAt: "2025-01-02T00:00:00Z" };
+
+/** Opens the Chat tab with one populated chat (c1). New chat creates the empty c2. `onC2`/`onSend` let a test control those responses. */
+async function openChat(opts: { onC2?: (route: Route) => Promise<void>; onSend?: (route: Route) => Promise<void>; discarded?: () => boolean } = {}): Promise<Harness> {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  const discards: string[] = [], deletes: string[] = [];
+  let created = false, gone = false;
+  const page = await (await browser.newContext()).newPage();
+  await page.route("**/api/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/boards") return route.fulfill({ json: boards });
+    if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+    if (path === "/api/boards/b1/chats") {
+      if (request.method() === "POST") { created = true; return route.fulfill({ json: fresh }); }
+      return route.fulfill({ json: created && !gone ? [fresh, chat] : [chat] });
+    }
+    if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat, messages, live: null } });
+    if (path === "/api/boards/b1/chats/c2/discard") { discards.push("c2"); const discarded = opts.discarded ? opts.discarded() : true; gone ||= discarded; return route.fulfill({ json: { discarded } }); }
+    if (path === "/api/boards/b1/chats/c2/messages") return opts.onSend ? opts.onSend(route) : route.fulfill({ status: 202, json: {} });
+    if (path === "/api/boards/b1/chats/c2") {
+      if (request.method() === "DELETE") { deletes.push("c2"); return route.fulfill({ json: {} }); }
+      return opts.onC2 ? opts.onC2(route) : route.fulfill({ json: { chat: fresh, messages: [], live: null } });
+    }
+    if (path.endsWith("/events")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+    await route.fulfill({ json: [] });
+  });
+  await page.goto(server.resolvedUrls!.local[0]);
+  const row = page.getByRole("button", { name: "b1", exact: true });
+  await row.waitFor();
+  if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  const nav = page.getByRole("navigation", { name: "Chats" });
+  await nav.getByRole("button", { name: "What is blocked?", exact: true }).waitFor();
+  await page.locator("[data-role='agent']").getByText("Card B waits on A.").waitFor();
+  return { page, nav, discards, deletes, close: async () => { await browser.close(); await server.close(); } };
+}
+const listed = async (h: Harness, want: number) => {
+  await expectEventually(async () => (await h.nav.getByRole("button", { name: "Delete New chat" }).count()) === want);
+  return want;
+};
+const switchBack = (h: Harness) => h.nav.getByRole("button", { name: "What is blocked?", exact: true }).click();
+
+test("an empty chat is discarded when the user switches to another chat; chats with messages stay", async () => {
+  const h = await openChat();
+  try {
+    await h.nav.getByRole("button", { name: "New chat" }).click();
+    await h.page.getByRole("button", { name: "Delete New chat" }).waitFor();
+    await h.page.waitForTimeout(300);
+    assert.deepEqual(h.discards, [], "the empty chat is kept while it is open");
+    await switchBack(h);
+    await expectEventually(() => h.discards.length === 1);
+    assert.equal(await listed(h, 0), 0, "the discarded chat leaves the list");
+    assert.deepEqual(h.deletes, [], "cleanup never uses the explicit-delete endpoint");
+    assert.equal(await h.nav.getByRole("button", { name: "What is blocked?", exact: true }).count(), 1, "a chat with messages is kept");
+    await switchBack(h);
+    await h.page.waitForTimeout(300);
+    assert.deepEqual(h.discards, ["c2"], "leaving a populated chat asks for no cleanup");
+  } finally { await h.close(); }
+});
+
+test("leaving an empty chat before its transcript loads still discards it", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const h = await openChat({ onC2: async route => { await gate; await route.fulfill({ json: { chat: fresh, messages: [], live: null } }); } });
+  try {
+    await h.nav.getByRole("button", { name: "New chat" }).click();
+    await h.page.getByRole("button", { name: "Delete New chat" }).waitFor();
+    await switchBack(h);
+    await expectEventually(() => h.discards.length === 1);
+    release();
+    assert.equal(await listed(h, 0), 0);
+  } finally { release(); await h.close(); }
+});
+
+test("a chat whose first send failed is discarded on leaving; one whose send is pending is not until it settles", async () => {
+  let fail!: () => void;
+  const gate = new Promise<void>(resolve => { fail = resolve; });
+  const h = await openChat({ onSend: async route => { await gate; await route.fulfill({ status: 500, json: { error: "boom" } }); } });
+  try {
+    await h.nav.getByRole("button", { name: "New chat" }).click();
+    await h.page.getByRole("button", { name: "Delete New chat" }).waitFor();
+    await h.page.getByRole("textbox").fill("hello");
+    await h.page.getByRole("button", { name: "Send" }).click();
+    await switchBack(h);
+    await h.page.waitForTimeout(400);
+    assert.deepEqual(h.discards, [], "no cleanup while the first send is in flight");
+    fail();
+    await expectEventually(() => h.discards.length === 1);
+    assert.equal(await listed(h, 0), 0, "after the send failed the empty chat is discarded");
+  } finally { fail(); await h.close(); }
+});
+
+test("a chat whose first send was saved is kept when the server refuses the discard", async () => {
+  let saved!: () => void;
+  const gate = new Promise<void>(resolve => { saved = resolve; });
+  const h = await openChat({ discarded: () => false, onSend: async route => { await gate; await route.fulfill({ status: 202, json: {} }); } });
+  try {
+    await h.nav.getByRole("button", { name: "New chat" }).click();
+    await h.page.getByRole("button", { name: "Delete New chat" }).waitFor();
+    await h.page.getByRole("textbox").fill("hello");
+    await h.page.getByRole("button", { name: "Send" }).click();
+    await switchBack(h);
+    saved();
+    await expectEventually(() => h.discards.length === 1);
+    assert.equal(await listed(h, 1), 1, "the server kept the chat, so it stays listed");
+  } finally { saved(); await h.close(); }
+});
+
+async function expectEventually(check: () => boolean | Promise<boolean>) {
+  for (let i = 0; i < 50 && !(await check()); i++) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.ok(await check(), "condition was not met in time");
+}
