@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { attachmentPath, safeFileName } from "../server/attachments.js";
+import { attachmentPath, safeFileName, sweepOrphanAttachments } from "../server/attachments.js";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 
@@ -138,4 +138,17 @@ test("a work run's prompt lists the card's attachment paths", async () => {
     assert.match(prompt, /error log\.txt, text\/plain, 5 bytes/);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the startup sweep removes attachment folders no row points to and keeps the rest", () => {
+  const data = mkdtempSync(join(tmpdir(), "bakery-sweep-"));
+  const put = (...parts: string[]) => { const file = join(data, "attachments", ...parts); mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, "x"); return file; };
+  const kept = put("card1", "att1", "a.txt"), partial = put("card1", "att2", "b.txt.part"), gone = put("card2", "att3", "c.txt");
+  assert.equal(sweepOrphanAttachments(data, [{ cardId: "card1", id: "att1" }]), 2);
+  assert.ok(existsSync(kept));
+  assert.ok(!existsSync(partial));
+  assert.ok(!existsSync(gone));
+  assert.ok(!existsSync(join(data, "attachments", "card2")));
+  assert.equal(sweepOrphanAttachments(join(data, "none"), []), 0);
+  rmSync(data, { recursive: true, force: true });
 });

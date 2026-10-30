@@ -16,7 +16,7 @@ import { AutoPickup } from "./auto-pickup.js";
 import { discuss, discussionPrompt } from "./discuss.js";
 import { Chats } from "./chat.js";
 import { draftPullRequest } from "./pr-draft.js";
-import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, safeFileName, storeUpload } from "./attachments.js";
+import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
 
 /** One PR draft job per card, kept after it settles so a closed or refreshed dialog rejoins it instead of starting over. */
 const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: number; steps: { at: number; text: string }[] }; result: Promise<unknown> }>();
@@ -40,7 +40,7 @@ chmodSync(dataDir, 0o700);
 const lockPath = join(dataDir, "server.lock");
 const lock = acquireLock(lockPath);
 let board: Board;
-try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); }
+try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const piBin = process.env.BAKERY_PI_BIN ?? "pi";
 /** Cards whose discussion reply is being written; one at a time per card. */
