@@ -53,9 +53,14 @@ test("asking to install with nothing pending is refused", () => {
   } finally { close(); }
 });
 
-// Approving a card merges it into the checkout's own main, so HEAD moves while origin/main stays put.
+// Approving a card merges its branch into the checkout's own main with a "Merge card:" commit, so HEAD moves while
+// origin/main stays put.
 function mergeLocally(repo: string, subject: string) {
-  git(repo, "commit", "-q", "--allow-empty", "-m", subject);
+  git(repo, "checkout", "-q", "-b", "card");
+  git(repo, "commit", "-q", "--allow-empty", "-m", `Bakery card: ${subject}`);
+  git(repo, "checkout", "-q", "main");
+  git(repo, "merge", "-q", "--no-ff", "-m", `Merge card: ${subject}`, "card");
+  git(repo, "branch", "-q", "-D", "card");
 }
 
 test("lists commits merged into main since startup, after any from origin/main", () => {
@@ -65,9 +70,9 @@ test("lists commits merged into main since startup, after any from origin/main",
     const updates = new Updates(repo, async () => {}, () => {});
     updates.refresh();
     assert.equal(updates.state.commits.length, 0);
-    mergeLocally(repo, "Merge approved card");
+    mergeLocally(repo, "Approved card");
     updates.refresh();
-    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Merge approved card"]);
+    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Bakery card: Approved card"], "the card once, without its merge commit");
   } finally { close(); }
 });
 
@@ -75,9 +80,9 @@ test("combines origin/main updates with local merges, newest first", () => {
   const { repo, close } = fixture();
   try {
     const updates = new Updates(repo, async () => {}, () => {});
-    mergeLocally(repo, "Merge approved card");
+    mergeLocally(repo, "Approved card");
     updates.refresh();
-    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Fix typo", "Add pending updates notice", "Merge approved card"]);
+    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Fix typo", "Add pending updates notice", "Bakery card: Approved card"]);
   } finally { close(); }
 });
 
