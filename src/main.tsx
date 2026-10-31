@@ -1116,6 +1116,25 @@ export function App() {
   const boardHasNew =
     (boards.find((item) => item.id === boardId)?.newCards ?? 0) > 0;
   const boardLoaded = loadedBoard === boardId;
+  // Fade the visible page in whenever the page identity changes: the view, plus the repository for
+  // repository-scoped views. Polling, card interactions and re-selecting the current page leave the
+  // identity alone. The first repository resolving (null -> id) is not a navigation.
+  const pageKey = `${view}:${view === "settings" || view === "today" || view === "stats" || view === "logs" ? "" : (boardId ?? "")}`;
+  const shownPageKey = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = shownPageKey.current;
+    shownPageKey.current = pageKey;
+    if (previous === null || previous === pageKey) return;
+    if (previous.split(":")[0] === view && previous.endsWith(":")) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const page = Array.from(
+      document.querySelectorAll<HTMLElement>("main.page-fade"),
+    ).find((el) => !el.hidden);
+    page?.animate([{ opacity: 0.88 }, { opacity: 1 }], {
+      duration: 120,
+      easing: "ease-out",
+    });
+  }, [pageKey, view]);
   const visit = view === "board" && boardId ? boardId : null;
   const visitRef = useRef<string | null>(null);
   const loadedCards = useRef<Card[]>([]);
@@ -1704,7 +1723,7 @@ export function App() {
         </div>
       </aside>
       {view === "today" && (
-        <main className="min-w-0 flex-1">
+        <main className="page-fade min-w-0 flex-1">
           <Today
             boards={boards}
             cards={allCards}
@@ -1727,12 +1746,12 @@ export function App() {
         </main>
       )}
       {view === "stats" && (
-        <main className="min-w-0 flex-1">
+        <main className="page-fade min-w-0 flex-1">
           <Statistics boards={boards} />
         </main>
       )}
       {view === "logs" && (
-        <main className="min-w-0 flex-1">
+        <main className="page-fade min-w-0 flex-1">
           <Logs />
         </main>
       )}
@@ -1762,7 +1781,7 @@ export function App() {
         boardId &&
         currentBoard &&
         supportsPullRequests(currentBoard) && (
-          <main className="min-w-0 flex-1">
+          <main className="page-fade min-w-0 flex-1">
             <header className="border-b border-border px-6 py-6 lg:px-10">
               <h1 className="text-[27px] font-semibold tracking-[-.05em]">
                 Pull requests
@@ -1782,7 +1801,7 @@ export function App() {
           </main>
         )}
       {view === "visualizer" && boardId && currentBoard && (
-        <main className="min-w-0 flex-1">
+        <main className="page-fade min-w-0 flex-1">
           <header className="border-b border-border px-6 py-6 lg:px-10">
             <h1 className="text-[27px] font-semibold tracking-[-.05em]">
               Visualizer
@@ -1799,7 +1818,7 @@ export function App() {
         </main>
       )}
       {view === "chat" && boardId && currentBoard && (
-        <main className="min-w-0 flex-1">
+        <main className="page-fade min-w-0 flex-1">
           <header className="border-b border-border px-6 py-6 lg:px-10">
             <h1 className="text-[27px] font-semibold tracking-[-.05em]">
               Chat
@@ -1830,7 +1849,7 @@ export function App() {
         </main>
       )}
       <main
-        className="min-w-0 flex-1"
+        className="page-fade min-w-0 flex-1"
         hidden={
           view === "today" ||
           (view === "visualizer" && !!currentBoard) ||
