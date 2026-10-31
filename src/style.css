@@ -405,3 +405,5 @@ body { margin: 0; min-width: 320px; background: var(--background); color: var(--
 @media (prefers-reduced-motion: reduce) {
   [data-dialog-overlay], [data-dialog-content] { animation-duration: 1ms !important; }
 }
+
+/* .page-fade marks each page's <main>; the 120 ms opacity fade itself is started from src/main.tsx when the page identity changes. */

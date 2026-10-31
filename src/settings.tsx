@@ -38,7 +38,7 @@ export function SettingsPage({
   modelFields: ReactNode;
 }) {
   return (
-    <main className="min-w-0 flex-1">
+    <main className="page-fade min-w-0 flex-1">
       <header className="border-b border-border px-6 py-6 lg:px-10">
         <h1 className="text-[27px] font-semibold tracking-[-.05em]">
           Settings
