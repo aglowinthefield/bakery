@@ -92,6 +92,15 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards", "POST", { repo: "code/beta" })).status, 400);
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpine" })).status, 400);
     const second = (await request("/boards", "POST", { repo: beta })).data;
+    // Board chats: new ones default to the cheap chat model; the picker switches a chat's model and thinking.
+    const chat = (await request(`/boards/${second.id}/chats`, "POST", {})).data;
+    assert.deepEqual([chat.model, chat.thinking], ["openai/gpt-6.1-sol", "low"]);
+    const picked = (await request(`/boards/${second.id}/chats`, "POST", { model: "anthropic/claude-sonnet-4-5", thinking: "high" })).data;
+    assert.deepEqual([picked.model, picked.thinking], ["anthropic/claude-sonnet-4-5", "high"]);
+    const switched = (await request(`/boards/${second.id}/chats/${chat.id}`, "PATCH", { model: "openai/gpt-6.1-sol", thinking: "minimal" })).data;
+    assert.deepEqual([switched.id, switched.model, switched.thinking], [chat.id, "openai/gpt-6.1-sol", "minimal"]);
+    assert.equal((await request(`/boards/${second.id}/chats/${chat.id}`, "PATCH", { model: "has space", thinking: "low" })).status, 400);
+    assert.equal((await request(`/boards/${second.id}/chats`)).data.find((item: { id: string }) => item.id === chat.id).thinking, "minimal");
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "unknown", color: "coral" })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "red; background:url(x)" })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant" })).status, 400);

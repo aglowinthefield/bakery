@@ -81,7 +81,7 @@ test("quick capture adds a Triage card to the chosen repository and remembers it
     await page.getByText("Added to beta Triage").waitFor();
     assert.equal(await input.inputValue(), "");
     assert.deepEqual(requests.filter(item => item.method === "POST").map(item => [item.path, item.input]),
-      [["/api/boards/board-b/cards", { title: "Water the plants", body: "" }]]);
+      [["/api/boards/board-b/cards", { title: "Water the plants", body: "", origin: "ui" }]]);
     await page.reload();
     assert.equal(await page.getByRole("combobox", { name: "Repository" }).inputValue(), "board-b");
   } finally { await page.close(); }

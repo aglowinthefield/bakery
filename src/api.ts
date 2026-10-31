@@ -16,6 +16,17 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
   return data as T;
 }
+// Shared by every model picker; listing spawns Pi, so only ask once a model field is used. A failure is retried next time.
+let modelList: Promise<{ models: string[]; error?: string }> | undefined;
+export function listModels(): Promise<{ models: string[]; error?: string }> {
+  const request = (modelList ??= api<{ models: string[]; error?: string }>(
+    "/models",
+  ).catch((err) => ({ models: [], error: String(err) })));
+  void request.then((result) => {
+    if (result.error && modelList === request) modelList = undefined;
+  });
+  return request;
+}
 /** "5m", "3h", "2d": the footer only needs a rough age; the exact time is in the tooltip. */
 export const ago = (value: string) => {
   const minutes = Math.max(0, (Date.now() - new Date(value).getTime()) / 60000);

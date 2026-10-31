@@ -54,7 +54,6 @@ const cliHost = bindHost === "0.0.0.0" || bindHost === "::" ? "127.0.0.1" : bind
 const chats = new Chats(board, {
   piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs")}`,
   env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
-  models: repo => piModelArgs(board.agentModelFor(repo, "work")),
   topic: (repoBoard, message) => writeTopic(piBin, repoBoard.repo, piModelArgs(board.agentModelFor(repoBoard.repo, "draft")), message),
 });
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
@@ -257,7 +256,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/repository-root" && req.method === "GET") {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
-    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {} }))); return; }
+    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
       // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
@@ -399,6 +398,14 @@ const server = createServer(async (req, res) => {
       if (repoBoard.integration === "github-pr") void githubSync.syncBoard(repoBoard.id);
       send(res, 200, { main }); return;
     }
+    // Opening the Kanban view: marks the board's new cards seen and returns their ids for the visit's highlight.
+    const seenRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards-seen$/);
+    if (seenRoute && req.method === "POST") {
+      if (!board.getBoard(seenRoute[1])) { send(res, 404, { error: "Board not found" }); return; }
+      const { cardIds } = await body(req);
+      if (!Array.isArray(cardIds) || cardIds.length > 5000 || cardIds.some(item => typeof item !== "string")) { send(res, 400, { error: "cardIds must list the loaded card ids" }); return; }
+      send(res, 200, { cardIds: board.markCardsSeen(seenRoute[1], cardIds as string[]) }); return;
+    }
     const conflictsRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflicts$/);
     if (conflictsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(conflictsRoute[1]);
@@ -466,31 +473,54 @@ const server = createServer(async (req, res) => {
       for (const item of purged) removeCardAttachmentFiles(dataDir, item.cardId);
       send(res, 200, purged); return;
     }
-    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events))?)?$/);
+    const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events|view|discard))?)?$/);
     if (chatRoute) {
       const repoBoard = board.getBoard(chatRoute[1]), chatId = chatRoute[2], action = chatRoute[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       if (!chatId) {
         if (req.method === "GET") { send(res, 200, board.listChats(repoBoard.id).map(chat => ({ ...chat, pending: chats.live(chat.id) !== null }))); return; }
-        if (req.method === "POST") { send(res, 201, board.createChat(repoBoard.id)); return; }
+        if (req.method === "POST") {
+          const { model, thinking } = await body(req);
+          send(res, 201, model === undefined && thinking === undefined ? board.createChat(repoBoard.id) : board.createChat(repoBoard.id, "", { model, thinking })); return;
+        }
       } else {
         const chat = board.getChat(chatId);
         if (!chat || chat.boardId !== repoBoard.id) { send(res, 404, { error: "Chat not found on this board" }); return; }
         if (req.method === "GET" && !action) { send(res, 200, { chat, messages: board.listChatMessages(chatId), live: chats.live(chatId) }); return; }
         if (req.method === "DELETE" && !action) { chats.delete(chatId); send(res, 200, { ok: true }); return; }
+        if (req.method === "PATCH" && !action) {
+          const { model, thinking } = await body(req);
+          send(res, 200, board.setChatModel(chatId, { model, thinking })); return;
+        }
         if (req.method === "POST" && action === "messages") {
           const { message } = await body(req);
           if (typeof message !== "string" || !message.trim() || message.length > 16000) throw new Error("Write a message of up to 16000 characters");
           send(res, 202, chats.send(repoBoard, chatId, message.trim())); return;
         }
+        // Automatic cleanup of an abandoned empty chat; unlike DELETE it refuses when a message was saved or a reply is running.
+        if (req.method === "POST" && action === "discard") { send(res, 200, { discarded: chats.discardIfEmpty(chatId) }); return; }
         if (req.method === "POST" && action === "stop") { chats.stop(chatId); send(res, 200, { ok: true }); return; }
+        // A browser view says whether the operator is looking at this chat; looking marks it read.
+        if (req.method === "POST" && action === "view") {
+          const { viewer, looking, revision } = await body(req);
+          if (typeof viewer !== "string" || !/^[\w-]{1,64}$/.test(viewer) || typeof looking !== "boolean" || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) throw new Error("Send a viewer id, whether it is looking, and the update's revision");
+          // Only a view with an open event stream counts; a late update from a closed one is ignored, and `known`
+          // tells the browser to reconnect.
+          send(res, 200, { ok: true, known: chats.view(chatId, viewer, looking, revision) }); return;
+        }
         // Server-sent events: the live reply as it is written, and each message once saved.
         if (req.method === "GET" && action === "events") {
-          res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
+          // The stream registers its view (an id per stream) and whether it is looking before the browser sees it open,
+          // so a turn finishing right after is judged correctly and the view's later updates are accepted. The view ends
+          // with the stream.
+          const params = new URL(req.url ?? "/", "http://localhost").searchParams, viewer = params.get("viewer");
+          const viewing = viewer && /^[\w-]{1,64}$/.test(viewer) ? viewer : null;
           const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
-          write({ type: "live", live: chats.live(chatId) });
           const unsubscribe = chats.subscribe(chatId, write), ping = setInterval(() => res.write(": ping\n\n"), 20_000);
-          req.once("close", () => { unsubscribe(); clearInterval(ping); });
+          req.once("close", () => { unsubscribe(); clearInterval(ping); if (viewing) chats.unview(chatId, viewing); });
+          res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
+          write({ type: "live", live: chats.live(chatId) });
+          if (viewing && !res.destroyed) chats.watch(chatId, viewing, params.get("looking") === "1");
           return;
         }
       }
@@ -506,7 +536,7 @@ const server = createServer(async (req, res) => {
           // A repeated key returns the board's existing card unchanged, whatever its status.
           const existing = key === null ? undefined : board.getCardByIdempotencyKey(repoBoard.repo, key);
           if (existing) { send(res, 200, existing); return; }
-          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn) })); return;
+          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn), origin: input.origin === "ui" ? "ui" : "api" })); return;
         }
       } else {
         const item = board.getCard(id);

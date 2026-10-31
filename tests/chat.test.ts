@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -57,7 +59,7 @@ echo '{"type":"tool_execution_end","toolCallId":"t","toolName":"bash","isError":
 echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"done"}}'
 echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
 echo '{"type":"agent_settled","aborted":false}'`);
-    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const chat = board.createChat(repoBoard.id);
     const finished = settle(chats, chat.id);
     chats.send(repoBoard, chat.id, "what is on the board?\nsecond line");
@@ -70,15 +72,88 @@ echo '{"type":"agent_settled","aborted":false}'`);
     assert.equal(board.getChat(chat.id)?.title, "what is on the board?");
     const args = readFileSync(join(dir, "args"), "utf8");
     assert.ok(args.includes(`--session-id ${chat.id}`) && args.includes("--print") && args.includes("-- what is on the board?"));
+    assert.ok(args.includes("--model openai/gpt-6.1-sol --thinking low --"), "a new chat runs on the cheap chat default");
     assert.equal(chats.live(chat.id), null);
   } finally { done(); }
+});
+
+test("a chat keeps its own model, separate from card runs, and switching applies to the next turn", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    board.setAgentModels(repoBoard.id, { work: { model: "anthropic/claude-opus-4-5", thinking: "high" } });
+    const chat = board.createChat(repoBoard.id);
+    assert.deepEqual([chat.model, chat.thinking], ["openai/gpt-6.1-sol", "low"]);
+    const switched = board.setChatModel(chat.id, { model: "anthropic/claude-sonnet-4-5", thinking: "medium" });
+    assert.deepEqual([switched.model, switched.thinking], ["anthropic/claude-sonnet-4-5", "medium"]);
+    assert.deepEqual(board.listChats(repoBoard.id).map(item => [item.model, item.thinking]), [["anthropic/claude-sonnet-4-5", "medium"]]);
+    assert.throws(() => board.setChatModel(chat.id, { model: "--evil", thinking: "low" }), /Pi model pattern/);
+    assert.throws(() => board.setChatModel(chat.id, { model: "a/b", thinking: "huge" }), /thinking must be/);
+    const picked = board.createChat(repoBoard.id, "", { model: "", thinking: "" });
+    assert.deepEqual([picked.model, picked.thinking], ["openai/gpt-6.1-sol", "low"], "an empty pick means the chat default");
+
+    const pi = fakePi(dir, `for last; do :; done; echo "$@" > "${dir}/args-$last"
+echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ok"}}'
+echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
+echo '{"type":"agent_settled","aborted":false}'`);
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    let finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "first");
+    await finished;
+    board.setChatModel(chat.id, { model: "openai/gpt-6.1-sol", thinking: "minimal" });
+    finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "second");
+    await finished;
+    finished = settle(chats, picked.id);
+    chats.send(repoBoard, picked.id, "third");
+    await finished;
+    const [first, second, third] = ["first", "second", "third"].map(message => readFileSync(join(dir, `args-${message}`), "utf8"));
+    assert.ok(first.includes("--model anthropic/claude-sonnet-4-5 --thinking medium --") && !first.includes("opus"), first);
+    assert.ok(second.includes("--model openai/gpt-6.1-sol --thinking minimal --"), second);
+    assert.ok(third.includes("--model openai/gpt-6.1-sol --thinking low --"), third);
+  } finally { done(); }
+});
+
+test("clearing the picker on a resumed session restores the defaults, not the session's earlier choice", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    // Like Pi: a resumed session keeps its earlier model/thinking for any flag that is omitted.
+    const pi = fakePi(dir, `model=$(cat "${dir}/model" 2>/dev/null); thinking=$(cat "${dir}/thinking" 2>/dev/null)
+while [ $# -gt 0 ]; do case "$1" in --model) model=$2; shift;; --thinking) thinking=$2; shift;; esac; shift; done
+echo "$model" > "${dir}/model"; echo "$thinking" > "${dir}/thinking"; echo "$model $thinking" >> "${dir}/effective"
+echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
+echo '{"type":"agent_settled","aborted":false}'`);
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const chat = board.createChat(repoBoard.id, "", { model: "anthropic/claude-sonnet-4-5", thinking: "high" });
+    for (const [message, choice] of [["one", undefined], ["two", { model: "", thinking: "" }]] as const) {
+      if (choice) board.setChatModel(chat.id, choice);
+      const finished = settle(chats, chat.id);
+      chats.send(repoBoard, chat.id, message);
+      await finished;
+    }
+    assert.deepEqual(readFileSync(join(dir, "effective"), "utf8").trim().split("\n"), ["anthropic/claude-sonnet-4-5 high", "openai/gpt-6.1-sol low"]);
+  } finally { done(); }
+});
+
+test("chats saved before the picker move to the cheap chat default", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-chat-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    new Board(path).close();
+    const db = new DatabaseSync(path);
+    db.exec("CREATE TABLE chats_old AS SELECT id, boardId, title, createdAt, updatedAt FROM chats; DROP TABLE chats; ALTER TABLE chats_old RENAME TO chats;");
+    db.prepare("INSERT INTO chats VALUES ('c1', 'b1', 'Old', '2025-01-01', '2025-01-01')").run();
+    db.close();
+    const board = new Board(path);
+    assert.deepEqual({ ...board.getChat("c1") }, { id: "c1", boardId: "b1", title: "Old", topic: "", unread: 0, createdAt: "2025-01-01", updatedAt: "2025-01-01", model: "openai/gpt-6.1-sol", thinking: "low" });
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a failed or stopped turn leaves an error message and keeps what streamed", async () => {
   const { dir, board, repoBoard, done } = fixture();
   try {
     const bad = fakePi(dir, `echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"partial"}}'\necho oops >&2\nexit 3`);
-    const chats = new Chats(board, { piBin: bad, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chats = new Chats(board, { piBin: bad, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const chat = board.createChat(repoBoard.id);
     let finished = settle(chats, chat.id);
     chats.send(repoBoard, chat.id, "hi");
@@ -86,7 +161,7 @@ test("a failed or stopped turn leaves an error message and keeps what streamed",
     assert.deepEqual(board.listChatMessages(chat.id).map(item => [item.role, item.body]), [["user", "hi"], ["agent", "partial"], ["error", "Pi failed (3): oops"]]);
 
     const slow = fakePi(dir, "sleep 30");
-    const stopping = new Chats(board, { piBin: slow, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const stopping = new Chats(board, { piBin: slow, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const other = board.createChat(repoBoard.id);
     finished = settle(stopping, other.id);
     stopping.send(repoBoard, other.id, "go");
@@ -94,6 +169,124 @@ test("a failed or stopped turn leaves an error message and keeps what streamed",
     await finished;
     assert.deepEqual(board.listChatMessages(other.id).map(item => item.role), ["user", "error"]);
     assert.equal(board.listChatMessages(other.id)[1].body, "Stopped by the operator");
+  } finally { done(); }
+});
+
+const okPi = (dir: string) => fakePi(dir, `echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"done"}}'
+echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'
+echo '{"type":"agent_settled","aborted":false}'`);
+
+test("a turn that finishes while nobody looks bumps the chat's unread count, once per turn", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const chat = board.createChat(repoBoard.id);
+    assert.equal(chat.unread, 0);
+    chats.watch(chat.id, "tab1", false);
+    let finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "one");
+    const events = await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 1);
+    assert.ok(events.some(event => event.type === "chat" && event.chat.unread === 1), "subscribers hear the new count");
+    finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "two");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 2);
+    assert.equal(board.listChats(repoBoard.id)[0].unread, 2);
+  } finally { done(); }
+});
+
+test("a turn that finishes while a view is looking, or that the operator stopped, does not count", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const chat = board.createChat(repoBoard.id);
+    chats.watch(chat.id, "away", false);
+    chats.watch(chat.id, "here", true);
+    let finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "hi");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 0, "one looking view is enough");
+    chats.unview(chat.id, "here");
+    finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "again");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 1, "once that view closes, turns count again");
+
+    const stopping = new Chats(board, { piBin: fakePi(dir, "sleep 30"), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const other = board.createChat(repoBoard.id);
+    finished = settle(stopping, other.id);
+    stopping.send(repoBoard, other.id, "go");
+    stopping.stop(other.id);
+    await finished;
+    assert.equal(board.getChat(other.id)?.unread, 0);
+  } finally { done(); }
+});
+
+test("looking at a chat clears its count and tells subscribers", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const chat = board.createChat(repoBoard.id);
+    board.bumpChatUnread(chat.id); board.bumpChatUnread(chat.id);
+    const seen: ChatEvent[] = [];
+    const off = chats.subscribe(chat.id, event => seen.push(event));
+    chats.watch(chat.id, "tab1", false);
+    assert.equal(board.getChat(chat.id)?.unread, 2, "an open but unfocused view does not read it");
+    chats.view(chat.id, "tab1", true, 1);
+    off();
+    assert.equal(board.getChat(chat.id)?.unread, 0);
+    assert.deepEqual(seen.map(event => event.type === "chat" && event.chat.unread), [0]);
+    chats.view(chat.id, "tab1", true, 2);
+    assert.equal(seen.length, 1, "clearing an already read chat announces nothing");
+  } finally { done(); }
+});
+
+test("a focus update that arrives after a later blur is ignored, so the turn still counts", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const chat = board.createChat(repoBoard.id);
+    chats.watch(chat.id, "tab1", false);
+    // The operator focused (revision 1) then blurred (revision 2); the blur reached the server first.
+    assert.equal(chats.view(chat.id, "tab1", false, 2), true);
+    assert.equal(chats.view(chat.id, "tab1", true, 1), true, "the view is still known, the stale update just does nothing");
+    const finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "hi");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 1);
+  } finally { done(); }
+});
+
+test("an update from a view whose stream has closed is ignored, so later turns still count", async () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: okPi(dir), sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const chat = board.createChat(repoBoard.id);
+    assert.equal(chats.view(chat.id, "never-opened", true, 1), false, "a view without a stream is not registered");
+    chats.watch(chat.id, "tab1", false);
+    chats.unview(chat.id, "tab1");
+    // The operator focused the page just before navigating away; that update lands after the stream closed.
+    assert.equal(chats.view(chat.id, "tab1", true, 1), false);
+    const finished = settle(chats, chat.id);
+    chats.send(repoBoard, chat.id, "hi");
+    await finished;
+    assert.equal(board.getChat(chat.id)?.unread, 1, "no leftover looking view suppresses the count");
+  } finally { done(); }
+});
+
+test("each board's unread total sums its chats", () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    mkdirSync(join(dir, "other"));
+    const otherBoard = board.addRepo(join(dir, "other"));
+    const [a, b, c, d] = [board.createChat(repoBoard.id), board.createChat(repoBoard.id), board.createChat(repoBoard.id), board.createChat(otherBoard.id)];
+    for (const id of [a.id, a.id, b.id, d.id]) board.bumpChatUnread(id);
+    assert.deepEqual(board.chatUnreadCounts(), { [repoBoard.id]: 3, [otherBoard.id]: 1 });
+    board.clearChatUnread(a.id);
+    board.clearChatUnread(d.id);
+    assert.deepEqual(board.chatUnreadCounts(), { [repoBoard.id]: 1 }, "boards with nothing unread are left out");
+    assert.equal(board.getChat(c.id)?.unread, 0);
   } finally { done(); }
 });
 
@@ -129,7 +322,7 @@ test("the first message names the chat once, and a failed name is retried on the
     const pi = fakePi(dir, `echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}'\necho '{"type":"agent_settled","aborted":false}'`);
     const asked: string[] = [];
     let fail = true;
-    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [],
+    const chats = new Chats(board, { piBin: pi, sessionDir: join(dir, "sessions"), cli: "cli", env: process.env,
       topic: async (_repoBoard, message) => { asked.push(message); if (fail) throw new Error("no model"); return "Blocked cards"; } });
     const warn = console.warn; console.warn = () => {};
     const chat = board.createChat(repoBoard.id);
@@ -154,7 +347,7 @@ test("the first message names the chat once, and a failed name is retried on the
   } finally { done(); }
 });
 
-test("a database from before topics gains an empty topic on its chats", () => {
+test("a database from before topics and unread counts gains them on its chats", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-chat-"));
   try {
     const old = new DatabaseSync(join(dir, "board.sqlite"));
@@ -163,6 +356,7 @@ test("a database from before topics gains an empty topic on its chats", () => {
     const board = new Board(join(dir, "board.sqlite"));
     try {
       assert.equal(board.getChat("c1")?.topic, "");
+      assert.equal(board.getChat("c1")?.unread, 0);
       assert.equal(board.setChatTopic("c1", "Old topic")?.topic, "Old topic");
     } finally { board.close(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -171,15 +365,84 @@ test("a database from before topics gains an empty topic on its chats", () => {
 test("deleting a chat removes its messages and its Pi session file", () => {
   const { dir, board, repoBoard, done } = fixture();
   try {
-    const chats = new Chats(board, { piBin: "pi", sessionDir: join(dir, "sessions"), cli: "cli", env: process.env, models: () => [] });
+    const chats = new Chats(board, { piBin: "pi", sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
     const chat = board.createChat(repoBoard.id);
     board.addChatMessage(chat.id, "user", "hello");
     writeFileSync(join(dir, "sessions", `2026-01-01T00-00-00Z_${chat.id}.jsonl`), "{}");
     chats.delete(chat.id);
     assert.equal(board.getChat(chat.id), undefined);
     assert.deepEqual(board.listChatMessages(chat.id), []);
-    assert.equal(readdirSyncSafe(join(dir, "sessions")).length, 0);
+    assert.equal(readdirSync(join(dir, "sessions")).length, 0);
   } finally { done(); }
 });
-import { readdirSync } from "node:fs";
-const readdirSyncSafe = (path: string) => readdirSync(path);
+
+test("the API reports each board's unread chat total, and a looking view clears it", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bakery-chat-api-"));
+  const repo = join(home, "repo");
+  mkdirSync(repo);
+  execFileSync("git", ["init", "-q", repo]);
+  const pi = okPi(home);
+  const listener = createNetServer();
+  await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const port = (listener.address() as { port: number }).port;
+  await new Promise<void>(resolve => listener.close(() => resolve()));
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: pi },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stderr?.on("data", chunk => { output += chunk.toString(); });
+  const url = `http://127.0.0.1:${port}/api`;
+  const request = async (path: string, method = "GET", input?: unknown) => {
+    const response = await fetch(`${url}${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
+    return { status: response.status, data: await response.json() };
+  };
+  const until = async (check: () => Promise<boolean>, what: string) => {
+    const deadline = Date.now() + 10_000;
+    while (!(await check())) {
+      if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Timed out waiting for ${what}: ${output}`);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  };
+  const stream = new AbortController();
+  try {
+    await until(() => fetch(`${url}/boards`).then(() => true, () => false), "the server");
+    const repoBoard = (await request("/boards", "POST", { repo })).data;
+    assert.equal((await request("/boards")).data[0].chatUnread, 0);
+    const chat = (await request(`/boards/${repoBoard.id}/chats`, "POST", {})).data;
+    const chatUrl = `/boards/${repoBoard.id}/chats/${chat.id}`;
+    // An open but unfocused view: the turn still counts.
+    const events = await fetch(`${url}${chatUrl}/events?viewer=tab1&looking=0`, { signal: stream.signal });
+    assert.equal(events.status, 200);
+    assert.equal((await request(`${chatUrl}/messages`, "POST", { message: "hello" })).status, 202);
+    await until(async () => (await request("/boards")).data[0].chatUnread === 1, "the unread total");
+    assert.equal((await request(`/boards/${repoBoard.id}/chats`)).data[0].unread, 1);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "bad id!", looking: true, revision: 1 })).status, 400);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: "yes", revision: 1 })).status, 400);
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: true })).status, 400, "an update needs its revision");
+    assert.equal((await request(`${chatUrl}/view`, "POST", { viewer: "tab1", looking: true, revision: 1 })).status, 200);
+    assert.equal((await request("/boards")).data[0].chatUnread, 0);
+    assert.equal((await request(`/boards/${repoBoard.id}/chats`)).data[0].unread, 0);
+  } finally {
+    stream.abort();
+    child.kill("SIGTERM");
+    await new Promise(resolve => child.once("exit", resolve));
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("discardIfEmpty deletes only a chat with no saved message and no running reply", () => {
+  const { dir, board, repoBoard, done } = fixture();
+  try {
+    const chats = new Chats(board, { piBin: "pi", sessionDir: join(dir, "sessions"), cli: "cli", env: process.env });
+    const empty = board.createChat(repoBoard.id), used = board.createChat(repoBoard.id);
+    board.addChatMessage(used.id, "user", "hello");
+    // A client with a stale view asks about the chat that gained a message elsewhere.
+    assert.equal(chats.discardIfEmpty(used.id), false);
+    assert.equal(board.listChatMessages(used.id).length, 1);
+    assert.equal(chats.discardIfEmpty(empty.id), true);
+    assert.equal(board.getChat(empty.id), undefined);
+    assert.equal(chats.discardIfEmpty(empty.id), false, "an already-deleted chat is a no-op");
+  } finally { done(); }
+});
