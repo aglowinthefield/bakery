@@ -473,6 +473,9 @@ export class GitHubSync {
       }
       sections.push(`### ${checkName(check) || "check"}: ${outcome(check).toLowerCase()}\n${check.detailsUrl || check.targetUrl || ""}${log ? `\n\n\`\`\`\n${log}\n\`\`\`` : ""}`);
     }
+    // A cancelled check (fail-fast stopping the other legs, say) never ran, so it may hide more failures behind these.
+    const cancelled = latestChecks(pr).filter(check => outcome(check) === "CANCELLED").map(checkName).filter(Boolean);
+    if (cancelled.length) sections.push(`### Not run\nThese checks were cancelled before they finished, so they may hide further failures: ${cancelled.slice(0, 12).join(", ")}. Run the repository's full local verification, not only the checks that failed above, so this round fixes everything.`);
     this.board.recordCiFailure(card.id, head, sections.join("\n\n"));
     await commentOnPullRequest(this.github, repo, pr.number, `CI failed at ${head.slice(0, 12)}: ${failures.map(check => `\`${checkName(check) || "check"}\``).join(", ")}. Bakery sent this back to its coding agent with the failure logs (automatic fix run ${card.ciReworks + 1} of ${maxCiReworks}). The fix will be pushed here when it's ready.`);
     return this.startRework(card);

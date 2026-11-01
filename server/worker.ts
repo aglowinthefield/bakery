@@ -75,12 +75,14 @@ export class Worker {
     const run = this.board.claim(card.id, startedBy, why);
     const prMode = this.board.integrationFor(card.repo) === "github-pr";
     let created = false;
+    let mainMerged = "";
     try {
       if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");
       mkdirSync(join(this.dataDir, "worktrees"), { recursive: true });
       // On a github-pr board a card starts from origin/main, fetched now, so it never builds on a stale checkout.
       if (prMode) fetchOrigin(root);
       if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : this.localBase(run, root)); created = true; }
+      else if (prMode && !conflict && ciFeedback?.source === "ci") mainMerged = this.mergeMainForCiFix(run, worktree);
       else if (prMode && !conflict) this.rebaseRetry(card, run, worktree, branch);
     } catch (error) {
       this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
@@ -99,7 +101,7 @@ export class Worker {
       : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action." + hookCheck;
     const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
     const reviewerPrompt = reviewerChanges.length ? `\n\nAn independent agent reviewer inspected the previous attempt and sent it back with these requested changes. Address each item and report any you could not resolve: ${JSON.stringify(reviewerChanges)}` : "";
-    const ciPrompt = ciFeedback?.source === "ci" && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix. Some checks are satisfied outside the code, by a label or a line in the pull request description. For this run you are authorized to change that pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} with \`gh pr edit\` (add or remove labels, edit the description) when the repository's own rules allow it, and to post a \`gh pr comment\` there explaining each such change and why the rules allow it. If a failure looks like a hang, timeout or flake rather than a code problem, re-run just the failed jobs once with \`gh run rerun <run-id> --failed\` (run ids are in the failure list or \`gh run list --branch\`) before changing code, and say so in your report; re-run each run at most once. Do not push, merge, close it, or touch any other pull request; Bakery pushes your code changes. The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
+    const ciPrompt = ciFeedback?.source === "ci" && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix. Some checks are satisfied outside the code, by a label or a line in the pull request description. For this run you are authorized to change that pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} with \`gh pr edit\` (add or remove labels, edit the description) when the repository's own rules allow it, and to post a \`gh pr comment\` there explaining each such change and why the rules allow it. If a failure looks like a hang, timeout or flake rather than a code problem, re-run just the failed jobs once with \`gh run rerun <run-id> --failed\` (run ids are in the failure list or \`gh run list --branch\`) before changing code, and say so in your report; re-run each run at most once. Do not push, merge, close it, or touch any other pull request; Bakery pushes your code changes. CI tests the pull request merged with main, not the branch alone, so reproduce failures on a tree that includes current origin/main.${mainMerged ? ` ${mainMerged}` : ""} The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
     // A conflict repair gets refused-push output too: the run that would have fixed the hook failed on the conflict
     // before Pi started, so without it the repair goes back to Review and the next push fails the same hook again.
     const pushPrompt = ciFeedback?.source === "push" ? `\n\nBakery tried to push this card's branch to GitHub, and the repository's pre-push hook refused it, so nothing was pushed. Make the hook pass: fix what it reports on the card branch (the commit it rejected is ${ciFeedback.headSha}), re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery pushes after the operator approves again. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
@@ -165,6 +167,29 @@ export class Worker {
       const next = conflicted.length ? "Choose Fix conflict with Pi, or resolve it yourself" : "Resolve it";
       throw new Error(`${merging ? "Merge of" : "Rebase onto"} origin/main conflicted${conflicted.length ? ` in ${conflicted.join(", ")}` : ""}; the card branch is unchanged. ${next} in ${worktree}, then run again. ${detail.slice(0, 1000)}`);
     }
+  }
+  /**
+   * CI tests a pull request merged with main, so a failure can come from main's newer commits meeting the card's work
+   * even when the two merge cleanly (a new test on main using something the card removed, say). A fix run on a branch
+   * behind origin/main gets origin/main merged in first, so the agent sees the tree CI ran. The branch is already on
+   * the PR, so it is merged rather than rebased. Returns a sentence for the prompt, or "" when nothing was merged.
+   */
+  private mergeMainForCiFix(run: Run, worktree: string): string {
+    try {
+      if (git(worktree, "status", "--porcelain") || isAncestor(worktree, "origin/main", "HEAD")) return "";
+    } catch { return ""; }
+    const tip = git(worktree, "rev-parse", "origin/main");
+    this.board.append(run.id, "Merging origin/main into the card branch so the fix run sees what CI tested…\n");
+    try {
+      git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-edit", "origin/main");
+    } catch {
+      let files: string[] = [];
+      try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean); } catch { /* Keep going without the list. */ }
+      try { git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
+      this.board.append(run.id, `The merge conflicted${files.length ? ` in ${files.join(", ")}` : ""}; the card branch is unchanged.\n`);
+      return `Bakery tried to merge origin/main (${tip}) into the card branch before this run and it conflicted${files.length ? ` in ${files.join(", ")}` : ""}, so the branch is unchanged. Merge origin/main yourself and commit the merge on the card branch if every conflict is mechanical; otherwise run \`git merge --abort\` and say what decision the conflict needs.`;
+    }
+    return `Bakery already merged origin/main (${tip}) into the card branch for this run, because main moved after the failing commit. Some failures may come from main's newer changes meeting this card's work rather than from the card alone. Keep the merge commit; Bakery pushes it with your fix.`;
   }
   /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name (wiredtiger ships one). */
   private hasWorktrunk() {

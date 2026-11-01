@@ -832,6 +832,40 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
   } finally { f.cleanup(); }
 });
 
+test("github-pr: a CI fix run starts from origin/main merged in, and hears about checks that were cancelled", async () => {
+  const f = fixture();
+  const promptFile = join(f.dir, "prompt.txt"), treeFile = join(f.dir, "tree.txt");
+  const fixPi = join(f.dir, "pi-fix");
+  writeFileSync(fixPi, `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > "${promptFile}"\nls > "${treeFile}"\necho fixed >> feature.txt\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fixPi, 0o755);
+  const worker = new Worker(f.board, f.data, fixPi);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card));
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    // main moves after the PR head was pushed, and merges with the card cleanly.
+    const tip = f.landUpstream("from-main.txt");
+    const done = new Date(Date.now() - 1000).toISOString();
+    const lint = { __typename: "CheckRun", name: "lint", workflowName: "CI", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done, detailsUrl: "https://github.com/acme/widgets/actions/runs/1/job/55" };
+    const cancelled = { __typename: "CheckRun", name: "test", workflowName: "CI", status: "COMPLETED", conclusion: "CANCELLED", startedAt: done, completedAt: done };
+    writeFileSync(join(f.ghDir, "job-55.log"), "CI\tlint\t2026-10-27T14:18:51.5173558Z feature.txt: missing newline\n");
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [lint, cancelled] }]);
+    await sync.syncBoard(f.repoBoard.id);
+    await waitFor(() => f.board.getCard(card.id)!.status === "review");
+    const run = f.board.listRuns(card.id)[0];
+    assert.equal(run.status, "review", `${run.error} ${run.output}`);
+    assert.match(run.output, /Merging origin\/main into the card branch so the fix run sees what CI tested/);
+    const worktree = join(f.data, "worktrees", card.id);
+    assert.match(readFileSync(treeFile, "utf8"), /from-main\.txt/, "Pi started on a tree that includes main");
+    assert.equal(git(worktree, "rev-parse", "HEAD^2"), tip, "main is merged, not rebased in");
+    const prompt = readFileSync(promptFile, "utf8");
+    assert.match(prompt, new RegExp(`Bakery already merged origin/main \\(${tip}\\)`));
+    assert.match(prompt, /### Not run\nThese checks were cancelled before they finished.*: CI \/ test\./);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: CI fix runs retry a start that failed, stop at the limit, and leave work the operator is changing alone", async () => {
   const f = fixture();
   const started: string[] = [];
