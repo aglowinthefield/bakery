@@ -73,21 +73,31 @@ async fn connect(
     let url = server::server_url(&address, allow_http)?;
     server::probe(&url).await?;
     server::save(&settings_path(&app)?, &url)?;
+    open_remote(&app, &state, url)?;
+    // The remote window is up, so the connection window has done its job.
+    if let Err(error) = window.hide() {
+        eprintln!("Cannot hide connection settings: {error}");
+    }
+    Ok(())
+}
+
+/// Points the remote window at `url`, creating and showing it.
+fn open_remote(app: &tauri::AppHandle, state: &Connection, url: url::Url) -> Result<(), String> {
     let previous = state
         .origin
         .write()
         .map_err(|error| error.to_string())?
         .replace(url.clone());
     let url_for_drag = url.clone();
-    let result = if let Some(remote) = remote_window(&app) {
+    let result = if let Some(remote) = remote_window(app) {
         remote
             .navigate(url)
             .map(|_| remote)
             .map_err(|error| error.to_string())
     } else {
-        create_remote(&app, url)
+        create_remote(app, url)
     };
-    if let Err(error) = allow_window_dragging(&app, &url_for_drag) {
+    if let Err(error) = allow_window_dragging(app, &url_for_drag) {
         eprintln!("Cannot enable window dragging: {error}");
     }
     let remote = match result {
@@ -102,6 +112,27 @@ async fn connect(
         .and_then(|_| remote.set_focus())
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Opens the saved server on launch. Shows the connection window if there is none or it is unreachable.
+async fn auto_connect(app: tauri::AppHandle) {
+    let state = app.state::<Connection>();
+    let _connecting = state.serial.lock().await;
+    let attempt = async {
+        let saved = server::load(&settings_path(&app)?)?;
+        if saved.is_empty() {
+            return Err(String::new());
+        }
+        let url = server::server_url(&saved, true)?;
+        server::probe(&url).await?;
+        open_remote(&app, &state, url)
+    };
+    if let Err(error) = attempt.await {
+        if !error.is_empty() {
+            eprintln!("Cannot reconnect to the saved server: {error}");
+        }
+        show_connection(&app);
+    }
 }
 
 /// The hosted page may start a window drag from its title-bar strip and nothing else.
@@ -228,6 +259,8 @@ fn main() {
             let connection =
                 WebviewWindowBuilder::new(app, "connection", WebviewUrl::App("index.html".into()))
                     .title("Connect to Bakery")
+                    // Shown only when there is no saved server or it cannot be reached.
+                    .visible(false)
                     .inner_size(620.0, 620.0)
                     .min_inner_size(420.0, 560.0)
                     // The privileged window must never become a remote browser.
@@ -237,6 +270,7 @@ fn main() {
                     })
                     .on_new_window(|_, _| NewWindowResponse::Deny)
                     .build()?;
+            tauri::async_runtime::spawn(auto_connect(app.handle().clone()));
             let handle = app.handle().clone();
             connection.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
