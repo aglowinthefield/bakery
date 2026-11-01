@@ -46,18 +46,32 @@ flowchart LR
 
 ## Bakery and Hermes
 
-[Hermes](https://github.com/NousResearch/hermes-agent) is a general-purpose agent you talk to. Bakery is narrower: a task board for coding work, built around Git and review.
+[Hermes](https://github.com/NousResearch/hermes-agent) is a general-purpose agent, and it ships its own [Kanban board](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban) for routing tasks between agent profiles. Bakery is narrower: a board for coding work, built around Git and review of the diff.
 
-| | Bakery | Hermes |
+| | Bakery | Hermes Kanban |
 | --- | --- | --- |
-| Shape | Kanban board and CLI over a local server | An agent you converse with |
-| Unit of work | A card with its own worktree, branch and attempts | A conversation or session |
-| Scope | Coding tasks in your Git repositories | General tasks |
-| Agent | Pi | Hermes's own agent |
-| Results | A diff you review, then merge or open a PR | Whatever the agent produces |
-| Merging | Only on your approval, or unattended review you enable | Not a built-in concept |
+| Board, cards and dependencies | ✅ | ✅ |
+| Local SQLite, no account | ✅ | ✅ |
+| Review lane before Done | ✅ | ✅ |
+| Retries and attempt history | ✅ | ✅ |
+| Git worktree per card | ✅ Always, branch `bakery/CARD_ID` | ⚠️ Opt-in; the default workspace is a scratch directory |
+| Review the code diff in the UI | ✅ | ❌ |
+| Line comments on the diff, sent back as feedback | ✅ | ❌ |
+| One-click merge into local `main` | ✅ | ❌ |
+| Open a PR on approval | ✅ | ✅ |
+| Unattended reviewer agent and verification | ✅ Opt-in, with a verification command | ✅ Automatic `sdlc-review` reviewer |
+| Unattended merge into `main` | ✅ Opt-in, with a merge limit | ❌ |
+| Per-attempt tokens and cost | ✅ | ❌ |
+| 24-hour spend and a daily budget that stops pickup | ✅ | ❌ |
+| Dependency graph visualizer | ✅ | ❌ |
+| `doctor` command to check your setup | ✅ | ✅ |
+| Multiple agent profiles and roles | ❌ Pi only | ✅ |
+| Automatic task decomposition | ❌ | ✅ |
+| Several boards | ✅ One per repository | ✅ |
 
-Hermes is also a fine way to work on code. Pick Bakery when you want a queue of tasks, isolation per task and an approval step before anything lands. The Hermes column is a summary of its public README; check it for what Hermes does today.
+✅ means supported, ⚠️ means partly, ❌ means not supported. For Hermes, ❌ means I didn't find it in its Kanban docs, which change quickly, so check them before relying on a row.
+
+Pick Bakery when you want coding tasks isolated per Git worktree, reviewed as diffs, and approved before anything lands. Pick Hermes Kanban when you need a fleet of differently configured agents.
 
 ## How to use
 
