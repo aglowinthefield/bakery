@@ -126,6 +126,13 @@ import { UpdateNotice } from "./update-notice.js";
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
 // The machine the server runs on: repositories and merges live on its disk.
+// Most polls return what the screen already shows. Keeping the previous value skips a
+// re-render of every card, which stalls scrolling on boards with a few hundred cards.
+const unlessSame =
+  <T,>(next: T) =>
+  (previous: T): T =>
+    JSON.stringify(previous) === JSON.stringify(next) ? previous : next;
+
 function ServerHost() {
   const [host, setHost] = useState("");
   useEffect(() => {
@@ -1076,9 +1083,11 @@ export function App() {
           ]);
           if (!current) return;
           notifyNewReviews("today", next as Card[]);
-          setAllCards(next as Card[]);
-          setMergeConflicts((conflicts as MergeConflict[][]).flat());
-          setBoards(nextBoards);
+          setAllCards(unlessSame(next as Card[]));
+          setMergeConflicts(
+            unlessSame((conflicts as MergeConflict[][]).flat()),
+          );
+          setBoards(unlessSame(nextBoards));
           reopenCard(next as Card[]);
           return;
         }
@@ -1090,10 +1099,10 @@ export function App() {
         ]);
         if (!current) return;
         notifyNewReviews(boardId, next);
-        setCards(next);
+        setCards(unlessSame(next));
         setLoadedBoard(boardId);
-        setMergeConflicts(conflicts);
-        setBoards(nextBoards);
+        setMergeConflicts(unlessSame(conflicts));
+        setBoards(unlessSame(nextBoards));
         reopenCard(next);
       } catch (err) {
         if (current) setError(String(err));
