@@ -455,8 +455,8 @@ test("quick model and thinking picks both persist, and Send waits for them to sa
     assert.equal(patchesDone, patches.length, "no save was still pending when the message was sent");
     assert.equal(await thinking.inputValue(), "high");
     await page.reload();
-    await model.waitFor();
-    assert.equal(await model.inputValue(), "anthropic/claude-sonnet-4-5");
+    // The input renders from cached chats first, then the refetch lands.
+    await page.waitForFunction(() => (document.querySelector('[aria-label="Chat model"]') as HTMLInputElement | null)?.value === "anthropic/claude-sonnet-4-5");
     assert.equal(await thinking.inputValue(), "high");
   } finally {
     await browser.close();

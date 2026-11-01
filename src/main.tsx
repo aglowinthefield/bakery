@@ -122,6 +122,7 @@ import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
 import { themeNames, themes } from "./themes.js";
 import { UpdateNotice } from "./update-notice.js";
+import { ConfirmHost, confirmAction } from "./confirm.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1292,12 +1293,12 @@ export function App() {
       setBusy(false);
     }
   };
-  const resetPickupLimit = (target: Board) => {
+  const resetPickupLimit = async (target: Board) => {
     if (!target.autoPickupEnabled) return;
     if (
-      !window.confirm(
+      !(await confirmAction(
         `Reset the ${target.pickupDailyLimit}-start rolling limit for ${target.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs will remain in history.`,
-      )
+      ))
     )
       return;
     void action(async () => {
@@ -1309,7 +1310,7 @@ export function App() {
     });
   };
   // The budget is optional (blank means off). Raising or clearing a reached budget can start runs at once.
-  const saveCostBudget = (event: FormEvent, target: Board) => {
+  const saveCostBudget = async (event: FormEvent, target: Board) => {
     event.preventDefault();
     const text = budgetDraft.trim().replace(/^\$/, "");
     const budget = text ? Number(text) : null;
@@ -1326,9 +1327,9 @@ export function App() {
       target.autoPickupEnabled &&
       target.autoPickupBudgetReached &&
       (budget === null || budget > (target.cost24h ?? 0)) &&
-      !window.confirm(
+      !(await confirmAction(
         `${budget === null ? "Turn off" : "Raise"} the daily cost budget for ${target.repo}? Ready cards may start immediately and spend model tokens.`,
-      )
+      ))
     )
       return;
     void action(async () => {
@@ -1343,11 +1344,11 @@ export function App() {
       updateBoard(updated);
     });
   };
-  const removeBoard = (item: Board) => {
+  const removeBoard = async (item: Board) => {
     if (
-      !window.confirm(
+      !(await confirmAction(
         `Remove the board for ${item.repo}? Cards and worktrees remain on disk. Add this repository again to restore the board.`,
-      )
+      ))
     )
       return;
     void action(async () => {
@@ -1403,7 +1404,7 @@ export function App() {
     });
   };
   // Each drop calls the same endpoint as the matching button in the card's details.
-  const moveCard = (card: Card, to: Status, along: Card[] = []) => {
+  const moveCard = async (card: Card, to: Status, along: Card[] = []) => {
     if (!boardId || !dropTargets(card).includes(to)) return;
     const path = `/boards/${boardId}/cards`;
     if (to === "ready" && along.length > 0) {
@@ -1411,9 +1412,9 @@ export function App() {
       if (
         currentBoard?.autoPickupEnabled &&
         settings?.confirmRunStart &&
-        !window.confirm(
+        !(await confirmAction(
           `Move ${total} cards to Ready ("${card.title}" and the ${along.length} ${along.length === 1 ? "card" : "cards"} it waits on)? Auto pickup is on, so they may start and use paid model tokens. Cards that wait on others start after them.`,
-        )
+        ))
       )
         return;
       void action(async () => {
@@ -1433,9 +1434,9 @@ export function App() {
     if (to === "running") {
       if (
         settings?.confirmRunStart &&
-        !window.confirm(
+        !(await confirmAction(
           `Start Pi on "${card.title}"? This run may use paid model tokens and can edit its Git worktree.`,
-        )
+        ))
       )
         return;
       void action(() => api(`${path}/${card.id}/start`, { method: "POST" }));
@@ -1480,12 +1481,18 @@ export function App() {
           setSelected(card.id);
         }}
       />
+      <div
+        data-tauri-drag-region
+        aria-hidden="true"
+        className="desktop-titlebar"
+      />
+      <ConfirmHost />
       {sidebarHidden && (
         <button
           aria-label="Show sidebar"
           title="Show sidebar"
           onClick={toggleSidebar}
-          className="fixed left-3 top-3 z-30 hidden rounded-md border border-border bg-sidebar p-1.5 text-muted-foreground hover:text-foreground lg:block"
+          className="desktop-sidebar-toggle fixed left-3 top-3 z-30 hidden rounded-md border border-border bg-sidebar p-1.5 text-muted-foreground hover:text-foreground lg:block"
         >
           <PanelLeftOpen size={15} />
         </button>
@@ -1506,7 +1513,7 @@ export function App() {
           }}
           className="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize hover:bg-primary/30 lg:block"
         />
-        <div className="flex items-center gap-3 px-6 py-7">
+        <div className="desktop-sidebar-head flex items-center gap-3 px-5 py-5">
           <BrandIcon />
           <span className="text-[18px] font-semibold tracking-[-.04em]">
             bakery<span className="text-primary">.</span>
@@ -1520,15 +1527,17 @@ export function App() {
             <PanelLeftClose size={15} />
           </button>
         </div>
-        <div className="px-4 pt-5">
+        <div className="px-2 pt-1">
           <button
             onClick={openToday}
-            className={`mb-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+            className={`mb-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
-            <Sun size={16} aria-hidden="true" className="text-primary" />
-            Today
+            <Sun size={16} aria-hidden="true" />
+            <span className="text-[14px] font-medium text-foreground">
+              Today
+            </span>
             {needsYouCount > 0 && (
-              <span className="ml-auto rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary">
+              <span className="ml-auto text-[length:var(--text-sidebar-meta)] tabular-nums text-muted-foreground">
                 {needsYouCount}
               </span>
             )}
@@ -1537,7 +1546,7 @@ export function App() {
             onClick={toggleRepos}
             aria-expanded={!reposCollapsed}
             aria-controls="sidebar-repositories"
-            className="mb-3 flex w-full items-center gap-1 rounded px-3 text-left text-[length:calc(0.625rem*var(--density-text))] font-normal uppercase tracking-[.16em] text-muted-foreground hover:text-foreground"
+            className="mb-1 flex w-full items-center gap-1 rounded px-3 py-1 text-left text-[length:var(--text-sidebar)] text-muted-foreground/80 hover:text-foreground"
           >
             Repositories
             {reposCollapsed ? (
@@ -1557,19 +1566,24 @@ export function App() {
                 repoOpen[item.id] ??
                 (active || pullsActive || visualizerActive || chatActive);
               return (
-                <div key={item.id} className="rounded-lg">
-                  <div className="flex items-center rounded-lg hover:bg-accent/30">
+                <div key={item.id} className="rounded-md">
+                  {/* The whole row toggles; keyboard clicks on the button bubble up to it. */}
+                  <div
+                    className="cursor-pointer rounded-md pb-1.5 hover:bg-accent/30"
+                    onClick={() => {
+                      toggleRepoOpen(item.id, open);
+                      if (!open) openBoard(item.id);
+                    }}
+                  >
                     <button
-                      onClick={() => {
-                        toggleRepoOpen(item.id, open);
-                        if (!open) openBoard(item.id);
-                      }}
                       aria-expanded={open}
-                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-[length:var(--text-sidebar)]"
+                      className="flex w-full min-w-0 items-start gap-2.5 px-3 pb-0 pt-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
                       title={item.repo}
                     >
                       <RepoBadge board={item} />
-                      <span className="truncate">{repoName(item.repo)}</span>
+                      <span className="truncate text-[14px] font-medium leading-4 text-foreground">
+                        {repoName(item.repo)}
+                      </span>
                       {!open && !!item.chatUnread && (
                         <ChatUnreadBadge count={item.chatUnread} />
                       )}
@@ -1579,7 +1593,7 @@ export function App() {
                     )}
                     <ul
                       aria-label="Card counts"
-                      className="flex shrink-0 items-center justify-end gap-2 pr-3"
+                      className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-[3.375rem] pr-3"
                     >
                       {sidebarCounts.map((group) => {
                         const Icon = group.icon;
@@ -1668,7 +1682,7 @@ export function App() {
             })}
             <Button
               variant="ghost"
-              className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
+              className="mt-1 w-full justify-start text-[length:var(--text-sidebar)] font-normal text-muted-foreground hover:text-foreground"
               onClick={() => {
                 setError("");
                 setAddingRepo(true);
@@ -1680,22 +1694,26 @@ export function App() {
           <button
             onClick={() => openPage("stats")}
             aria-current={view === "stats" ? "page" : undefined}
-            className={`mt-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+            className={`mt-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
-            <BarChart3 size={16} aria-hidden="true" className="text-primary" />
-            Statistics
+            <BarChart3 size={16} aria-hidden="true" />
+            <span className="text-[14px] font-medium text-foreground">
+              Statistics
+            </span>
           </button>
           <button
             onClick={() => openPage("logs")}
             aria-current={view === "logs" ? "page" : undefined}
-            className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[length:var(--text-sidebar)] ${view === "logs" ? "bg-accent/50" : "hover:bg-accent/30"}`}
+            className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "logs" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
-            <ScrollText size={16} aria-hidden="true" className="text-primary" />
-            Logs
+            <ScrollText size={16} aria-hidden="true" />
+            <span className="text-[14px] font-medium text-foreground">
+              Logs
+            </span>
           </button>
           <Button
             variant="ghost"
-            className="mt-2 w-full justify-start text-[length:var(--text-sidebar)]"
+            className="mt-1 w-full justify-start text-[length:var(--text-sidebar)] font-normal text-muted-foreground hover:text-foreground"
             onClick={() => {
               setError("");
               openPage("settings");
@@ -1705,7 +1723,7 @@ export function App() {
             <Settings2 size={15} /> Settings
           </Button>
         </div>
-        <div className="mt-auto hidden border-t border-border px-6 py-5 lg:block">
+        <div className="mt-auto hidden border-t border-border px-5 py-3 lg:block">
           <div className="flex items-center gap-2 text-[length:var(--text-sidebar-meta)] text-muted-foreground">
             <span className="size-1.5 rounded-full bg-status-review" />{" "}
             <ServerHost /> <span className="ml-auto font-mono">v0.1</span>
@@ -3091,14 +3109,14 @@ export function App() {
                   aria-label="Auto pickup daily start limit"
                   value={pickupBoard.pickupDailyLimit}
                   disabled={busy}
-                  onChange={(event) => {
+                  onChange={async (event) => {
                     const limit = Number(event.target.value);
                     if (
                       (limit === 0 || limit > pickupBoard.pickupDailyLimit) &&
                       pickupBoard.autoPickupEnabled &&
-                      !window.confirm(
+                      !(await confirmAction(
                         `Raise automatic starts to ${limit === 0 ? "no limit" : `${limit} per 24 hours`} for ${pickupBoard.repo}? Ready cards may start immediately and spend model tokens.`,
-                      )
+                      ))
                     )
                       return;
                     void action(async () => {
@@ -3190,13 +3208,13 @@ export function App() {
                 className="mt-3"
                 variant={pickupBoard.autoPickupEnabled ? "outline" : "default"}
                 disabled={busy}
-                onClick={() => {
+                onClick={async () => {
                   const enable = !pickupBoard.autoPickupEnabled;
                   if (
                     enable &&
-                    !window.confirm(
+                    !(await confirmAction(
                       `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
-                    )
+                    ))
                   )
                     return;
                   void action(async () => {
@@ -3325,16 +3343,16 @@ export function App() {
                   !mergeLimitValid ||
                   (!editingBoard.autoReviewEnabled && !verificationDraft.trim())
                 }
-                onClick={() => {
+                onClick={async () => {
                   const enable =
                     !editingBoard.autoReviewEnabled ||
                     verificationDraft.trim() !==
                       editingBoard.verificationCommand;
                   if (
                     enable &&
-                    !window.confirm(
+                    !(await confirmAction(
                       `Enable unattended agent review and ${mergeLimit === 0 ? "local merges with no limit per 24 hours" : `up to ${mergeLimit} local merge${mergeLimit === 1 ? "" : "s"} per 24 hours`} for ${editingBoard.repo}? This may spend model tokens. Only new reviews after enabling are eligible.`,
-                    )
+                    ))
                   )
                     return;
                   void action(async () => {

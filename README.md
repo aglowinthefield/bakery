@@ -58,6 +58,10 @@ Then:
 
 Uncommitted or untracked files in your checkout don't appear in card worktrees.
 
+## Desktop client
+
+The [Tauri desktop client](docs/desktop.md) connects to an existing Bakery server without Electron or a bundled backend. Run `npm run desktop:dev` after installing the Tauri platform prerequisites. See the desktop guide for server access, builds, tests, and current platform limits.
+
 ## Today
 
 Bakery opens on **Today**, which covers every repository at once. After you open a board, Bakery reopens on that board until you click **Today** in the sidebar again.

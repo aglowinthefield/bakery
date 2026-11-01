@@ -26,6 +26,7 @@ const refreshMs = 15_000;
 const liveRefreshMs = 1_000;
 const glowKey = "bakery-visualizer-glow";
 const doneKey = "bakery-visualizer-done";
+const triageKey = "bakery-visualizer-triage";
 const doneFilters: DoneFilter[] = ["all", "relevant", "hide"];
 const readDone = (): DoneFilter => {
   const saved = localStorage.getItem(doneKey);
@@ -125,11 +126,15 @@ export function Visualizer({
     return () => clearInterval(timer);
   }, [live]);
   const [done, setDone] = useState(readDone);
+  // Triage cards are unscheduled backlog and swamp the graph, so they start hidden.
+  const [triage, setTriage] = useState(
+    () => localStorage.getItem(triageKey) === "show",
+  );
   const [glFailed, setGlFailed] = useState(false);
   const look = useLook();
   const graph = useMemo(
-    () => buildGraph(cards, { done, now }),
-    [cards, done, now],
+    () => buildGraph(cards, { done, triage, now }),
+    [cards, done, triage, now],
   );
   // Counts cover the whole board, so hiding Done cards does not hide their count.
   const counts = useMemo(
@@ -158,6 +163,11 @@ export function Visualizer({
       <Header
         counts={counts}
         look={look}
+        triage={triage}
+        onTriage={(next) => {
+          setTriage(next);
+          localStorage.setItem(triageKey, next ? "show" : "hide");
+        }}
         done={done}
         onDone={(next) => {
           setDone(next);

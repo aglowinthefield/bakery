@@ -7,3 +7,5 @@ dist-next.partial/
 
 *.tsbuildinfo
 .worktrees/
+src-tauri/target/
+src-tauri/gen/

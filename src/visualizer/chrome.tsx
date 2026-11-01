@@ -1,3 +1,4 @@
+import { Info, Minimize2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { DoneFilter, VisualState } from "./graph.js";
 import { type Look, readLook } from "./look.js";
@@ -109,11 +110,15 @@ export function Header({
   look,
   done,
   onDone,
+  triage,
+  onTriage,
 }: {
   counts: Partial<Record<VisualState, number>>;
   look: Look;
   done: DoneFilter;
   onDone: (done: DoneFilter) => void;
+  triage: boolean;
+  onTriage: (triage: boolean) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-6 py-2.5 text-xs lg:px-10">
@@ -139,8 +144,26 @@ export function Header({
       </ul>
       <div
         role="group"
-        aria-label="Done cards"
+        aria-label="Triage cards"
         className="ml-auto flex items-center gap-1.5"
+      >
+        <span className="mr-0.5 text-muted-foreground">Triage</span>
+        {([true, false] as const).map((show) => (
+          <button
+            key={String(show)}
+            type="button"
+            aria-pressed={triage === show}
+            onClick={() => onTriage(show)}
+            className={`cursor-pointer rounded px-2 py-0.5 ${triage === show ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/40"}`}
+          >
+            {show ? "Show" : "Hide"}
+          </button>
+        ))}
+      </div>
+      <div
+        role="group"
+        aria-label="Done cards"
+        className="flex items-center gap-1.5"
       >
         <span className="mr-0.5 text-muted-foreground">Done</span>
         {(Object.keys(doneNames) as DoneFilter[]).map((name) => (
@@ -159,20 +182,56 @@ export function Header({
   );
 }
 
-/** What each state looks like, laid over the graph's lower right corner. */
+const legendKey = "bakery-visualizer-legend";
+
+/** What each state looks like, laid over the graph's lower right corner. It collapses to a small button, and stays above the shortcuts hint. */
 export function Legend({ look }: { look: Look }) {
+  const [open, setOpen] = useState(
+    () => localStorage.getItem(legendKey) !== "closed",
+  );
+  const toggle = () => {
+    localStorage.setItem(legendKey, open ? "closed" : "open");
+    setOpen(!open);
+  };
   return (
-    <ul
-      aria-label="Legend"
-      className="pointer-events-none absolute right-3 bottom-3 grid gap-1 rounded-lg border bg-popover/85 px-3 py-2 text-xs backdrop-blur"
-    >
-      {stateOrder.map((state) => (
-        <li key={state} className="flex items-center gap-2">
-          <Swatch state={state} look={look} />
-          <span className="text-foreground">{stateNames[state]}</span>
-          <span className="text-muted-foreground">{stateHints[state]}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="absolute right-3 bottom-12 text-xs">
+      {open ? (
+        <div className="relative rounded-lg border bg-popover/85 backdrop-blur">
+          <button
+            type="button"
+            aria-label="Hide legend"
+            title="Hide legend"
+            onClick={toggle}
+            className="absolute top-1.5 right-1.5 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <Minimize2 size={12} aria-hidden="true" />
+          </button>
+          <ul
+            aria-label="Legend"
+            className="pointer-events-none grid gap-1 px-3 py-2 pr-7"
+          >
+            {stateOrder.map((state) => (
+              <li key={state} className="flex items-center gap-2">
+                <Swatch state={state} look={look} />
+                <span className="text-foreground">{stateNames[state]}</span>
+                <span className="text-muted-foreground">
+                  {stateHints[state]}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <button
+          type="button"
+          aria-label="Show legend"
+          title="Show legend"
+          onClick={toggle}
+          className="cursor-pointer rounded-md border bg-popover/85 p-1.5 text-muted-foreground backdrop-blur hover:text-foreground"
+        >
+          <Info size={14} aria-hidden="true" />
+        </button>
+      )}
+    </div>
   );
 }

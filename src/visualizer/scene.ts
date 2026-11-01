@@ -100,10 +100,12 @@ const EDGE_WIDTH = 2.2;
 const LABEL_WIDTH = 190;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3;
-const COMPACT_ZOOM = 0.55;
+/** Below this zoom the layout boxes shrink under the fixed-size labels, so labels would overlap: show circles only. */
+const COMPACT_ZOOM = 0.7;
 
+/** Priority runs from -10 (low) through 0 (normal) and 50 (high) to 100 (urgent): Urgent draws 1.5x the normal radius. */
 const radiusOf = (priority: number) =>
-  RADIUS * (1 + 0.1 * Math.max(0, priority));
+  RADIUS * (1 + 0.5 * Math.min(1, Math.max(0, priority) / 100));
 
 /** How far to ease toward a target in `dt` seconds at rate `k`. */
 const ease = (dt: number, k: number) => 1 - Math.exp(-dt * k);
@@ -897,7 +899,7 @@ export class GraphScene {
     for (const node of this.nodes.values()) {
       const placed = !!node.pos;
       node.mesh.visible = placed && !!this.look;
-      node.label.style.display = placed ? "" : "none";
+      node.label.style.display = placed && !compact ? "" : "none";
       if (!node.pos) continue;
       const r = radiusOf(node.data.priority);
       node.mesh.position.set(node.pos.x, node.pos.y, 0);

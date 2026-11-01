@@ -54,3 +54,38 @@ test("a reviewed run with no diff shows its report as markdown findings and offe
     assert.deepEqual(accepted, { fingerprint });
   } finally { await page.close(); }
 });
+
+test("in the desktop app, Accept findings asks in the page because its webview has no confirm box", async () => {
+  const page = await browser.newPage();
+  const fingerprint = "b".repeat(64);
+  let accepted: unknown = null;
+  // WKWebView in the Tauri client has no confirm panel, so window.confirm silently returns false.
+  await page.addInitScript(() => { window.confirm = () => false; });
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/accept-findings")) { accepted = route.request().postDataJSON(); return route.fulfill({ json: card("research", "Research card", "done") }); }
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", icon: "sprinkle_donut", color: "violet", remoteUrl: "", integration: "local", autoCollapseEmptySwimlanes: false, verificationCommand: "" }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
+      "/api/boards/board/cards": [card("research", "Research card", "review")],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/research/runs": [{ id: "run", attempt: 1, status: "review", output: "", report: "Done.", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
+      "/api/boards/board/cards/research/approval": { pending: false },
+      "/api/boards/board/cards/research/review": { fingerprint, files: [] },
+    };
+    await route.fulfill({ json: path in data ? data[path] : [] });
+  });
+  try {
+    await page.goto(new URL("/board/board", url).href);
+    await page.evaluate(() => { document.documentElement.dataset.desktop = "macos"; });
+    await page.getByRole("button", { name: /Research card/ }).click();
+    await page.getByRole("button", { name: "Accept findings" }).click();
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.waitForTimeout(300);
+    assert.equal(accepted, null, "Cancel does nothing");
+    await page.getByRole("button", { name: "Accept findings" }).click();
+    await page.getByRole("button", { name: "Continue" }).click();
+    for (let i = 0; i < 50 && !accepted; i++) await page.waitForTimeout(50);
+    assert.deepEqual(accepted, { fingerprint });
+  } finally { await page.close(); }
+});

@@ -12,6 +12,7 @@ export const settingsSections = [
   "appearance",
   "models",
   "updates",
+  "server",
 ] as const;
 export type SettingsSection = (typeof settingsSections)[number];
 export interface Route {

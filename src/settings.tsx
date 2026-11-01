@@ -15,7 +15,14 @@ const titles: Record<SettingsSection, { label: string; blurb: string }> = {
     label: "Updates",
     blurb: "The running version and anything waiting to install.",
   },
+  server: {
+    label: "Server",
+    blurb: "The Bakery server this desktop app is connected to.",
+  },
 };
+
+/** The desktop app marks the page; the browser has no server to switch. */
+const inDesktopApp = () => "desktop" in document.documentElement.dataset;
 
 /** A full page: a category sidebar on the left, the open category on the right. Preferences live in Bakery's local database. */
 export function SettingsPage({
@@ -49,17 +56,19 @@ export function SettingsPage({
           aria-label="Settings categories"
           className="flex shrink-0 gap-1 md:w-48 md:flex-col"
         >
-          {settingsSections.map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => onSection(item)}
-              aria-current={item === section ? "page" : undefined}
-              className={`rounded-lg px-3 py-2 text-left text-sm ${item === section ? "bg-accent/50 font-medium" : "hover:bg-accent/30"}`}
-            >
-              {titles[item].label}
-            </button>
-          ))}
+          {settingsSections
+            .filter((item) => item !== "server" || inDesktopApp())
+            .map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => onSection(item)}
+                aria-current={item === section ? "page" : undefined}
+                className={`rounded-lg px-3 py-2 text-left text-sm ${item === section ? "bg-accent/50 font-medium" : "hover:bg-accent/30"}`}
+              >
+                {titles[item].label}
+              </button>
+            ))}
         </nav>
         <section
           className="max-w-2xl min-w-0 flex-1"
@@ -249,6 +258,29 @@ export function SettingsPage({
               </div>
             )}
             {section === "updates" && <UpdatesPanel />}
+            {section === "server" && (
+              <div className="text-sm">
+                {inDesktopApp() ? (
+                  <>
+                    <div className="font-medium">Connected to</div>
+                    <p className="mt-1 font-mono text-xs text-muted-foreground">
+                      {location.origin}
+                    </p>
+                    {/* The desktop app intercepts this link and opens its native connection window. */}
+                    <a
+                      href="/__desktop/connection"
+                      className="mt-4 inline-block rounded-md border border-border px-3 py-1.5 hover:bg-accent/30"
+                    >
+                      Change server…
+                    </a>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Only the desktop app connects to a server.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           {error && (
             <p role="alert" className="mt-3 text-sm text-destructive">

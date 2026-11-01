@@ -11,9 +11,10 @@
   --text-base: calc(1rem * var(--density-text));
   --text-lg: calc(1.125rem * var(--density-text));
   --text-xl: calc(1.25rem * var(--density-text));
-  /* Sidebar rows sit a step below body text: 13px and 11px at default density. */
-  --text-sidebar: calc(0.75rem * var(--density-text));
-  --text-sidebar-meta: calc(0.65625rem * var(--density-text));
+  /* Sidebar type is fixed like Linear and macOS sidebars; density only changes spacing. */
+  --text-sidebar: 13px;
+  --text-sidebar-meta: 11px;
+  --text-sidebar-heading: 11px;
 }
 :root {
   color-scheme: dark;
@@ -405,3 +406,9 @@ body { margin: 0; min-width: 320px; background: var(--background); color: var(--
 @media (prefers-reduced-motion: reduce) {
   [data-dialog-overlay], [data-dialog-content] { animation-duration: 1ms !important; }
 }
+
+/* The desktop app hides the native title bar on macOS and the page paints under the traffic lights. */
+.desktop-titlebar { display: none; }
+:root[data-desktop="macos"] .desktop-titlebar { display: block; position: fixed; inset: 0 0 auto 0; height: 28px; z-index: 40; }
+:root[data-desktop="macos"] .desktop-sidebar-head { padding-top: 2.5rem; }
+:root[data-desktop="macos"] .desktop-sidebar-toggle { top: 2.25rem; }

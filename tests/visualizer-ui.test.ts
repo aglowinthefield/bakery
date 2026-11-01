@@ -20,8 +20,10 @@ const card = (id: string, status: string, dependsOn: string[] = [], extra: Recor
   runAgent: "", reviewAgent: "", dependsOn, blocked: false, ...extra,
 });
 
-async function open(cards: unknown[], theme = "default") {
+async function open(cards: unknown[], theme = "default", triage = "show") {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  // Triage cards start hidden; most tests draw them, so they opt in unless a test says otherwise.
+  await page.addInitScript((value) => localStorage.setItem("bakery-visualizer-triage", value), triage);
   const data: Record<string, unknown> = {
     "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
     "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme },
@@ -348,6 +350,7 @@ test("without WebGL the graph is plain SVG with state colors, labels, hover and 
   const noGl = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   try {
     await noGl.addInitScript(`
+      localStorage.setItem("bakery-visualizer-triage", "show");
       const getContext = HTMLCanvasElement.prototype.getContext;
       HTMLCanvasElement.prototype.getContext = function (type) {
         return /webgl/.test(type) ? null : getContext.apply(this, arguments);
@@ -382,4 +385,16 @@ test("without WebGL the graph is plain SVG with state colors, labels, hover and 
     await noGl.getByRole("dialog").waitFor({ state: "detached" });
     assert.ok(await noGl.getByRole("group", { name: "Done cards" }).isVisible(), "header and filter are there too");
   } finally { await noGl.close(); }
+});
+
+test("Triage cards start hidden and the Triage toggle brings them back", async () => {
+  const page = await open([card("root", "running"), card("idea", "triage")], "default", "hide");
+  try {
+    await page.locator('[data-viz-label="root"]').waitFor({ state: "attached" });
+    assert.equal(await page.locator('[data-viz-label="idea"]').count(), 0);
+    // The state counts still include the hidden card.
+    assert.equal(await page.locator('[data-viz-count="triage"]').count(), 1);
+    await page.getByRole("group", { name: "Triage cards" }).getByRole("button", { name: "Show" }).click();
+    await page.locator('[data-viz-label="idea"]').waitFor({ state: "attached" });
+  } finally { await page.close(); }
 });
