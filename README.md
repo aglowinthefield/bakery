@@ -8,6 +8,7 @@ A local kanban board that hands coding tasks to [Pi](https://pi.dev) agents, one
 - [Problems it solves](#problems-it-solves)
 - [Bakery and Hermes](#bakery-and-hermes)
 - [How to use](#how-to-use)
+- [A tour](#a-tour)
 - [What's next](#whats-next)
 - [Contributing](#contributing)
 - [Documentation](#documentation)
@@ -80,6 +81,22 @@ Uncommitted files in your checkout don't appear in card worktrees.
 From a terminal, `npm run bakery -- add fix the flaky login test` captures a card in the repository you're in, and `npm run bakery -- doctor` checks your setup. For production, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317.
 
 Everything else (the card lifecycle, dependencies, the visualizer, GitHub pull request mode, automation, the full CLI, hosting on another machine) is in the [reference](docs/reference.md).
+
+## A tour
+
+These screenshots come from a demo board with real runs. Pi finished one card and you merged it. Another waits in Review, and two cards wait on it.
+
+**Review.** The diff shows what the agent changed against `main`. Comment on lines, send the card back with **Request changes**, or approve.
+
+![The Review tab: approve, request changes, and a unified diff of src/fetch.js](docs/images/review-diff.png)
+
+**Attempts.** Each run keeps its worktree path, a transcript grouped by turn, and its token cost. A retry continues the same Pi session.
+
+![The Attempts tab: one attempt with its transcript and cost](docs/images/card-attempt.png)
+
+**Visualizer.** Dependencies drawn as a graph. Dashed cards are blocked until the card they depend on is Done.
+
+![The Visualizer: one card in Review with two blocked cards depending on it](docs/images/visualizer.png)
 
 ## What's next
 
