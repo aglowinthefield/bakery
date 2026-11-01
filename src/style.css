@@ -407,6 +407,8 @@ body { margin: 0; min-width: 320px; background: var(--background); color: var(--
   [data-dialog-overlay], [data-dialog-content] { animation-duration: 1ms !important; }
 }
 
+/* .page-fade marks each page's <main>; the 120 ms opacity fade itself is started from src/main.tsx when the page identity changes. */
+
 /* The desktop app hides the native title bar on macOS and the page paints under the traffic lights. */
 .desktop-titlebar { display: none; }
 :root[data-desktop="macos"] .desktop-titlebar { display: block; position: fixed; inset: 0 0 auto 0; height: 28px; z-index: 40; }

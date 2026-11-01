@@ -40,9 +40,10 @@ export class Updates {
   refresh(): void {
     try {
       if (this.git("rev-parse", "--abbrev-ref", "HEAD") !== "main") { this.commits = []; return; }
-      // Newest first: what origin/main would bring in, then what was merged locally since startup.
+      // Newest first: what origin/main would bring in, then what was merged locally since startup. Merge commits are
+      // left out: approving a card adds a "Merge card:" commit on top of the card's own, which would list it twice.
       const ranges = [this.originMain() && "HEAD..refs/remotes/origin/main", this.startHead && `${this.startHead}..HEAD`];
-      const log = ranges.filter((range): range is string => !!range).map(range => this.git("log", "--format=%h%x09%s", range)).filter(Boolean).join("\n");
+      const log = ranges.filter((range): range is string => !!range).map(range => this.git("log", "--no-merges", "--format=%h%x09%s", range)).filter(Boolean).join("\n");
       this.commits = log ? log.split("\n").map(line => { const [sha, ...subject] = line.split("\t"); return { sha, subject: subject.join("\t") }; }) : [];
     } catch (error) {
       this.commits = [];
