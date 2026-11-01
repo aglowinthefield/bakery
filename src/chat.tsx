@@ -652,7 +652,7 @@ export function ChatView({
             aria-label="Chat model"
             list="chat-models"
             value={modelDraft}
-            disabled={!!chatId && !current}
+            disabled={chats === null || (!!chatId && !current)}
             onFocus={loadModels}
             onChange={(event) => setModelDraft(event.target.value)}
             onBlur={() => void choose({ ...choice, model: modelDraft })}
@@ -668,7 +668,7 @@ export function ChatView({
           <select
             aria-label="Chat thinking"
             value={choice.thinking}
-            disabled={!!chatId && !current}
+            disabled={chats === null || (!!chatId && !current)}
             onChange={(event) =>
               void choose({
                 model: modelDraft,
