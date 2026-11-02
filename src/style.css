@@ -407,7 +407,13 @@ body { margin: 0; min-width: 320px; background: var(--background); color: var(--
   [data-dialog-overlay], [data-dialog-content] { animation-duration: 1ms !important; }
 }
 
-/* .page-fade marks each page's <main>; the 120 ms opacity fade itself is started from src/main.tsx when the page identity changes. */
+/* .page-fade marks each page's <main>. On a page change src/main.tsx lines the veil up with that page and fades it out over
+   120 ms: opacity only, never on the page itself, so nothing is clipped, masked, moved or scaled. */
+.page-fade-veil { position: fixed; right: 0; bottom: 0; left: 0; top: 0; z-index: 30; background: var(--background); opacity: 0; pointer-events: none; }
+/* Navigation never uses View Transitions. If a browser or a future React <ViewTransition> starts one anyway, it swaps
+   instantly instead of running the default cross-fade or a size-and-position morph between snapshots. */
+@view-transition { navigation: none; }
+::view-transition-group(*), ::view-transition-image-pair(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 
 /* The desktop app hides the native title bar on macOS and the page paints under the traffic lights. */
 .desktop-titlebar { display: none; }
