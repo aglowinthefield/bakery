@@ -28,6 +28,14 @@ function providerFailure(error: unknown): string {
   return `Provider request failed${status ? ` (HTTP ${status})` : ""}${text ? `: ${text.slice(0, 1000)}` : ""}`;
 }
 
+// Anthropic's classifier sometimes blocks a long run as "reverse engineering or duplicating model outputs". The
+// per-tool-call narration the prompt asks for may be the trigger, so a blocked run is retried once without it.
+const NARRATION = "As you work, before each tool call or group of calls, write one plain sentence saying what you are checking or doing and why, and after a result that changes your plan, one sentence on what you learned. Keep each to a single sentence about intent and findings, not the command itself. ";
+const PLAIN_RETRY = "An earlier attempt on this card was blocked by the model provider partway through, so this is a fresh session. The worktree may already hold that attempt's partial changes: check `git status` and `git diff` first and build on them. Do not narrate before tool calls; write prose only for the final report. ";
+export function isOutputDuplicationBlock(error: string | null): boolean {
+  return !!error && /violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs/i.test(error);
+}
+
 /** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
 export type LiveActivity = { tool: string; turn: number; since: string };
 
@@ -107,7 +115,7 @@ export class Worker {
     // before Pi started, so without it the repair goes back to Review and the next push fails the same hook again.
     const pushPrompt = ciFeedback?.source === "push" ? `\n\nBakery tried to push this card's branch to GitHub, and the repository's pre-push hook refused it, so nothing was pushed. Make the hook pass: fix what it reports on the card branch (the commit it rejected is ${ciFeedback.headSha}), re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery pushes after the operator approves again. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
     const filesPrompt = attachmentsPrompt(this.dataDir, this.board.listAttachments(card.id));
-    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. As you work, before each tool call or group of calls, write one plain sentence saying what you are checking or doing and why, and after a result that changes your plan, one sentence on what you learned. Keep each to a single sentence about intent and findings, not the command itself. At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
+    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
     // Handed to this run; a later run should not see the same failures again.
     if (ciPrompt || pushPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
     const phase = conflict ? "conflict" : "work";
@@ -345,11 +353,30 @@ export class Worker {
       // Exit code 143 often means SIGTERM through a shell, but does not identify the sender.
       const termination = reason ? `; Bakery sent SIGTERM: ${reason}`
         : signal || code === 143 ? "; termination source unknown (Bakery did not send SIGTERM)" : "";
+      const retryPlain = !ok && isOutputDuplicationBlock(terminalModelError) && prompt.includes(NARRATION);
+      if (retryPlain) this.board.append(run.id, "\nAnthropic blocked this request as reverse engineering. Bakery will retry once in a fresh session without the narration instruction.\n");
       this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `Pi exited (${signal ?? code ?? "unknown"})${termination}; ${settled ? "settled" : "no settlement event"}${terminalModelError ? `; ${terminalModelError}` : ""}${protocolError ? `; ${protocolError}` : ""}${stderr.trim() ? `; stderr: ${stderr.trim().slice(-1500)}` : ""}`);
       if (!ok) console.error(`Pi exit for run ${run.id}: pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"} source=${reason ?? "unknown"} elapsedMs=${Date.now() - startedAt}`);
       if (stderr) console.error(`Pi diagnostics for run ${run.id}:`, stderr);
+      if (retryPlain) this.retryWithoutNarration(card, run, worktree, prompt.replace(NARRATION, PLAIN_RETRY), phase);
     });
     return this.board.getRun(run.id)!;
+  }
+  /** Starts the next attempt in a fresh session, since the blocked session's history is full of narration. */
+  private retryWithoutNarration(card: Card, blocked: Run, worktree: string, prompt: string, phase: AgentPhase) {
+    if (this.draining) {
+      this.board.noteCard(card.id, `Anthropic blocked attempt ${blocked.attempt} as reverse engineering; Bakery is restarting, so it did not retry without narration`);
+      return;
+    }
+    let run: Run;
+    try { run = this.board.claim(card.id, "manual", `without the narration instruction, in a fresh session, because Anthropic blocked attempt ${blocked.attempt} as reverse engineering`, true); }
+    catch (error) {
+      this.board.noteCard(card.id, `Anthropic blocked attempt ${blocked.attempt} as reverse engineering; Bakery could not retry without narration: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (blocked.ciFix) this.board.startCiFix(card.id, run.id, blocked.ciFix === 2 ? "conflict" : "ci");
+    this.board.append(run.id, `Retry of attempt ${blocked.attempt}, which Anthropic blocked as reverse engineering. This attempt runs in a fresh session without the narration instruction, so the live status line shows only tool activity.\n`);
+    this.launchPi(card, run, worktree, prompt, phase);
   }
   stop(id: string) {
     const child = this.active.get(id);

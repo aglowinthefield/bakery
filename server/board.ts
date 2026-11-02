@@ -1331,8 +1331,11 @@ export class Board {
     this.explain(id, "Released after the interrupted run's process was confirmed gone");
     return this.getCard(id)!;
   }
-  /** `why` says what asked for the run, for the card's history (e.g. the agent reviewer sending it back). */
-  claim(cardId: string, startedBy: "manual" | "auto" = "manual", why = ""): Run {
+  /**
+   * `why` says what asked for the run, for the card's history (e.g. the agent reviewer sending it back).
+   * `freshSession` gives the run its own Pi session instead of resuming the card's.
+   */
+  claim(cardId: string, startedBy: "manual" | "auto" = "manual", why = "", freshSession = false): Run {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId);
@@ -1354,7 +1357,7 @@ export class Board {
         (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
-      const id = randomUUID(), sessionId = `bakery-${cardId}`;
+      const id = randomUUID(), sessionId = freshSession ? `bakery-${cardId}-${attempt}` : `bakery-${cardId}`;
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy);
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);
