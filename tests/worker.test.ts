@@ -153,6 +153,42 @@ test("a transient provider error followed by successful Pi settlement is Review,
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a run Anthropic blocks as output duplication is retried once, without narration, in a fresh session", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), calls = join(dir, "calls");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    const blocked = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs. To learn more, visit https://www.anthropic.com/legal/commercial-terms." } });
+    // Records each call's session id and prompt, then fails with the block every time.
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n%s\\n---\\n' "$4" "$6" >> '${calls}'\nprintf '%s\\n' '${blocked.replace(/'/g, "'\\''")}' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Blocked", body: "", repo });
+    board.setStatus(card.id, "ready");
+    const first = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.listRuns(card.id).length === 2 && board.listRuns(card.id).every(run => run.status !== "running"));
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const runs = board.listRuns(card.id);
+    assert.equal(runs.length, 2, "a second block does not retry again");
+    const retry = runs.find(run => run.id !== first.id)!;
+    assert.equal(retry.attempt, 2);
+    assert.notEqual(retry.sessionId, first.sessionId);
+    const [firstCall, retryCall] = readFileSync(calls, "utf8").split("---\n");
+    assert.match(firstCall, /write one plain sentence/);
+    assert.doesNotMatch(retryCall, /write one plain sentence/);
+    assert.match(retryCall, /Do not narrate before tool calls/);
+    assert.match(retryCall, new RegExp(`^${retry.sessionId}\n`));
+    assert.match(board.getRun(first.id)!.output, /Bakery will retry once in a fresh session without the narration instruction/);
+    assert.match(retry.output, /Retry of attempt 1/);
+    assert.ok(board.listCardEvents(card.id).some(event => /Attempt 2 started without the narration instruction/.test(event.reason)));
+    assert.equal(board.getCard(card.id)!.status, "failed");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a Pi settlement requests review; retry uses the same card worktree and session", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
