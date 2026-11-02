@@ -18,11 +18,21 @@ import { Button } from "./components/ui/button";
 import { Markdown } from "./markdown-view.js";
 import type { Chat, ChatLive, ChatMessage, ChatPart } from "./model.js";
 import { confirmAction } from "./confirm.js";
+import {
+  chatGroupings,
+  chatLabel,
+  clockTime,
+  fullTime,
+  groupByDate,
+  groupingKey,
+  readGrouping,
+  shortDay,
+  shortTime,
+  type ChatGrouping,
+} from "./chat-format.js";
 
 type ChatState = { messages: ChatMessage[]; live: ChatLive };
 
-/** What the sidebar calls a chat: its few-word topic, else its first line. */
-const chatLabel = (chat: Chat) => chat.topic || chat.title || "New chat";
 const railKey = "bakery-chat-sidebar";
 // How often the chat list refreshes its per-chat unread counts, and how long a dropped event stream waits to reconnect.
 const listPollMs = 3000;
@@ -120,6 +130,9 @@ export function ChatView({
   const [models, setModels] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(railKey) === "collapsed",
+  );
+  const [grouping, setGrouping] = useState<ChatGrouping>(() =>
+    readGrouping(localStorage.getItem(groupingKey)),
   );
   const end = useRef<HTMLDivElement>(null);
   // Whether the open chat is known to hold a message (messages are never removed, so this cannot go stale the wrong way), and the chats with a first send in flight.
@@ -250,6 +263,9 @@ export function ChatView({
     if (collapsed) localStorage.setItem(railKey, "collapsed");
     else localStorage.removeItem(railKey);
   }, [collapsed]);
+  useEffect(() => {
+    localStorage.setItem(groupingKey, grouping);
+  }, [grouping]);
   useEffect(() => {
     if (chatId) sessionStorage.setItem(`bakery-chat-${boardId}`, chatId);
     else sessionStorage.removeItem(`bakery-chat-${boardId}`);
@@ -499,6 +515,64 @@ export function ChatView({
       }
     }
   };
+  const row = (chat: Chat) =>
+    collapsed ? (
+      <button
+        key={chat.id}
+        onClick={() => setChatId(chat.id)}
+        aria-current={chat.id === chatId ? "true" : undefined}
+        aria-label={`${chatLabel(chat)}${chat.unread ? `, ${chat.unread} unread` : ""}`}
+        title={`${chatLabel(chat)} · ${fullTime(chat.updatedAt)}`}
+        className={`relative rounded-md p-2 text-muted-foreground ${chat.id === chatId ? "bg-accent/50 text-foreground" : "hover:bg-accent/30"}`}
+      >
+        <MessageSquare size={14} aria-hidden="true" />
+        {chat.unread ? (
+          <UnreadBadge
+            count={chat.unread}
+            className="absolute right-0 top-0 px-1 text-[9px] leading-3"
+          />
+        ) : (
+          chat.pending && (
+            <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
+          )
+        )}
+      </button>
+    ) : (
+      <div
+        key={chat.id}
+        className={`group flex items-center rounded-md ${chat.id === chatId ? "bg-accent/50" : "hover:bg-accent/30"}`}
+      >
+        <button
+          onClick={() => setChatId(chat.id)}
+          aria-current={chat.id === chatId ? "true" : undefined}
+          title={chat.title || undefined}
+          className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
+        >
+          {chatLabel(chat)}
+          {chat.pending && (
+            <span className="ml-1 text-muted-foreground">…</span>
+          )}
+        </button>
+        <time
+          dateTime={chat.updatedAt}
+          title={fullTime(chat.updatedAt)}
+          data-chat-time
+          className="shrink-0 pl-1 text-[10px] text-muted-foreground"
+        >
+          {grouping === "date"
+            ? clockTime(chat.updatedAt)
+            : shortDay(chat.updatedAt)}
+        </time>
+        {!!chat.unread && <UnreadBadge count={chat.unread} />}
+        <button
+          aria-label={`Delete ${chatLabel(chat)}`}
+          onClick={() => void remove(chat)}
+          className="p-1.5 text-muted-foreground opacity-0 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+        >
+          <Trash2 size={13} aria-hidden="true" />
+        </button>
+      </div>
+    );
   const busy = !!state.live;
   const empty = state.messages.length === 0 && !state.live;
 
@@ -536,55 +610,40 @@ export function ChatView({
             {!collapsed && " New chat"}
           </Button>
         </div>
-        {chats?.map((chat) =>
-          collapsed ? (
-            <button
-              key={chat.id}
-              onClick={() => setChatId(chat.id)}
-              aria-current={chat.id === chatId ? "true" : undefined}
-              aria-label={`${chatLabel(chat)}${chat.unread ? `, ${chat.unread} unread` : ""}`}
-              title={chatLabel(chat)}
-              className={`relative rounded-md p-2 text-muted-foreground ${chat.id === chatId ? "bg-accent/50 text-foreground" : "hover:bg-accent/30"}`}
+        {!collapsed && (
+          <label className="flex items-center gap-1 px-1 text-xs text-muted-foreground">
+            Group by
+            <select
+              aria-label="Group chats by"
+              value={grouping}
+              onChange={(event) =>
+                setGrouping(readGrouping(event.target.value))
+              }
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-1 py-0.5 text-foreground"
             >
-              <MessageSquare size={14} aria-hidden="true" />
-              {chat.unread ? (
-                <UnreadBadge
-                  count={chat.unread}
-                  className="absolute right-0 top-0 px-1 text-[9px] leading-3"
-                />
-              ) : (
-                chat.pending && (
-                  <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
-                )
-              )}
-            </button>
-          ) : (
-            <div
-              key={chat.id}
-              className={`group flex items-center rounded-md ${chat.id === chatId ? "bg-accent/50" : "hover:bg-accent/30"}`}
-            >
-              <button
-                onClick={() => setChatId(chat.id)}
-                aria-current={chat.id === chatId ? "true" : undefined}
-                title={chat.title || undefined}
-                className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
-              >
-                {chatLabel(chat)}
-                {chat.pending && (
-                  <span className="ml-1 text-muted-foreground">…</span>
-                )}
-              </button>
-              {!!chat.unread && <UnreadBadge count={chat.unread} />}
-              <button
-                aria-label={`Delete ${chatLabel(chat)}`}
-                onClick={() => void remove(chat)}
-                className="p-1.5 text-muted-foreground opacity-0 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
-              >
-                <Trash2 size={13} aria-hidden="true" />
-              </button>
-            </div>
-          ),
+              {chatGroupings.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
+        {grouping === "date" && !collapsed
+          ? groupByDate(chats ?? []).map((group) => (
+              <section
+                key={group.key}
+                aria-label={group.heading}
+                data-chat-group={group.key}
+                className="flex flex-col gap-1"
+              >
+                <h3 className="px-2 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {group.heading}
+                </h3>
+                {group.chats.map((chat) => row(chat))}
+              </section>
+            ))
+          : chats?.map((chat) => row(chat))}
       </nav>
       <section aria-label="Chat" className="flex min-w-0 flex-1 flex-col">
         <ol
@@ -603,12 +662,22 @@ export function ChatView({
               data-role={item.role}
               className={`rounded-md border p-3 ${item.role === "user" ? "ml-8 border-primary/30 bg-primary/10" : item.role === "error" ? "mr-8 border-destructive/30 bg-destructive/10 text-destructive" : "mr-8 border-border bg-accent/10"}`}
             >
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                {item.role === "user"
-                  ? "You"
-                  : item.role === "error"
-                    ? "Agent stopped"
-                    : "Agent"}
+              <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span>
+                  {item.role === "user"
+                    ? "You"
+                    : item.role === "error"
+                      ? "Agent stopped"
+                      : "Agent"}
+                </span>
+                <time
+                  dateTime={item.createdAt}
+                  title={fullTime(item.createdAt)}
+                  data-message-time
+                  className="normal-case tracking-normal"
+                >
+                  {shortTime(item.createdAt)}
+                </time>
               </div>
               {item.role === "agent" ? (
                 <Parts

@@ -580,3 +580,54 @@ async function expectEventually(check: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 50 && !(await check()); i++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.ok(await check(), "condition was not met in time");
 }
+
+test("chat timestamps show, Date grouping lists days newest first, None restores the flat list, and the choice survives a reload", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext({ locale: "en-US", timezoneId: "UTC" })).newPage();
+    const recent = new Date().toISOString();
+    const older = "2020-03-04T10:15:00Z";
+    const first = { ...chat, title: "Why is card B still waiting after A finished yesterday?", topic: "", updatedAt: older };
+    const second = { ...chat, id: "c2", title: "Triage", topic: "Triage cleanup", updatedAt: recent };
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [second, first] });
+      if (path === "/api/boards/b1/chats/c2") return route.fulfill({ json: { chat: second, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat: first, messages, live: null } });
+      if (path.endsWith("/events")) return route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const nav = page.getByRole("navigation", { name: "Chats" });
+    await nav.getByRole("button", { name: "Why is card B still…", exact: true }).waitFor();
+    assert.equal(await nav.locator("h3").count(), 0, "ungrouped by default");
+    assert.equal(await nav.locator("[data-chat-time]").last().innerText(), "Mar 4, 2020");
+    assert.match((await nav.locator("[data-chat-time]").last().getAttribute("title"))!, /Wednesday, March 4, 2020/);
+
+    await nav.getByRole("button", { name: "Why is card B still…", exact: true }).click();
+    await page.locator("[data-message-time]").first().waitFor();
+    assert.match((await page.locator("[data-message-time]").first().getAttribute("title"))!, /January 1, 2025/);
+
+    const grouping = nav.getByRole("combobox", { name: "Group chats by" });
+    await grouping.selectOption("date");
+    assert.deepEqual(await nav.locator("h3").allTextContents(), ["Today", "Wed, Mar 4, 2020"]);
+    assert.equal(await nav.locator("[data-chat-group] [data-chat-time]").last().innerText(), "10:15 AM");
+    await page.reload();
+    await nav.locator("h3").first().waitFor();
+    assert.equal(await nav.getByRole("combobox", { name: "Group chats by" }).inputValue(), "date", "the grouping survives a reload");
+
+    await nav.getByRole("combobox", { name: "Group chats by" }).selectOption("none");
+    assert.equal(await nav.locator("h3").count(), 0);
+    await nav.getByRole("button", { name: "Triage cleanup", exact: true }).waitFor();
+    await page.reload();
+    await nav.getByRole("button", { name: "Triage cleanup", exact: true }).waitFor();
+    assert.equal(await nav.getByRole("combobox", { name: "Group chats by" }).inputValue(), "none");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
