@@ -90,7 +90,7 @@ const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", "to fix failing CI on the pull request"),
-  card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.review(card).fingerprint, github, undefined, "ci-fix")));
+  card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.reviewFingerprint(card), github, undefined, "ci-fix")));
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
@@ -593,8 +593,7 @@ const server = createServer(async (req, res) => {
         if (req.method === "POST" && action === "request-changes") {
           const { fingerprint } = await body(req);
           if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review diff before requesting changes");
-          const diff = integration.review(item);
-          if (diff.fingerprint !== fingerprint) throw new Error("Work changed since review; refresh the diff before requesting changes");
+          if (integration.reviewFingerprint(item) !== fingerprint) throw new Error("Work changed since review; refresh the diff before requesting changes");
           send(res, 200, board.requestChanges(id, board.listRuns(id)[0].id, fingerprint)); return;
         }
         if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }

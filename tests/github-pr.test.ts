@@ -11,7 +11,8 @@ import { Worker } from "../server/worker.js";
 import { Integration, PushHookError } from "../server/integration.js";
 import { GitHub, GitHubSync, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
-import { draftPullRequest, readPullRequestRules } from "../server/pr-draft.js";
+import { diffSummary, draftPrompt, draftPullRequest, maxDraftPatchChars, readPullRequestRules, type PullRequestRules } from "../server/pr-draft.js";
+import type { Card, Run } from "../server/board.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 
 // A local bare repository plays origin and a fake `gh` on PATH plays GitHub. The fake keeps its pull requests
@@ -1390,4 +1391,13 @@ test("sync: a failed fetch is a warning that keeps pickup running until it lasts
     assert.equal(current.integrationWarning, "");
     assert.notEqual(current.integrationSyncedAt, synced);
   } finally { f.cleanup(); }
+});
+
+test("the PR drafter gets a summary of every file and only the start of a large patch", () => {
+  const patch = `File: a.ts\ndiff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more\nFile: b.ts\n${"+x\n".repeat(maxDraftPatchChars)}`;
+  assert.equal(diffSummary(patch), `a.ts (+2 -1)\nb.ts (+${maxDraftPatchChars} -0)`);
+  const prompt = draftPrompt({ title: "t", body: "b" } as Card, { output: "" } as Run, { template: null, semantic: null } as PullRequestRules, patch);
+  assert.match(prompt, /<diff-summary>\na\.ts \(\+2 -1\)\nb\.ts/);
+  assert.match(prompt, /more characters not shown/);
+  assert.ok(prompt.length < maxDraftPatchChars + 4000);
 });
