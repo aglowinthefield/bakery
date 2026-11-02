@@ -414,8 +414,8 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
   }
 });
 
-async function waitUntil(condition: () => boolean, timeout = 10_000) {
-  for (const started = Date.now(); !condition(); await new Promise(resolve => setTimeout(resolve, 25)))
+async function waitUntil(condition: () => boolean | Promise<boolean>, timeout = 10_000) {
+  for (const started = Date.now(); !(await condition()); await new Promise(resolve => setTimeout(resolve, 25)))
     if (Date.now() - started > timeout) throw new Error("timed out waiting for the condition");
 }
 
@@ -670,6 +670,196 @@ test("chat timestamps show, Date grouping lists days newest first, None restores
     await page.reload();
     await nav.getByRole("button", { name: "Triage cleanup", exact: true }).waitFor();
     assert.equal(await nav.getByRole("combobox", { name: "Group chats by" }).inputValue(), "none");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("the chat list resizes by its divider up to its longest label, keeps the width across reloads, and follows the window", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext({ viewport: { width: 1400, height: 800 } })).newPage();
+    const list = [
+      { id: "c1", topic: "Why is card B still waiting on A", unread: 3 },
+      { id: "c2", topic: "Short", unread: 0 },
+    ];
+    await unreadHarness(page, list);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const nav = page.getByRole("navigation", { name: "Chats" });
+    await nav.getByRole("button", { name: /^Why is card B/ }).waitFor();
+    const divider = page.getByRole("separator", { name: "Resize chat list" });
+    const width = async () => Math.round((await nav.boundingBox())!.width);
+    const value = async (name: string) => Number(await divider.getAttribute(name));
+    await waitUntil(async () => (await value("aria-valuemax")) > 180);
+    const max = await value("aria-valuemax"), min = await value("aria-valuemin");
+    assert.equal(min, 180);
+    assert.ok(max < 600, `the maximum follows the longest label, not a fixed size (${max})`);
+    assert.equal(await width(), Math.min(224, max));
+
+    // The widest row fits on one line at the maximum, with its badge and controls.
+    await divider.focus();
+    await page.keyboard.press("End");
+    assert.equal(await width(), max);
+    assert.equal(await value("aria-valuenow"), max);
+    const fits = await nav.evaluate(el => {
+      const label = el.querySelector<HTMLElement>("[data-chat-label]")!;
+      return [...el.querySelectorAll<HTMLElement>("[data-chat-label]")].every(item => item.scrollWidth <= item.clientWidth) && label.scrollWidth <= label.clientWidth && el.scrollWidth <= el.clientWidth;
+    });
+    assert.ok(fits, "no label is clipped and nothing scrolls sideways at the maximum");
+    await page.keyboard.press("ArrowRight");
+    assert.equal(await width(), max, "the divider cannot go past the longest label");
+    await page.keyboard.press("Home");
+    assert.equal(await width(), 180);
+    await page.keyboard.press("ArrowRight");
+    assert.equal(await width(), 196);
+    await page.keyboard.press("Shift+ArrowRight");
+    assert.equal(await width(), Math.min(260, max));
+
+    // Dragging moves it and stops at the maximum.
+    const box = (await divider.boundingBox())!;
+    await page.mouse.move(box.x + 2, box.y + 40);
+    await page.mouse.down();
+    await page.mouse.move(box.x - 30, box.y + 40);
+    assert.ok((await width()) < Math.min(260, max), "dragging left narrows the list");
+    await page.mouse.move(1300, box.y + 40);
+    await page.mouse.up();
+    assert.equal(await width(), max, "dragging far right stops at the longest label");
+
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Shift+ArrowRight");
+    const saved = await width();
+    await page.reload();
+    await nav.getByRole("button", { name: /^Why is card B/ }).waitFor();
+    await waitUntil(async () => (await value("aria-valuemax")) > 180);
+    assert.equal(await width(), saved, "the chosen width survives a reload");
+
+    // A narrower window clamps what shows, keeping room for the messages, without losing the choice.
+    await divider.focus();
+    await page.keyboard.press("End");
+    await page.setViewportSize({ width: 800, height: 800 });
+    await waitUntil(async () => (await value("aria-valuemax")) <= 800 - 360);
+    assert.ok((await width()) <= 440);
+    assert.ok((await page.getByRole("region", { name: "Chat" }).boundingBox())!.width >= 350, "the message pane stays usable");
+    await page.setViewportSize({ width: 1400, height: 800 });
+    await waitUntil(async () => (await width()) === max);
+
+    // A longer label raises the maximum.
+    list[1].topic = "A much longer topic for another chat";
+    await waitUntil(async () => (await value("aria-valuemax")) > max, 10_000);
+
+    // On a phone the list stacks above the chat and has no divider.
+    await page.setViewportSize({ width: 420, height: 800 });
+    await divider.waitFor({ state: "detached" });
+    const navBox = (await nav.boundingBox())!;
+    assert.ok(navBox.width >= 400, "the list takes the width of the screen");
+    assert.ok((await page.getByRole("region", { name: "Chat" }).boundingBox())!.y >= navBox.y + navBox.height - 1, "the chat sits below the list");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("shortening or deleting the longest label lowers the maximum and clamps a wider saved width", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext({ viewport: { width: 1400, height: 800 } })).newPage();
+    const list = [
+      { id: "c1", topic: "Short", unread: 0 },
+      { id: "c2", topic: "Why is card B still waiting on A", unread: 0 },
+    ];
+    await page.addInitScript(() => localStorage.setItem("bakery-chat-sidebar-width", "900"));
+    await unreadHarness(page, list);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const nav = page.getByRole("navigation", { name: "Chats" });
+    const divider = page.getByRole("separator", { name: "Resize chat list" });
+    const value = async (name: string) => Number(await divider.getAttribute(name));
+    const width = async () => Math.round((await nav.boundingBox())!.width);
+    await nav.getByRole("button", { name: /^Why is card B/ }).waitFor();
+    await waitUntil(async () => (await width()) === (await value("aria-valuemax")) && (await width()) < 900);
+    const long = await value("aria-valuemax");
+
+    list[1].topic = "Mid length topic";
+    await waitUntil(async () => (await value("aria-valuemax")) < long, 10_000);
+    const mid = await value("aria-valuemax");
+    assert.equal(await width(), mid, "the saved width is clamped to the shorter label");
+
+    list.splice(1, 1);
+    await waitUntil(async () => (await value("aria-valuemax")) < mid, 10_000);
+    assert.equal(await value("aria-valuemax"), 180, "only a short label is left, so the minimum applies");
+    assert.equal(await width(), 180);
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("on a phone a long transcript scrolls inside the chat and the composer stays reachable", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext({ viewport: { width: 420, height: 800 } })).newPage();
+    const many = Array.from({ length: 60 }, (_, i) => ({ id: `m${i}`, chatId: "c1", role: i % 2 ? "agent" : "user", body: `Message ${i}`, parts: i % 2 ? [{ type: "text", text: `Message ${i} `.repeat(30) }] : [], createdAt: "2025-01-01T00:00:00Z" }));
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [chat] });
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat, messages: many, live: null } });
+      if (path === "/api/boards/b1/chats/c1/events") return route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const section = page.getByRole("region", { name: "Chat" });
+    await section.locator("[data-role]").first().waitFor();
+    const box = (await section.boundingBox())!;
+    assert.ok(box.height <= 800, `the chat section is bounded (${box.height})`);
+    const transcript = section.locator("ol");
+    assert.ok(await transcript.evaluate(el => el.scrollHeight > el.clientHeight), "the transcript scrolls inside the chat");
+    const composer = section.getByRole("textbox", { name: "Message the agent" });
+    await composer.scrollIntoViewIfNeeded();
+    const field = (await composer.boundingBox())!;
+    assert.ok(field.y >= 0 && field.y + field.height <= 800, "the composer is within the screen");
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("at the maximum a wide-glyph label with a badge fits with fractional widths, and the message pane keeps its full minimum", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext({ viewport: { width: 1400, height: 800 } })).newPage();
+    const list = [{ id: "c1", topic: "WWWWWW multi word title", unread: 2 }, { id: "c2", topic: "Short", unread: 0 }];
+    await unreadHarness(page, list);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const nav = page.getByRole("navigation", { name: "Chats" });
+    const divider = page.getByRole("separator", { name: "Resize chat list" });
+    await nav.getByRole("button", { name: /^WWWWWW/ }).waitFor();
+    await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) > 180);
+    await divider.focus();
+    await page.keyboard.press("End");
+    const gap = await nav.evaluate(el => {
+      const label = el.querySelector<HTMLElement>("[data-chat-label]")!;
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      const style = getComputedStyle(label);
+      return label.getBoundingClientRect().width - range.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+    assert.ok(gap >= 0, `the label box holds its text and padding (short by ${-gap}px)`);
+
+    await page.setViewportSize({ width: 800, height: 800 });
+    await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) <= 800 - 360);
+    await page.keyboard.press("End");
+    const pane = (await page.getByRole("region", { name: "Chat" }).boundingBox())!.width;
+    assert.ok(pane >= 360, `the message pane keeps its minimum (${pane})`);
   } finally {
     await browser.close();
     await server.close();
