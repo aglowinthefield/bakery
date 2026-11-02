@@ -220,6 +220,50 @@ test("unread replies show per chat and as board totals, and looking at a chat cl
   }
 });
 
+test("unread chats show a badge and a bold title, independently, with date grouping and short labels; opening one clears both", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await page.addInitScript(controlledPage, false);
+    const list = [
+      { id: "c1", topic: "First", unread: 2 },
+      { id: "c2", topic: "Second chat with a very long descriptive topic", unread: 1 },
+      { id: "c3", topic: "Third", unread: 0 },
+    ];
+    const { nav, unreadOf } = await unreadHarness(page, list);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    await nav.getByRole("combobox", { name: "Group chats by" }).selectOption("date");
+    await nav.locator("[data-chat-group]").first().waitFor();
+    const second = nav.getByRole("button", { name: /^Second chat with a very/ });
+    const weight = (button: Locator) => button.evaluate(el => Number(getComputedStyle(el).fontWeight));
+    const first = nav.getByRole("button", { name: "First", exact: true });
+    const third = nav.getByRole("button", { name: "Third", exact: true });
+    await unreadOf("First").filter({ hasText: "2" }).waitFor();
+    await nav.locator("[data-unread='1']").waitFor();
+    assert.ok((await weight(first)) >= 600, "an unread title is bold");
+    assert.ok((await weight(second)) >= 600);
+    assert.equal(await weight(third), 400, "a read chat keeps the normal weight");
+    assert.equal(await unreadOf("Third").count(), 0, "a read chat has no badge");
+    assert.match((await second.innerText()).trim(), /…$/, "the label is still shortened");
+
+    await setFocus(page, true);
+    await nav.locator("[data-unread='2']").waitFor({ state: "detached" });
+    assert.equal(await weight(first), 400, "reading a chat clears its bold title");
+    assert.ok((await weight(second)) >= 600, "the other chat keeps its own count");
+    await nav.locator("[data-unread='1']").waitFor();
+
+    await second.click();
+    await nav.locator("[data-unread]").first().waitFor({ state: "detached" });
+    assert.equal(await weight(second), 400, "opening a chat clears its bold title");
+    assert.equal(await weight(third), 400);
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
 test("a stream that reconnects while the operator is away keeps the reply it missed unread", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
