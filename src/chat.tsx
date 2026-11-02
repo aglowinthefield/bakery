@@ -546,7 +546,7 @@ export function ChatView({
           onClick={() => setChatId(chat.id)}
           aria-current={chat.id === chatId ? "true" : undefined}
           title={chat.title || undefined}
-          className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
+          className={`min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm ${chat.unread ? "font-semibold" : ""}`}
         >
           {chatLabel(chat)}
           {chat.pending && (
