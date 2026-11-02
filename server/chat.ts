@@ -10,7 +10,8 @@ import type { Board, Card, Chat, ChatMessage, ChatPart, RepoBoard } from "./boar
 export type ChatLive = { startedAt: string; parts: ChatPart[] } | null;
 export type ChatEvent = { type: "live"; live: ChatLive } | { type: "message"; message: ChatMessage } | { type: "chat"; chat: Chat };
 
-const maxCards = 200;
+/** Cards listed in the prompt. It changes whenever a card moves, so a long list is paid for again on every such turn. */
+const maxCards = 40;
 const statusOrder = ["running", "review", "failed", "interrupted", "ready", "triage", "done"];
 const priorityName: Record<number, string> = { [-1]: "low", 0: "normal", 1: "high", 2: "urgent" };
 
@@ -19,7 +20,8 @@ const priorityName: Record<number, string> = { [-1]: "low", 0: "normal", 1: "hig
  * the board on every turn, so the agent sees cards that changed since the last message.
  */
 export function chatSystemPrompt(repoBoard: RepoBoard, cards: Card[], cli: string): string {
-  const live = cards.filter(card => card.status !== "archived")
+  // Done cards are history; the agent reads them through the CLI when asked.
+  const live = cards.filter(card => card.status !== "archived" && card.status !== "done")
     .sort((a, b) => statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status) || b.priority - a.priority);
   const lines = live.slice(0, maxCards).map(card => {
     const extra = [priorityName[card.priority] !== "normal" ? priorityName[card.priority] : "", card.blocked ? "blocked" : "",
@@ -33,7 +35,7 @@ export function chatSystemPrompt(repoBoard: RepoBoard, cards: Card[], cli: strin
     `\`${cli} <command> --board ${repoBoard.id}\`. Commands include cards, show CARD_ID, add TITLE, create, edit, depend, undepend, ready, triage, start, archive, close, restore and stats. Add --json for full data; run \`${cli} --help\` for the exact usage.`,
     "When a card is actionable and clear, with no open decisions, create it and move it to Ready, then tell the operator it was created in Ready and will start now (auto pickup launches a paid run). Leave it in Triage only if it needs a decision, a scope answer or more info, and say what is missing.",
     "Code changes normally go through cards. Edit files in this checkout only when the operator asks you to, since Bakery merges finished cards into it.",
-    `Board snapshot (${live.length} card${live.length === 1 ? "" : "s"} not archived${live.length > maxCards ? `, first ${maxCards} shown` : ""}; it may be stale by the time you act, so check with the CLI before changing a card):`,
+    `Board snapshot (${live.length} card${live.length === 1 ? "" : "s"} open${live.length > maxCards ? `, first ${maxCards} shown` : ""}; done and archived cards are not listed, so run \`cards\` for them; it may be stale by the time you act, so check with the CLI before changing a card):`,
     lines.length ? lines.join("\n") : "(no cards)",
   ].join("\n\n");
 }

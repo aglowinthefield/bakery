@@ -49,6 +49,19 @@ test("the system prompt names the board, its CLI and its cards, busiest first", 
   } finally { done(); }
 });
 
+test("the system prompt lists only open cards, at most 40", () => {
+  const { board, repoBoard, dir, done } = fixture();
+  try {
+    const finished = board.createCard({ title: "Finished", body: "", repo: dir });
+    board.setStatus(finished.id, "done");
+    for (let i = 0; i < 45; i++) board.createCard({ title: `Open ${i}`, body: "", repo: dir });
+    const prompt = chatSystemPrompt(repoBoard, board.listCards(dir), "cli");
+    assert.ok(!prompt.includes("Finished"));
+    assert.match(prompt, /\(45 cards open, first 40 shown; done and archived cards are not listed/);
+    assert.equal(prompt.split("\n").filter(line => line.startsWith("- ")).length, 40);
+  } finally { done(); }
+});
+
 test("a chat turn streams parts, saves the reply, and keeps the session under the chat id", async () => {
   const { dir, board, repoBoard, done } = fixture();
   try {
