@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
-import { AutoReview, promptDiff, maxPromptPatchChars, reviewerVerdict } from "../server/auto-review.js";
+import { AutoReview, promptDiff, reviewerVerdict } from "../server/auto-review.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 const settle = (verdict: string) => [
@@ -608,10 +608,11 @@ test("a board's diff limits send big diffs to a person, and 0 turns a limit off"
   } finally { item.close(); }
 });
 
-test("the reviewer prompt carries at most maxPromptPatchChars of the patch and names every file", () => {
-  assert.equal(promptDiff([{ path: "a" }], "small"), "Diff against main:\nsmall");
-  const text = promptDiff([{ path: "a.ts" }, { path: "b.ts" }], "x".repeat(maxPromptPatchChars + 5));
-  assert.match(text, /truncated to its first 100000 of 100005/);
-  assert.match(text, /a\.ts\nb\.ts/);
-  assert.ok(text.length < maxPromptPatchChars + 500);
+test("the reviewer prompt names the changed files and tells it to run git diff against the base, not carry the patch", () => {
+  const text = promptDiff([{ path: "a.ts" }, { path: "b.ts" }], "abc123");
+  assert.match(text, /git diff abc123/);
+  assert.match(text, /Changed files \(2\):\na\.ts\nb\.ts/);
+  const many = promptDiff(Array.from({ length: 250 }, (_, i) => ({ path: `f${i}` })), "abc123");
+  assert.match(many, /and 50 more/);
+  assert.doesNotMatch(many, /f200/);
 });
