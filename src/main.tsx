@@ -1129,8 +1129,14 @@ export function App() {
   // Fade the visible page in whenever the page identity changes: the view, plus the repository for
   // repository-scoped views. Polling, card interactions and re-selecting the current page leave the
   // identity alone. The first repository resolving (null -> id) is not a navigation.
+  //
+  // The page itself is never animated. A background-coloured veil over the content area fades from
+  // 12% to nothing, which looks like the page going from 88% to full opacity. Animating the page's
+  // <main> gives all of it its own compositor layer, and the operator saw that fade reveal from a
+  // corner (suspected tile-by-tile layer painting in the webview; not reproduced in Chromium).
   const pageKey = `${view}:${view === "settings" || view === "today" || view === "stats" || view === "logs" ? "" : (boardId ?? "")}`;
   const shownPageKey = useRef<string | null>(null);
+  const pageFadeVeil = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = shownPageKey.current;
     shownPageKey.current = pageKey;
@@ -1140,7 +1146,12 @@ export function App() {
     const page = Array.from(
       document.querySelectorAll<HTMLElement>("main.page-fade"),
     ).find((el) => !el.hidden);
-    page?.animate([{ opacity: 0.88 }, { opacity: 1 }], {
+    const veil = pageFadeVeil.current;
+    if (!page || !veil) return;
+    const { left, top } = page.getBoundingClientRect();
+    veil.style.left = `${Math.max(0, left)}px`;
+    veil.style.top = `${Math.max(0, top)}px`;
+    veil.animate([{ opacity: 0.12 }, { opacity: 0 }], {
       duration: 120,
       easing: "ease-out",
     });
@@ -1505,6 +1516,7 @@ export function App() {
         aria-hidden="true"
         className="desktop-titlebar"
       />
+      <div ref={pageFadeVeil} aria-hidden="true" className="page-fade-veil" />
       <ConfirmHost />
       {sidebarHidden && (
         <button
