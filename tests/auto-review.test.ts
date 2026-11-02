@@ -609,10 +609,27 @@ test("a board's diff limits send big diffs to a person, and 0 turns a limit off"
 });
 
 test("the reviewer prompt names the changed files and tells it to run git diff against the base, not carry the patch", () => {
-  const text = promptDiff([{ path: "a.ts" }, { path: "b.ts" }], "abc123");
+  const text = promptDiff(["a.ts", "b.ts"], "abc123");
   assert.match(text, /git diff abc123/);
   assert.match(text, /Changed files \(2\):\na\.ts\nb\.ts/);
-  const many = promptDiff(Array.from({ length: 250 }, (_, i) => ({ path: `f${i}` })), "abc123");
+  const many = promptDiff(Array.from({ length: 250 }, (_, i) => `f${i}`), "abc123");
   assert.match(many, /and 50 more/);
   assert.doesNotMatch(many, /f200/);
+});
+
+test("auto-review is not stopped by the diff viewer's 200-file cap, but still refuses binary files and symlinks", async () => {
+  const item = fixture('{"verdict":"needs_human","reason":"Stop here"}');
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxFiles: 0, maxPatchChars: 0 });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const many = item.reviewedCard();
+    for (let i = 0; i < 250; i++) writeFileSync(join(many.worktree, `f${i}.txt`), "x\n");
+    const binary = item.reviewedCard();
+    writeFileSync(join(binary.worktree, "image.bin"), Buffer.from([0, 1, 2, 0, 255, 0]));
+    await item.auto.tick();
+    await item.auto.tick();
+    assert.equal(item.board.listAutoReviewJobs(many.card.id)[0].details, "Agent requested human review: Stop here", "reached the reviewer");
+    assert.match(item.board.listAutoReviewJobs(binary.card.id)[0].details, /Binary, symlink, or submodule/);
+  } finally { item.close(); }
 });
