@@ -3349,6 +3349,91 @@ export function App() {
                   Each runs the verification command too
                 </span>
               </label>
+              <label className="mt-3 flex items-center gap-2 text-xs">
+                Largest diff the agent reviewer takes (files)
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  aria-label="Largest diff the agent reviewer takes (files)"
+                  key={`autoReviewMaxFiles-${editingBoard.id}-${editingBoard.autoReviewMaxFiles ?? 40}`}
+                  defaultValue={editingBoard.autoReviewMaxFiles ?? 40}
+                  disabled={busy}
+                  onBlur={(event) => {
+                    const value = Number(event.target.value);
+                    if (
+                      event.target.value.trim() === "" ||
+                      !Number.isSafeInteger(value) ||
+                      value < 0 ||
+                      value === (editingBoard.autoReviewMaxFiles ?? 40)
+                    ) {
+                      event.target.value = String(
+                        editingBoard.autoReviewMaxFiles ?? 40,
+                      );
+                      return;
+                    }
+                    void action(async () => {
+                      updateBoard(
+                        await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({ autoReviewMaxFiles: value }),
+                          },
+                        ),
+                      );
+                    });
+                  }}
+                  className="w-28 rounded-md border border-border bg-background px-2 py-1"
+                />
+                <span className="text-muted-foreground">
+                  Changed files; 0 means no limit. Larger diffs go to a person.
+                </span>
+              </label>
+              <label className="mt-3 flex items-center gap-2 text-xs">
+                Largest diff the agent reviewer takes (characters)
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  aria-label="Largest diff the agent reviewer takes (characters)"
+                  key={`autoReviewMaxPatchChars-${editingBoard.id}-${editingBoard.autoReviewMaxPatchChars ?? 100000}`}
+                  defaultValue={editingBoard.autoReviewMaxPatchChars ?? 100000}
+                  disabled={busy}
+                  onBlur={(event) => {
+                    const value = Number(event.target.value);
+                    if (
+                      event.target.value.trim() === "" ||
+                      !Number.isSafeInteger(value) ||
+                      value < 0 ||
+                      value === (editingBoard.autoReviewMaxPatchChars ?? 100000)
+                    ) {
+                      event.target.value = String(
+                        editingBoard.autoReviewMaxPatchChars ?? 100000,
+                      );
+                      return;
+                    }
+                    void action(async () => {
+                      updateBoard(
+                        await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({
+                              autoReviewMaxPatchChars: value,
+                            }),
+                          },
+                        ),
+                      );
+                    });
+                  }}
+                  className="w-28 rounded-md border border-border bg-background px-2 py-1"
+                />
+                <span className="text-muted-foreground">
+                  Patch characters; 0 means no limit. Larger diffs go to a
+                  person.
+                </span>
+              </label>
               {!mergeLimitValid && (
                 <p role="alert" className="mt-1 text-xs text-destructive">
                   Enter a whole number from 0 to 99.

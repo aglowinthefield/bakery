@@ -40,6 +40,8 @@ export type Board = {
   autoReviewEnabledAt: string | null;
   autoReviewMergeLimit?: number;
   autoReviewConcurrency?: number;
+  autoReviewMaxFiles?: number;
+  autoReviewMaxPatchChars?: number;
   autoReviewMerges?: number;
   autoPickupEnabled: boolean;
   pickupConcurrency: number;

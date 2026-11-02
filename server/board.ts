@@ -9,14 +9,14 @@ import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/rep
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewMerges: number; autoReviewConcurrency: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewMerges: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewConcurrency: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, autoReviewMerges: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
-  autoReviewEnabledAt: row.autoReviewEnabledAt, autoReviewMergeLimit: row.autoReviewMergeLimit, autoReviewMerges, autoReviewConcurrency: row.autoReviewConcurrency, pickupConcurrency: row.pickupConcurrency,
+  autoReviewEnabledAt: row.autoReviewEnabledAt, autoReviewMergeLimit: row.autoReviewMergeLimit, autoReviewMerges, autoReviewConcurrency: row.autoReviewConcurrency, autoReviewMaxFiles: row.autoReviewMaxFiles, autoReviewMaxPatchChars: row.autoReviewMaxPatchChars, pickupConcurrency: row.pickupConcurrency,
   pickupDailyLimit: row.pickupDailyLimit, autoPickupEnabledAt: row.autoPickupEnabledAt, autoPickupError: row.autoPickupError,
   autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, pushMainAfterMerge: row.pushMainAfterMerge !== 0,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
@@ -96,7 +96,7 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoReviewConcurrency, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
 export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
@@ -242,6 +242,8 @@ export class Board {
     if (!boardColumns.has("pickupConcurrency")) this.db.exec("ALTER TABLE boards ADD COLUMN pickupConcurrency INTEGER NOT NULL DEFAULT 2");
     if (!boardColumns.has("autoReviewMergeLimit")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewMergeLimit INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoReviewConcurrency")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewConcurrency INTEGER NOT NULL DEFAULT 1");
+    if (!boardColumns.has("autoReviewMaxFiles")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewMaxFiles INTEGER NOT NULL DEFAULT 40");
+    if (!boardColumns.has("autoReviewMaxPatchChars")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewMaxPatchChars INTEGER NOT NULL DEFAULT 100000");
     if (!boardColumns.has("pickupDailyLimit")) this.db.exec("ALTER TABLE boards ADD COLUMN pickupDailyLimit INTEGER NOT NULL DEFAULT 6");
     if (!boardColumns.has("autoPickupResetRunRowid")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoPickupEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupEnabledAt TEXT");
@@ -642,6 +644,19 @@ export class Board {
     if (!this.getBoard(id)) throw new Error("Board not found");
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Agent review concurrency must be between 1 and 4");
     this.db.prepare("UPDATE boards SET autoReviewConcurrency=? WHERE id=?").run(concurrency, id);
+    return this.getBoard(id)!;
+  }
+  /** Diffs bigger than these go to a person instead of the agent reviewer; 0 disables that check. */
+  setAutoReviewDiffLimits(id: string, limits: { maxFiles?: number; maxPatchChars?: number }): RepoBoard {
+    if (!this.getBoard(id)) throw new Error("Board not found");
+    const check = (value: number | undefined, name: string, max: number) => {
+      if (value === undefined) return;
+      if (!Number.isSafeInteger(value) || value < 0 || value > max) throw new Error(`${name} must be 0 (no limit) or at most ${max}`);
+    };
+    check(limits.maxFiles, "Auto-review file limit", 100_000);
+    check(limits.maxPatchChars, "Auto-review patch size limit", 1_000_000_000);
+    if (limits.maxFiles !== undefined) this.db.prepare("UPDATE boards SET autoReviewMaxFiles=? WHERE id=?").run(limits.maxFiles, id);
+    if (limits.maxPatchChars !== undefined) this.db.prepare("UPDATE boards SET autoReviewMaxPatchChars=? WHERE id=?").run(limits.maxPatchChars, id);
     return this.getBoard(id)!;
   }
   /** Whether the board's rolling 24-hour limit on unattended merges is used up. */

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
-import { AutoReview, reviewerVerdict } from "../server/auto-review.js";
+import { AutoReview, promptDiff, maxPromptPatchChars, reviewerVerdict } from "../server/auto-review.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 const settle = (verdict: string) => [
@@ -587,4 +587,31 @@ test("queued agent reviews show their place, and a board runs as many at once as
     assert.deepEqual(cards.map(id => item.board.listAutoReviewJobs(id).length), [1, 1, 1]);
     assert.equal(item.board.getCard(cards[2])!.reviewWait, null);
   } finally { item.close(); }
+});
+
+test("a board's diff limits send big diffs to a person, and 0 turns a limit off", async () => {
+  const item = fixture();
+  try {
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMaxFiles, 40);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMaxPatchChars, 100000);
+    assert.throws(() => item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxFiles: -1 }));
+    item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxPatchChars: 10 });
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const tooBig = item.reviewedCard().card;
+    await item.auto.tick();
+    assert.match(item.board.listAutoReviewJobs(tooBig.id)[0].details ?? "", /over this board's auto-review limit of 10/);
+    item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxFiles: 0, maxPatchChars: 0 });
+    const allowed = item.reviewedCard().card;
+    await item.auto.tick();
+    assert.doesNotMatch(item.board.listAutoReviewJobs(allowed.id)[0].details ?? "", /limit/);
+  } finally { item.close(); }
+});
+
+test("the reviewer prompt carries at most maxPromptPatchChars of the patch and names every file", () => {
+  assert.equal(promptDiff([{ path: "a" }], "small"), "Diff against main:\nsmall");
+  const text = promptDiff([{ path: "a.ts" }, { path: "b.ts" }], "x".repeat(maxPromptPatchChars + 5));
+  assert.match(text, /truncated to its first 100000 of 100005/);
+  assert.match(text, /a\.ts\nb\.ts/);
+  assert.ok(text.length < maxPromptPatchChars + 500);
 });
