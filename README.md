@@ -135,6 +135,7 @@ npm run format         # fixes formatting in the covered frontend files
 - Keep a change focused on one thing, and add or update a test for behavior you change.
 - The formatter check covers the board, card details, review, attempts, usage, API, and model modules. It doesn't cover server or test files yet.
 - Tests never touch repositories you've added to Bakery.
+- By contributing, you agree that your work is licensed under the [MIT License](LICENSE).
 
 ## Documentation
 
