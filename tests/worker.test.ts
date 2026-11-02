@@ -142,13 +142,13 @@ test("a transient provider error followed by successful Pi settlement is Review,
     assert.equal(board.getRun(recovered.id)?.status, "review");
     assert.match(board.getRun(recovered.id)!.output, /provider request failed \(HTTP 503\)/i);
     assert.match(board.getRun(recovered.id)!.output, /recovered and continued/i);
-    assert.doesNotMatch(board.getRun(recovered.id)!.output, /SECRET_PROVIDER_DETAIL|SECRET_STDERR/);
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' '${errorEvent}' '{"type":"agent_settled","aborted":false}'\n`);
+    assert.match(board.getRun(recovered.id)!.output, /SECRET_PROVIDER_DETAIL/);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' '${errorEvent}' '{"type":"agent_settled","aborted":false}'\necho 'SECRET_STDERR' >&2\n`);
     const terminal = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(terminal.id)?.status !== "running");
     assert.equal(board.getRun(terminal.id)?.status, "failed");
     assert.match(board.getRun(terminal.id)!.error!, /provider request failed \(HTTP 503\)/i);
-    assert.doesNotMatch(board.getRun(terminal.id)!.error!, /SECRET_PROVIDER_DETAIL/);
+    assert.match(board.getRun(terminal.id)!.error!, /SECRET_PROVIDER_DETAIL.*stderr: SECRET_STDERR/);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -21,10 +21,11 @@ function isAncestor(repo: string, ancestor: string, descendant: string) {
   catch (error) { if ((error as { status?: number }).status === 1) return false; throw error; }
 }
 
-// Pi's provider error text may include request details. Keep only the HTTP status in the card transcript.
+// Keep Pi's error text so the card shows why the provider call failed; cap it so one line cannot flood the transcript.
 function providerFailure(error: unknown): string {
-  const status = typeof error === "string" ? error.match(/\b[45]\d{2}\b/)?.[0] : undefined;
-  return `Provider request failed${status ? ` (HTTP ${status})` : ""}`;
+  const text = typeof error === "string" ? error.trim() : "";
+  const status = text.match(/\b[45]\d{2}\b/)?.[0];
+  return `Provider request failed${status ? ` (HTTP ${status})` : ""}${text ? `: ${text.slice(0, 1000)}` : ""}`;
 }
 
 /** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
@@ -344,8 +345,7 @@ export class Worker {
       // Exit code 143 often means SIGTERM through a shell, but does not identify the sender.
       const termination = reason ? `; Bakery sent SIGTERM: ${reason}`
         : signal || code === 143 ? "; termination source unknown (Bakery did not send SIGTERM)" : "";
-      // Stderr may contain request details, so only sanitized diagnostics reach the card.
-      this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `Pi exited (${signal ?? code ?? "unknown"})${termination}; ${settled ? "settled" : "no settlement event"}${terminalModelError ? `; ${terminalModelError}` : ""}${protocolError ? `; ${protocolError}` : ""}${stderr ? "; stderr logged on server" : ""}`);
+      this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `Pi exited (${signal ?? code ?? "unknown"})${termination}; ${settled ? "settled" : "no settlement event"}${terminalModelError ? `; ${terminalModelError}` : ""}${protocolError ? `; ${protocolError}` : ""}${stderr.trim() ? `; stderr: ${stderr.trim().slice(-1500)}` : ""}`);
       if (!ok) console.error(`Pi exit for run ${run.id}: pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"} source=${reason ?? "unknown"} elapsedMs=${Date.now() - startedAt}`);
       if (stderr) console.error(`Pi diagnostics for run ${run.id}:`, stderr);
     });
