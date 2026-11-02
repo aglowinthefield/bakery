@@ -47,3 +47,22 @@ test("a saved grouping reads back; anything else means no grouping", () => {
   assert.equal(readGrouping(null), "none");
   assert.equal(readGrouping("author"), "none");
 });
+
+test("the sidebar width is bounded by its longest label and the room the message pane needs", async () => {
+  const s = await import("../src/chat-sidebar.js");
+  assert.deepEqual(s.sidebarBounds(300, 1400), { min: s.sidebarMin, max: 301 }, "content sets the maximum");
+  assert.deepEqual(s.sidebarBounds(900, 1000), { min: s.sidebarMin, max: 1000 - s.messagePaneMin - s.dividerWidth }, "the viewport can lower it");
+  assert.deepEqual(s.sidebarBounds(null, 1000), { min: s.sidebarMin, max: 1000 - s.messagePaneMin - s.dividerWidth }, "unmeasured content leaves the viewport limit");
+  assert.equal(s.sidebarBounds(100, 1400).max, s.sidebarMin, "the minimum wins over a short label");
+  assert.equal(s.sidebarBounds(500, 400).max, s.sidebarMin, "the minimum wins in a tiny window");
+  assert.equal(s.sidebarBounds(300.2, null).max, 302);
+  const bounds = { min: 180, max: 300 };
+  assert.equal(s.clampSidebar(50, bounds), 180);
+  assert.equal(s.clampSidebar(999, bounds), 300);
+  assert.equal(s.clampSidebar(250.4, bounds), 250);
+  assert.equal(s.readSidebarWidth(null), s.sidebarDefault);
+  assert.equal(s.readSidebarWidth("abc"), s.sidebarDefault);
+  assert.equal(s.readSidebarWidth("-5"), s.sidebarDefault);
+  assert.equal(s.readSidebarWidth("260"), 260);
+  assert.equal(s.rowNaturalWidth({ rowWidth: 200, labelClientWidth: 80, textWidth: 124, labelPadding: 16 }), 260, "a clipped label grows the row to its full width");
+});

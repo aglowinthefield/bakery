@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   MessageSquare,
   MessageSquarePlus,
@@ -30,6 +30,15 @@ import {
   shortTime,
   type ChatGrouping,
 } from "./chat-format.js";
+import {
+  clampSidebar,
+  readSidebarWidth,
+  rowNaturalWidth,
+  sidebarBigStep,
+  sidebarBounds,
+  sidebarStep,
+  sidebarWidthKey,
+} from "./chat-sidebar.js";
 
 type ChatState = { messages: ChatMessage[]; live: ChatLive };
 
@@ -134,6 +143,17 @@ export function ChatView({
   const [grouping, setGrouping] = useState<ChatGrouping>(() =>
     readGrouping(localStorage.getItem(groupingKey)),
   );
+  // The width the operator chose for the list; what shows is that width kept within what the labels and window allow.
+  const [chosenWidth, setChosenWidth] = useState(() =>
+    readSidebarWidth(localStorage.getItem(sidebarWidthKey)),
+  );
+  const [contentWidth, setContentWidth] = useState<number | null>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  const [sideBySide, setSideBySide] = useState(
+    () => window.matchMedia("(min-width: 768px)").matches,
+  );
+  const layout = useRef<HTMLDivElement>(null);
+  const rail = useRef<HTMLElement>(null);
   const end = useRef<HTMLDivElement>(null);
   // Whether the open chat is known to hold a message (messages are never removed, so this cannot go stale the wrong way), and the chats with a first send in flight.
   const latest = useRef({ count: 0, live: false });
@@ -263,6 +283,58 @@ export function ChatView({
     if (collapsed) localStorage.setItem(railKey, "collapsed");
     else localStorage.removeItem(railKey);
   }, [collapsed]);
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 768px)");
+    const update = () => setSideBySide(media.matches);
+    update();
+    media.addEventListener("change", update);
+    const element = layout.current;
+    const observer =
+      element && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => setContainerWidth(element.clientWidth))
+        : null;
+    if (element) setContainerWidth(element.clientWidth);
+    observer?.observe(element!);
+    return () => {
+      media.removeEventListener("change", update);
+      observer?.disconnect();
+    };
+  }, []);
+  // The widest a row needs to show its whole label, measured from what is displayed, so it follows the labels,
+  // the date grouping, the unread badges and the chat list.
+  useLayoutEffect(() => {
+    const nav = rail.current;
+    if (!nav || collapsed) return;
+    const rows = [...nav.querySelectorAll<HTMLElement>("[data-chat-row]")];
+    let widest = 0;
+    for (const item of rows) {
+      const label = item.querySelector<HTMLElement>("[data-chat-label]");
+      if (!label) continue;
+      // A range over the label's contents reports the text's own width, even where the label clips it.
+      const text = document.createRange();
+      text.selectNodeContents(label);
+      const style = getComputedStyle(label);
+      const needed =
+        rowNaturalWidth({
+          rowWidth: item.getBoundingClientRect().width,
+          labelClientWidth: label.getBoundingClientRect().width,
+          textWidth: text.getBoundingClientRect().width,
+          labelPadding:
+            parseFloat(style.paddingLeft) + parseFloat(style.paddingRight),
+        }) +
+        (nav.getBoundingClientRect().width -
+          item.getBoundingClientRect().width);
+      widest = Math.max(widest, needed);
+    }
+    setContentWidth(rows.length ? widest : null);
+  });
+  const sidebarLimits = sidebarBounds(contentWidth, containerWidth);
+  const sidebarWidth = clampSidebar(chosenWidth, sidebarLimits);
+  const resizeTo = (width: number) => {
+    const next = clampSidebar(width, sidebarLimits);
+    setChosenWidth(next);
+    localStorage.setItem(sidebarWidthKey, String(next));
+  };
   useEffect(() => {
     localStorage.setItem(groupingKey, grouping);
   }, [grouping]);
@@ -540,12 +612,14 @@ export function ChatView({
     ) : (
       <div
         key={chat.id}
+        data-chat-row
         className={`group flex items-center rounded-md ${chat.id === chatId ? "bg-accent/50" : "hover:bg-accent/30"}`}
       >
         <button
           onClick={() => setChatId(chat.id)}
           aria-current={chat.id === chatId ? "true" : undefined}
           title={chat.title || undefined}
+          data-chat-label
           className={`min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm ${chat.unread ? "font-semibold" : ""}`}
         >
           {chatLabel(chat)}
@@ -577,11 +651,18 @@ export function ChatView({
   const empty = state.messages.length === 0 && !state.live;
 
   return (
-    <div className="flex h-[calc(100dvh-9rem)] min-h-96">
+    <div
+      ref={layout}
+      className={`flex h-[calc(100dvh-9rem)] min-h-96 ${collapsed ? "" : "flex-col md:flex-row"}`}
+    >
       <nav
+        ref={rail}
         aria-label="Chats"
         data-collapsed={collapsed ? "true" : undefined}
-        className={`flex shrink-0 flex-col gap-1 overflow-y-auto border-r border-border ${collapsed ? "w-12 items-center px-1.5 py-3" : "w-56 p-3"}`}
+        style={
+          { "--chat-sidebar-w": `${sidebarWidth}px` } as React.CSSProperties
+        }
+        className={`flex shrink-0 flex-col gap-1 overflow-y-auto border-border ${collapsed ? "w-12 items-center border-r px-1.5 py-3" : "max-h-48 w-full border-b p-3 md:max-h-none md:w-[var(--chat-sidebar-w)] md:border-b-0 md:border-r"}`}
       >
         <div className={`flex gap-1 ${collapsed ? "flex-col" : ""}`}>
           <Button
@@ -645,7 +726,46 @@ export function ChatView({
             ))
           : chats?.map((chat) => row(chat))}
       </nav>
-      <section aria-label="Chat" className="flex min-w-0 flex-1 flex-col">
+      {!collapsed && sideBySide && (
+        <div
+          role="separator"
+          aria-label="Resize chat list"
+          aria-orientation="vertical"
+          aria-valuemin={sidebarLimits.min}
+          aria-valuemax={sidebarLimits.max}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onPointerDown={(event) =>
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }
+          onPointerMove={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            const left = rail.current?.getBoundingClientRect().left ?? 0;
+            resizeTo(event.clientX - left);
+          }}
+          onKeyDown={(event) => {
+            const step = event.shiftKey ? sidebarBigStep : sidebarStep;
+            const target =
+              event.key === "ArrowLeft"
+                ? sidebarWidth - step
+                : event.key === "ArrowRight"
+                  ? sidebarWidth + step
+                  : event.key === "Home"
+                    ? sidebarLimits.min
+                    : event.key === "End"
+                      ? sidebarLimits.max
+                      : null;
+            if (target === null) return;
+            event.preventDefault();
+            resizeTo(target);
+          }}
+          className="-ml-px w-1.5 shrink-0 cursor-ew-resize touch-none bg-transparent hover:bg-primary/30 focus-visible:bg-primary/40"
+        />
+      )}
+      <section
+        aria-label="Chat"
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+      >
         <ol
           aria-live="polite"
           className="flex-1 space-y-3 overflow-y-auto p-4 text-sm lg:px-8"
