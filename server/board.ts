@@ -9,16 +9,17 @@ import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/rep
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewMerges: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewMerges: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; verificationCommand: string; autoReviewEnabledAt: string | null; autoReviewMergeLimit: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, autoReviewMerges: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl, verificationCommand: row.verificationCommand,
   autoReviewEnabledAt: row.autoReviewEnabledAt, autoReviewMergeLimit: row.autoReviewMergeLimit, autoReviewMerges, autoReviewConcurrency: row.autoReviewConcurrency, autoReviewMaxFiles: row.autoReviewMaxFiles, autoReviewMaxPatchChars: row.autoReviewMaxPatchChars, pickupConcurrency: row.pickupConcurrency,
   pickupDailyLimit: row.pickupDailyLimit, autoPickupEnabledAt: row.autoPickupEnabledAt, autoPickupError: row.autoPickupError,
   autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, pushMainAfterMerge: row.pushMainAfterMerge !== 0,
+  autoPullRequestEnabled: row.autoPullRequestEnabled !== 0, autoPullRequestEnabledAt: row.autoPullRequestEnabledAt,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
   autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels),
   autoPickupNextAt: row.pickupDailyLimit > 0 && starts.length >= row.pickupDailyLimit
@@ -96,7 +97,9 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge";
+/** How many runs of one card Bakery pushes to open its pull request without Approve; see `listAutoPullRequestCandidates`. */
+export const maxAutoPullRequestAttempts = 3;
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, verificationCommand, autoReviewEnabledAt, autoReviewMergeLimit, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt";
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
 export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
@@ -155,6 +158,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
+      CREATE TABLE IF NOT EXISTS auto_pull_requests (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS discussion_messages (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, createdAt TEXT NOT NULL);
@@ -230,6 +234,8 @@ export class Board {
     if (!migratedSettings.has("density")) this.db.exec("ALTER TABLE settings ADD COLUMN density TEXT NOT NULL DEFAULT 'default' CHECK(density IN ('compact', 'default', 'cozy'))");
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
     if (!boardColumns.has("pushMainAfterMerge")) this.db.exec("ALTER TABLE boards ADD COLUMN pushMainAfterMerge INTEGER NOT NULL DEFAULT 0");
+    if (!boardColumns.has("autoPullRequestEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPullRequestEnabled INTEGER NOT NULL DEFAULT 0");
+    if (!boardColumns.has("autoPullRequestEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPullRequestEnabledAt TEXT");
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("icon")) this.db.exec("ALTER TABLE boards ADD COLUMN icon TEXT NOT NULL DEFAULT 'sprinkle_donut'");
     if (!boardColumns.has("color")) this.db.exec("ALTER TABLE boards ADD COLUMN color TEXT NOT NULL DEFAULT 'violet'");
@@ -623,6 +629,17 @@ export class Board {
     this.db.prepare("UPDATE boards SET pushMainAfterMerge=? WHERE id=?").run(enabled ? 1 : 0, id);
     return this.getBoard(id)!;
   }
+  /**
+   * github-pr boards only: open the pull request as soon as a card's run reaches Review, as if the operator pressed
+   * Approve. Off by default. Only runs that finish after it is turned on are pushed, so the existing backlog stays put.
+   */
+  setAutoPullRequest(id: string, enabled: boolean): RepoBoard {
+    const board = this.getBoard(id);
+    if (!board) throw new Error("Board not found");
+    this.db.prepare("UPDATE boards SET autoPullRequestEnabled=?, autoPullRequestEnabledAt=? WHERE id=?")
+      .run(enabled ? 1 : 0, enabled ? board.autoPullRequestEnabledAt ?? now() : null, id);
+    return this.getBoard(id)!;
+  }
   setAutoReview(id: string, enabled: boolean, verificationCommand: string): RepoBoard {
     const board = this.getBoard(id);
     if (!board) throw new Error("Board not found");
@@ -753,6 +770,35 @@ export class Board {
       }
     }
     return result.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
+  }
+  /**
+   * Review cards whose pull request Bakery should open without Approve, oldest finished run first. See
+   * `setAutoPullRequest`. With auto-review on, the agent reviewer's approval opens the PR instead, so this stays out.
+   * Only a card's first PR is opened this way: updating a pushed PR still takes Approve (CI fixes excepted, which
+   * GitHub sync pushes). Each run is tried once, and a card at most `maxAutoPullRequestAttempts` times, so a pre-push
+   * hook that keeps refusing the agent's fixes cannot loop forever.
+   */
+  listAutoPullRequestCandidates(): { card: Card; run: Run }[] {
+    const result: { card: Card; run: Run }[] = [];
+    for (const repoBoard of this.listBoards().filter(item => item.integration === "github-pr" && item.autoPullRequestEnabled && !item.autoReviewEnabled)) {
+      const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='review'").all(repoBoard.repo) as { id: string }[];
+      for (const { id } of ids) {
+        const card = this.getCard(id), run = this.listRuns(id)[0];
+        if (card && run && this.awaitsAutoPullRequest(repoBoard, card, run)) result.push({ card, run });
+      }
+    }
+    return result.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
+  }
+  private awaitsAutoPullRequest(repoBoard: RepoBoard, card: Card, run: Run): boolean {
+    const attempts = this.db.prepare("SELECT COUNT(*) AS n, SUM(runId=?) AS tried FROM auto_pull_requests WHERE cardId=?").get(run.id, card.id) as { n: number; tried: number | null };
+    return run.status === "review" && !!run.finishedAt && !!repoBoard.autoPullRequestEnabledAt && run.finishedAt > repoBoard.autoPullRequestEnabledAt &&
+      !run.ciFix && !card.prOverrideUrl && !card.prPushedRunId && !attempts.tried && attempts.n < maxAutoPullRequestAttempts &&
+      !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id);
+  }
+  /** Records that Bakery is opening `runId`'s pull request on its own. False when the run is no longer a candidate. */
+  claimAutoPullRequest(cardId: string, runId: string): boolean {
+    if (!this.listAutoPullRequestCandidates().some(item => item.card.id === cardId && item.run.id === runId)) return false;
+    return this.db.prepare("INSERT OR IGNORE INTO auto_pull_requests(runId, cardId, at) VALUES (?, ?, ?)").run(runId, cardId, now()).changes === 1;
   }
   /** The board's Review cards whose agent review has not started, oldest finished run first: the order they start in. */
   private reviewsAwaiting(repoBoard: RepoBoard): { cardId: string; run: Run }[] {

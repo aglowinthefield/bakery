@@ -3084,6 +3084,45 @@ export function App() {
                   </span>
                 </label>
               )}
+              {(editingBoard.integration ?? "local") === "github-pr" && (
+                <label className="mt-4 flex items-start gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label="Open pull requests automatically"
+                    checked={editingBoard.autoPullRequestEnabled ?? false}
+                    disabled={busy}
+                    onChange={(event) => {
+                      const autoPullRequestEnabled = event.target.checked;
+                      void action(async () => {
+                        const updated = await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({ autoPullRequestEnabled }),
+                          },
+                        );
+                        setBoards((previous) =>
+                          previous.map((item) =>
+                            item.id === updated.id ? updated : item,
+                          ),
+                        );
+                        setEditingBoard(updated);
+                      });
+                    }}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span>
+                    Open pull requests automatically
+                    <span className="block text-muted-foreground">
+                      Pushes the card branch and opens its pull request when a
+                      run reaches Review, without waiting for Approve. Only runs
+                      that finish after you turn this on are pushed. With
+                      auto-review on, the agent reviewer&apos;s approval opens
+                      it instead.
+                    </span>
+                  </span>
+                </label>
+              )}
               <LocalMerges
                 boardId={editingBoard.id}
                 integration={editingBoard.integration ?? "local"}

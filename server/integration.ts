@@ -316,7 +316,7 @@ export class Integration {
    * `pushedBy` says who authorized the push, for the PR comment: the operator's Approve, an automatic CI fix, or
    * the agent reviewer's approval on a board with auto-review on. Only "operator" means a person reviewed it.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" = "operator"): Promise<Card> {
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator"): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
@@ -355,7 +355,7 @@ export class Integration {
         catch (error) { throw error instanceof PushError && error.hookFailed ? new PushHookError(error, candidate) : error; }
       }
       step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
-      const why = { "operator": "changes the operator reviewed and approved in Bakery", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Bakery's agent reviewer approved, pushed automatically without human review" }[pushedBy];
+      const why = { "operator": "changes the operator reviewed and approved in Bakery", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Bakery's agent reviewer approved, pushed automatically without human review", "auto-pull-request": "changes pushed automatically when the run reached Review, without human review" }[pushedBy];
       const pushed = state === "push" ? { sha: candidate, why } : null;
       const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body });
       this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });

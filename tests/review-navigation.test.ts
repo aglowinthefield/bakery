@@ -257,7 +257,7 @@ test("a request failure remains visible after closing card details", async () =>
     await page.getByRole("button", { name: /Ready card/ }).click();
     await page.getByRole("button", { name: "Start Pi run" }).click();
     await started;
-    await page.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
     finishStart();
     await page.getByRole("alert").filter({ hasText: "The worktree changed before start" }).waitFor();
   } finally { finishStart(); await page.close(); }

@@ -13,6 +13,7 @@ import { Integration, IntegrationConflictError, PushHookError } from "./integrat
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
+import { AutoPullRequest } from "./auto-pull-request.js";
 import { discuss, discussionPrompt } from "./discuss.js";
 import { Chats, writeTopic } from "./chat.js";
 import { draftPullRequest } from "./pr-draft.js";
@@ -58,20 +59,34 @@ const chats = new Chats(board, {
 });
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
+/** Drafts a pull request title and body like the Approve dialog does. Takes minutes; callers recheck the card afterwards. */
+async function draftForPullRequest(card: Card, fingerprint: string, lead: string): Promise<{ title: string; body: string }> {
+  const run = board.listRuns(card.id)[0], diff = integration.review(card);
+  if (!run?.worktree || diff.fingerprint !== fingerprint) throw new Error("Work changed before the pull request could be drafted");
+  const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
+  const draft = await draftPullRequest({ card, run, worktree: run.worktree, patch, piBin, models: piModelArgs(board.agentModelFor(card.repo, "draft")) });
+  if (draft.problem) throw new Error(`${lead}: ${draft.problem}. Use Approve and open PR`);
+  return draft;
+}
+async function pushDrafted(card: Card, fingerprint: string, draft: { title: string; body: string }, pushedBy: "agent-review" | "auto-pull-request"): Promise<Card> {
+  const opened = await sendBackRefusedPush(card, () => integration.openPullRequest(card, fingerprint, github, draft, pushedBy));
+  void githubSync.syncBoard(board.boardForRepo(card.repo)!.id);
+  return opened;
+}
 // On a github-pr board an agent approval opens the PR (drafted like the Approve dialog's), and the card waits on GitHub.
 const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", "to apply the agent reviewer's requested changes"),
   async (card, fingerprint) => {
-    const run = board.listRuns(card.id)[0], diff = integration.review(card);
-    if (!run?.worktree || diff.fingerprint !== fingerprint) throw new Error("Work changed during agent review");
-    const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
-    const draft = await draftPullRequest({ card, run, worktree: run.worktree, patch, piBin, models: piModelArgs(board.agentModelFor(card.repo, "draft")) });
-    if (draft.problem) throw new Error(`Agent approved, but the pull request draft needs a person: ${draft.problem}. Use Approve and open PR`);
-    // Drafting can take minutes; turning auto-review off meanwhile still stops the push.
+    const draft = await draftForPullRequest(card, fingerprint, "Agent approved, but the pull request draft needs a person");
+    // Drafting can take minutes; turning auto-review off meanwhile still stops the push, and a link to an external PR does too.
+    const fresh = board.getCard(card.id);
     if (!board.boardForRepo(card.repo)?.autoReviewEnabled) throw new Error("Auto-review was disabled or its settings changed");
-    const opened = await sendBackRefusedPush(card, () => integration.openPullRequest(card, fingerprint, github, { title: draft.title, body: draft.body }, "agent-review"));
-    void githubSync.syncBoard(board.boardForRepo(card.repo)!.id);
-    return opened;
+    if (!fresh || fresh.status !== "review" || fresh.prOverrideUrl) throw new Error("The card changed or was linked to a pull request during drafting");
+    return pushDrafted(fresh, fingerprint, draft, "agent-review");
   });
+// Without auto-review, a github-pr board can still open each card's pull request as soon as its run reaches Review.
+const autoPullRequest = new AutoPullRequest(board, card => integration.reviewFingerprint(card),
+  (card, fingerprint) => draftForPullRequest(card, fingerprint, "The pull request draft needs a person"),
+  (card, fingerprint, draft) => pushDrafted(card, fingerprint, draft, "auto-pull-request"));
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
@@ -195,7 +210,7 @@ const server = createServer(async (req, res) => {
         for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount, cards, updates: updates?.state ?? null, ...version });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, ...version });
       return;
     }
     if (path === "/api/update" && req.method === "POST") {
@@ -365,6 +380,11 @@ const server = createServer(async (req, res) => {
       if ("pushMainAfterMerge" in input) {
         if (Object.keys(input).length !== 1 || typeof input.pushMainAfterMerge !== "boolean") throw new Error("Update pushMainAfterMerge as a boolean, separately from other board settings");
         send(res, 200, board.setPushMainAfterMerge(repoBoard.id, input.pushMainAfterMerge)); return;
+      }
+      if ("autoPullRequestEnabled" in input) {
+        if (Object.keys(input).length !== 1 || typeof input.autoPullRequestEnabled !== "boolean") throw new Error("Update autoPullRequestEnabled as a boolean, separately from other board settings");
+        if (input.autoPullRequestEnabled && repoBoard.integration !== "github-pr") throw new Error("Automatic pull requests need a board that integrates through GitHub pull requests");
+        send(res, 200, board.setAutoPullRequest(repoBoard.id, input.autoPullRequestEnabled)); return;
       }
       if ("autoReviewMergeLimit" in input) {
         if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewMergeLimit)) throw new Error("Update autoReviewMergeLimit as an integer (0 for no limit), separately from other board settings");
@@ -698,7 +718,7 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
+server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPullRequest.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
   if (updates) {
     updates.refresh();
     updateTimer = setInterval(() => updates.refresh(), 30_000);
@@ -721,7 +741,9 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
 });
 // Set once the dev supervisor asks for a drain. /api/status reports it so the UI can say a restart is coming.
 const draining = { on: false };
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); chats.shutdown(); void Promise.all([worker.shutdown(`server received ${signal}`), autoReview.shutdown()]).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); chats.shutdown();
+  // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
+  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {
@@ -729,8 +751,8 @@ const startDrain = (onDrained: () => void) => {
   draining.on = true;
   autoPickup.shutdown();
   // Agent reviews count too: a restart would kill the reviewer mid-review.
-  process.send?.({ type: "draining", activeRuns: worker.activeCount + autoReview.activeCount });
-  void Promise.all([worker.drain(), autoReview.drain()]).then(onDrained);
+  process.send?.({ type: "draining", activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount });
+  void Promise.all([worker.drain(), autoReview.drain(), autoPullRequest.drain()]).then(onDrained);
 };
 process.on("message", (message: unknown) => {
   if ((message as { type?: unknown } | null)?.type !== "drain") return;

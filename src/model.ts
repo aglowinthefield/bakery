@@ -35,6 +35,7 @@ export type Board = {
   integrationNote?: string;
   autoCollapseEmptySwimlanes: boolean;
   pushMainAfterMerge?: boolean;
+  autoPullRequestEnabled?: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;
   autoReviewEnabledAt: string | null;
