@@ -401,6 +401,8 @@ export class Worker {
     if (!this.active.size) return Promise.resolve();
     return new Promise(resolve => this.idleWaiters.push(resolve));
   }
+  /** Refuse new runs without waiting for the active ones, so a shutdown can finish pushes that might start a hook-fix run. */
+  stopStarts(): void { this.draining = true; }
   async shutdown(reason = "server shutdown") {
     await Promise.all([...this.active].map(([id, child]) => new Promise<void>(resolve => {
       if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
