@@ -1317,7 +1317,10 @@ export function CardDetails({
                 {card.status === "failed" ? "Move to Ready" : "Reopen"}
               </Button>
             )}
-            {(card?.status === "review" || card?.status === "failed" || card?.status === "triage" || card?.status === "ready") && (
+            {(card?.status === "review" ||
+              card?.status === "failed" ||
+              card?.status === "triage" ||
+              card?.status === "ready") && (
               <Button
                 variant="outline"
                 disabled={busy}
