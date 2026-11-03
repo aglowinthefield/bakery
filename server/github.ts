@@ -386,8 +386,9 @@ export class GitHubSync {
   /**
    * An open PR that GitHub says conflicts with main always goes back to the agent as a conflict-repair run,
    * whatever the files: the agent resolves what is mechanical and changes nothing when a human has to decide, which
-   * `pushCiFix` then reports. Its resolution is pushed by `pushCiFix`. Each (PR head, main tip) pair is tried once,
-   * `maxConflictRepairs` times per card. Returns undefined when there is no conflict to deal with, so CI handling carries on.
+   * `pushCiFix` then reports. Its resolution is pushed by `pushCiFix`. Each PR head is tried once, and at most
+   * `maxConflictRepairs` times per card. A new main tip alone does not retry it: on a busy main that re-ran the
+   * agent on a conflict it had already left for a person, and re-posted the out-of-rounds notice on every main push. Returns undefined when there is no conflict to deal with, so CI handling carries on.
    */
   private async sendBackConflict(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown; pending?: boolean } | undefined> {
     const head = pr.headRefOid;
@@ -401,11 +402,13 @@ export class GitHubSync {
       if (await isAncestor(worktree, mainTip, head)) return undefined;
     } catch { return undefined; }
     if (await this.github.mergeable(repo, pr.number) !== "CONFLICTING") return undefined;
-    const key = `${head}:${mainTip}`, short = head.slice(0, 12);
+    const key = head, short = head.slice(0, 12);
     const said = (error: string) => ({ error });
+    // Keys stored before keying on the head alone were `head:mainTip`.
+    const handled = card.conflictRepairKey?.replace(/:[0-9a-f]+(?=!?$)/, "");
     // Declined earlier (out of rounds): the reason is already on the card and the PR.
-    if (card.conflictRepairKey === `${key}!`) return said(card.prError ?? `The pull request conflicts with main at ${short}; a person needs to resolve it.`);
-    if (card.conflictRepairKey === key) {
+    if (handled === `${key}!`) return said(card.prError ?? `The pull request conflicts with main at ${short}; a person needs to resolve it.`);
+    if (handled === key) {
       // Sent back, but the run could not start (the board was at its run limit, say): try again.
       if (this.board.getCiFeedback(card.id)?.source === "conflict") return this.startRework(card);
       return said(`The pull request still conflicts with main at ${short} and Bakery's automatic repair did not resolve it. Resolve it in the card worktree, or run the card again.`);

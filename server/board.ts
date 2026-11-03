@@ -504,7 +504,7 @@ export class Board {
   }
   /**
    * The PR conflicts with main and the conflict is small enough to repair unattended: count a repair round, keep the
-   * conflict for the next run, and remember `key` (PR head and main tip) so the same conflict is sent back once.
+   * conflict for the next run, and remember `key` (the PR head) so the same conflict is sent back once.
    */
   recordConflictRepair(cardId: string, key: string, headSha: string, files: string[], details: string): void {
     this.db.exec("BEGIN IMMEDIATE");
