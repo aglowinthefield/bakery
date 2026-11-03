@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emptyAgentModels } from "../server/agent-models.js";
@@ -412,6 +413,144 @@ ${event({ type: "agent_settled", aborted: false })}
     let finished = await lists();
     while (finished[0].status === "running" && Date.now() < done) { await new Promise(resolve => setTimeout(resolve, 50)); finished = await lists(); }
     for (const item of finished) { assert.equal(item.status, "review"); assert.equal(item.live, null); }
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise(resolve => child.once("close", resolve));
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("requesting changes starts the next attempt at once and sends the comments to Pi", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bakery-reqchanges-"));
+  const repo = join(home, "code", "alpha");
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q", repo]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
+  const log = join(home, "prompts.log"), fakePi = join(home, "fake-pi");
+  writeFileSync(fakePi, `#!/bin/sh
+echo "$@" >> '${log}'
+echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
+`);
+  chmodSync(fakePi, 0o755);
+  const port = await freePort();
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stderr?.on("data", chunk => { output += chunk.toString(); });
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    async function request(path: string, method = "GET", input?: unknown) {
+      const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
+      return { status: response.status, data: await response.json() };
+    }
+    const deadline = Date.now() + 5000;
+    while (true) {
+      try { await fetch(`${url}/api/boards`); break; }
+      catch {
+        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    const board = (await request("/boards", "POST", { repo })).data;
+    const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Rework", body: "" })).data;
+    const base = `/boards/${board.id}/cards/${card.id}`;
+    await request(`${base}/status`, "POST", { status: "ready" });
+    assert.equal((await request(`${base}/start`, "POST")).status, 202);
+    const wait = async (attempts: number, status: string) => {
+      const until = Date.now() + 15_000;
+      while (Date.now() < until) {
+        const runs = (await request(`${base}/runs`)).data as { status: string }[];
+        if (runs.length === attempts && runs[0].status === status) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      throw new Error(`Expected ${attempts} attempts, latest ${status}: ${output}`);
+    };
+    await wait(1, "review");
+    const fingerprint = (await request(`${base}/review?fingerprint=1`)).data.fingerprint;
+    assert.equal((await request(`${base}/comments`, "POST", { fingerprint, path: "", line: 0, body: "please rename the helper" })).status, 201);
+    assert.equal((await request(`${base}/request-changes`, "POST", { fingerprint })).status, 200);
+    await wait(2, "review");
+    assert.match(readFileSync(log, "utf8"), /please rename the helper/);
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise(resolve => child.once("close", resolve));
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("requesting changes while the pushed PR waits on GitHub keeps the comments and starts nothing, even during a drain", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bakery-reqwait-"));
+  const repo = join(home, "code", "alpha");
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q", repo]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
+  const fakePi = join(home, "fake-pi");
+  writeFileSync(fakePi, `#!/bin/sh\necho '${JSON.stringify({ type: "agent_settled", aborted: false })}'\n`);
+  chmodSync(fakePi, 0o755);
+  const port = await freePort();
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+  });
+  let output = "";
+  child.stderr?.on("data", chunk => { output += chunk.toString(); });
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    async function request(path: string, method = "GET", input?: unknown) {
+      const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
+      return { status: response.status, data: await response.json() };
+    }
+    const deadline = Date.now() + 5000;
+    while (true) {
+      try { await fetch(`${url}/api/boards`); break; }
+      catch {
+        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    const board = (await request("/boards", "POST", { repo })).data;
+    const toReview = async (title: string) => {
+      const card = (await request(`/boards/${board.id}/cards`, "POST", { title, body: "" })).data;
+      const base = `/boards/${board.id}/cards/${card.id}`;
+      await request(`${base}/status`, "POST", { status: "ready" });
+      assert.equal((await request(`${base}/start`, "POST")).status, 202);
+      const until = Date.now() + 15_000;
+      while ((await request(`${base}/runs`)).data[0]?.status !== "review") {
+        if (Date.now() > until) throw new Error(`Run did not reach review: ${output}`);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      return { card, base };
+    };
+    const db = new DatabaseSync(join(home, "data", "bakery.sqlite"));
+    const first = await toReview("Waiting"), second = await toReview("Draining");
+    db.prepare("UPDATE boards SET integration='github-pr' WHERE id=?").run(board.id);
+    const requestWhileWaiting = async ({ card, base }: { card: { id: string }; base: string }) => {
+      db.prepare("UPDATE cards SET prState='MERGED' WHERE id=?").run(card.id);
+      const listed = async () => ((await request(`/boards/${board.id}/cards`)).data as { id: string; reviewWait: string; startQueued: boolean }[]).find(item => item.id === card.id)!;
+      assert.equal((await listed()).reviewWait, "github");
+      const fingerprint = (await request(`${base}/review?fingerprint=1`)).data.fingerprint;
+      assert.equal((await request(`${base}/comments`, "POST", { fingerprint, path: "", line: 0, body: "rename it" })).status, 201);
+      const result = await request(`${base}/request-changes`, "POST", { fingerprint });
+      assert.equal(result.status, 200);
+      assert.equal(result.data.filter((item: { state: string }) => item.state === "requested").length, 1, "the comment is kept as requested");
+      await new Promise(resolve => setTimeout(resolve, 300));
+      assert.equal((await request(`${base}/runs`)).data.length, 1, "no new attempt starts");
+      assert.equal((await listed()).startQueued, false, "nothing is queued for later");
+      assert.ok((await request(`${base}/history`)).data.some((entry: { text: string }) => /waiting on GitHub/.test(entry.text)));
+    };
+    await requestWhileWaiting(first);
+    const drained = new Promise<void>(resolve => child.on("message", message => { if ((message as { type?: string }).type === "drained") resolve(); }));
+    child.send({ type: "drain" });
+    await drained;
+    await requestWhileWaiting(second);
   } finally {
     if (child.exitCode === null) {
       child.kill("SIGTERM");

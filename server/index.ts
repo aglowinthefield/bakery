@@ -594,7 +594,19 @@ const server = createServer(async (req, res) => {
           const { fingerprint } = await body(req);
           if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review diff before requesting changes");
           if (integration.reviewFingerprint(item) !== fingerprint) throw new Error("Work changed since review; refresh the diff before requesting changes");
-          send(res, 200, board.requestChanges(id, board.listRuns(id)[0].id, fingerprint)); return;
+          const comments = board.requestChanges(id, board.listRuns(id)[0].id, fingerprint);
+          // Start the next attempt now so the feedback reaches Pi without a separate Run again.
+          // Same guard as /start: while the pushed PR waits on GitHub, a revision must not run beside it. The comments stay requested for the next run.
+          if (item.reviewWait === "github") board.noteCard(id, "Changes are requested, but the pushed pull request is waiting on GitHub, so no new attempt started. Run it again once the checks finish to send Pi your feedback.");
+          else if (draining.on) board.queueStart(id);
+          else {
+            try { worker.start(board.getCard(id)!); }
+            catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              board.noteCard(id, `Changes are requested, but Bakery could not start the new attempt: ${message}. Run it again to send Pi your feedback.`);
+            }
+          }
+          send(res, 200, comments); return;
         }
         if (req.method === "DELETE" && action === "conflict") { board.clearMergeFailure(id); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) { send(res, 200, board.updateCard(id, { ...fields(await body(req)), repo: repoBoard.repo })); return; }
