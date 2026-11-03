@@ -26,7 +26,8 @@ async function fixture(boards: object[] = [board]) {
     requests.push({ method: req.method ?? "GET", path, input });
     res.setHeader("content-type", "application/json");
     let data: unknown;
-    if (path === "/api/boards") data = boards;
+    if (path === "/api/boards" && req.method === "POST") { res.writeHead(201); data = { id: "board-new", repo: (input as { repo: string }).repo }; }
+    else if (path === "/api/boards") data = boards;
     else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = cards;
     else if (/^\/api\/boards\/board-one\/cards\/[\w-]+$/.test(path) && req.method === "PATCH") {
       const card = cards.find(item => item.id === path.split("/")[5]);
@@ -384,4 +385,13 @@ test("doctor fails the server check when Bakery is not running", async () => {
   assert.equal(code, 1);
   assert.match(stdout, /^FAIL\tserver\tCannot reach Bakery/m);
   assert.match(stdout, /^FAIL\tpi\tbakery-no-such-pi not found/m);
+});
+
+test("board-add posts the repository path to the HTTP API", async () => {
+  const f = await fixture();
+  try {
+    const out = JSON.parse((await f.run("board-add", "/tmp/new-repo", "--json")).stdout);
+    assert.deepEqual(out, { id: "board-new", repo: "/tmp/new-repo" });
+    assert.deepEqual(f.requests.find(item => item.method === "POST" && item.path === "/api/boards")?.input, { repo: "/tmp/new-repo" });
+  } finally { await f.close(); }
 });

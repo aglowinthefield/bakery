@@ -452,10 +452,9 @@ test("a failed save does not discard a corrected pick queued behind it", async (
     assert.equal(patches.length, 2, "the corrected pick is still sent after the first save fails");
     assert.equal(patches[1].thinking, "medium");
     await page.reload();
-    // The select renders before the reloaded chat arrives, so wait for the saved value instead of reading it once.
-    let value = "";
-    for (let i = 0; i < 50 && value !== "medium"; i++) { value = await thinking.inputValue(); if (value !== "medium") await page.waitForTimeout(100); }
-    assert.equal(value, "medium");
+    // The select shows the default choice until the chat list loads.
+    await page.waitForFunction(() => (document.querySelector('[aria-label="Chat thinking"]') as HTMLSelectElement | null)?.value === "medium");
+    assert.equal(await thinking.inputValue(), "medium");
   } finally {
     await browser.close();
     await server.close();

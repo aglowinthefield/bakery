@@ -142,8 +142,7 @@ The diff toolbar switches between unified and split layouts and picks a syntax t
 To request revisions:
 
 1. Select a line, write a comment, and add it as a draft.
-2. Click **Request changes** to submit the drafts. This does not start Pi.
-3. Click **Run again** when you're ready. Pi gets your comments in its prompt.
+2. Click **Request changes** to submit the drafts. Bakery starts the next attempt right away, and Pi gets your comments in its prompt. If the attempt can't start (Bakery is restarting, say), the card says why; click **Run again** once it can.
 
 Drafts must be submitted or removed before you can approve. Comments stay as history on later diffs, where their line positions may have moved.
 
@@ -182,6 +181,8 @@ The default depends on the repository. When you give a board a GitHub remote lin
 - **Your choice wins.** Once you pick a mode under Integration in the board's settings, or with `bakery-cli board --integration local|github-pr`, Bakery never changes it.
 - **Protected main on a local board.** If a board is on Local merge, `main` only accepts pull requests, and you haven't chosen Local yourself, Approve refuses and points you to the Integration setting. Merging locally would leave local `main` ahead of GitHub with no way to push. Pick **GitHub pull requests**, or click **Keep Local merge** (or run `bakery-cli board --integration local`) to merge locally anyway. Boards that already had a GitHub remote are checked once when the server starts. That check only records protection; it doesn't change their mode.
 - **When Bakery can't tell.** If `gh` is missing, isn't signed in, or can't read the rules (branch protection needs admin access unless a ruleset already answered), the mode is left as it was, local Approve works as before, and the board's settings say why. The check runs again the next time the server starts or the remote changes.
+
+Add a repository as a board from the terminal with `bakery-cli board-add [PATH]` (the current directory by default).
 
 To switch by hand, pick **GitHub pull requests** under Integration in the board's settings, or run `bakery-cli board --integration github-pr`. Either way, the repository's `origin` must be that GitHub repository, and its default branch must be `main`.
 

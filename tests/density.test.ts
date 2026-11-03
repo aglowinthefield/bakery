@@ -27,12 +27,13 @@ const measure = () => {
 test("density picker rescales spacing and type, saves, and paints the cached density before settings load", async () => {
   const page = await browser.newPage();
   await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
-  let density = "default", hold = false, release!: () => void;
+  let density = "default", hold = false, release: (() => void) | undefined, held!: () => void;
+  const heldRequest = new Promise<void>(resolve => { held = resolve; });
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (path !== "/api/settings") { await route.fulfill({ json: [] }); return; }
     if (route.request().method() === "PATCH") density = (route.request().postDataJSON() as { density: string }).density;
-    else if (hold) await new Promise<void>(resolve => { release = resolve; });
+    else if (hold) await new Promise<void>(resolve => { release = resolve; held(); });
     await route.fulfill({ json: { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density } });
   });
   try {
@@ -59,7 +60,8 @@ test("density picker rescales spacing and type, saves, and paints the cached den
     hold = true;
     await page.reload();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.density), "cozy");
-    release();
+    await heldRequest;
+    release!();
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();

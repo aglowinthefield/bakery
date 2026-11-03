@@ -1082,6 +1082,11 @@ test("github-pr: after three automatic conflict repairs a person is told, once",
     await sync.syncBoard(f.repoBoard.id);
     assert.deepEqual(started, [], "no repair run");
     assert.equal(f.comments().filter(c => /3 automatic repairs have already been tried/.test(c.body)).length, 1);
+    // Main moving on does not reopen a conflict a person already has.
+    writeFileSync(join(f.upstream, "other.txt"), "x\n"); git(f.upstream, "add", "other.txt"); git(f.upstream, ...commitArgs, "main moves"); git(f.upstream, "push", "-q", "origin", "main");
+    await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, [], "still no repair run");
+    assert.equal(f.comments().filter(c => /conflicts with main at/.test(c.body)).length, 1, "said once across main tips");
     assert.match(f.board.getCard(card.id)!.prError ?? "", /a person needs to resolve it/);
   } finally { f.cleanup(); }
 });
