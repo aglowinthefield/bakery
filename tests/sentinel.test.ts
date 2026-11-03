@@ -8,6 +8,7 @@ import { Board } from "../server/board.js";
 import type { GitHub } from "../server/github.js";
 import { lockBody, lockStatus, lockTtlMs, parseLock } from "../server/pr-lock.js";
 import { PrLocks } from "../server/pr-locks.js";
+import { RunLocks } from "../server/run-locks.js";
 import { Sentinel, maxOpenSentinelCards, maxSentinelAttempts, sentinelBrief } from "../server/sentinel.js";
 import { SentinelStore } from "../server/sentinel-store.js";
 
@@ -62,7 +63,7 @@ function fixture() {
   const addPr = (over: Partial<Pr> = {}): Pr => { const number = n++; const pr = { number, title: `Change ${number}`, url: `https://github.com/acme/widgets/pull/${number}`, author: { login: "aglowinthefield" }, isDraft: false, mergeable: "CONFLICTING", state: "OPEN", headRefOid: `head${number}`.padEnd(40, "0"), headRefName: `feature-${number}`, ...over }; prs.push(pr); return pr; };
   const sentinelCards = () => board.listCards(repo).filter(card => card.title.startsWith("Fix PR #"));
   const land = (name: string) => { git(upstream, "pull", "-q", "--ff-only", "origin", "main"); writeFileSync(join(upstream, name), name); git(upstream, "add", name); git(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", name); git(upstream, "push", "-q", "origin", "main"); };
-  return { board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, sentinelCards, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, sentinelCards, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("a conflicting PR by the owner gets a Ready card whose brief rebases onto main first, and a lock", async () => {
@@ -163,4 +164,24 @@ test("the brief names the branch and pushes with lease", () => {
   const brief = sentinelBrief({ repo: "acme/widgets", number: 5, url: "u", branch: "feat", head: "a".repeat(40), mainTip: "b".repeat(40), problems: ["It conflicts with main."] });
   assert.match(brief, /git switch -C feat origin\/feat/);
   assert.match(brief, /--force-with-lease origin feat/);
+});
+
+test("a run locks its card's PR while it works, and releases it when it finishes", async () => {
+  const f = fixture();
+  try {
+    const runLocks = new RunLocks(f.board, f.locks, f.store);
+    const pr = f.addPr({ mergeable: "MERGEABLE" });
+    const card = f.board.createCard({ title: "Feature", body: "x", repo: f.repo });
+    f.board.setStatus(card.id, "ready");
+    f.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
+    const settle = () => new Promise(resolve => setTimeout(resolve, 50));
+    const run = f.board.claim(card.id);
+    await settle();
+    assert.equal(lockStatus(parseLock(f.comments.get(pr.number)![0].body)!, Date.parse("2026-01-01T00:01:00Z")), "active");
+    f.board.finish(run.id, "review");
+    await settle();
+    assert.match(f.comments.get(pr.number)![0].body, /released/);
+    assert.equal(f.comments.get(pr.number)!.length, 1, "the same comment is edited, not duplicated");
+    runLocks.shutdown();
+  } finally { f.cleanup(); }
 });

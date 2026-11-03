@@ -1410,7 +1410,9 @@ export class Board {
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);
       this.db.exec("COMMIT");
-      return this.getRun(id)!;
+      const started = this.getRun(id)!;
+      this.notifyRun("started", started);
+      return started;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   /** Attaches a reason to the status change the card_status_events trigger just recorded for this card. */
@@ -1472,5 +1474,11 @@ export class Board {
       if (status === "review") this.clearMergeFailure(run.cardId);
       this.db.exec("COMMIT");
     } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+    this.notifyRun("finished", this.getRun(id)!);
+  }
+  /** Called after a run starts and after it finishes (review or failed). Listener errors never reach the run. */
+  runListener?: (event: "started" | "finished", run: Run) => void;
+  private notifyRun(event: "started" | "finished", run: Run): void {
+    try { this.runListener?.(event, run); } catch (error) { console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`); }
   }
 }

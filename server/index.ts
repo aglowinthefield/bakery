@@ -24,6 +24,7 @@ const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: 
 import { PullRequestFeed } from "./pull-request-feed.js";
 import { cardHistory } from "./card-history.js";
 import { PrLocks } from "./pr-locks.js";
+import { RunLocks } from "./run-locks.js";
 import { Sentinel } from "./sentinel.js";
 import { SentinelStore } from "./sentinel-store.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
@@ -109,17 +110,11 @@ const pullFeed = new PullRequestFeed(board, github);
 const sentinelStore = new SentinelStore(board.sqlite);
 const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
-  card => {
-    // Tell the sentinel an agent is on this PR. Best effort: a failed comment must not stop the fix run.
-    if (card.prNumber && process.env.BAKERY_SENTINEL !== "0") {
-      const repoBoard = board.listBoards().find(item => item.repo === card.repo);
-      if (repoBoard) void prLocks.acquire(boardGithubRepo(repoBoard), card.prNumber, card.id).catch(error => console.error(`Could not lock PR #${card.prNumber}: ${error instanceof Error ? error.message : String(error)}`));
-    }
-    return worker.start(card, "manual", "to fix failing CI on the pull request");
-  },
+  card => worker.start(card, "manual", "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.reviewFingerprint(card), github, undefined, "ci-fix")));
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
 // BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
+const runLocks = new RunLocks(board, prLocks, sentinelStore, process.env.BAKERY_SENTINEL !== "0");
 const sentinel = new Sentinel(board, github, sentinelStore, prLocks, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000);
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
@@ -768,7 +763,7 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
 });
 // Set once the dev supervisor asks for a drain. /api/status reports it so the UI can say a restart is coming.
 const draining = { on: false };
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); pullFeed.shutdown(); chats.shutdown();
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
   worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
