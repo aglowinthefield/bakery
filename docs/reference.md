@@ -142,8 +142,7 @@ The diff toolbar switches between unified and split layouts and picks a syntax t
 To request revisions:
 
 1. Select a line, write a comment, and add it as a draft.
-2. Click **Request changes** to submit the drafts. This does not start Pi.
-3. Click **Run again** when you're ready. Pi gets your comments in its prompt.
+2. Click **Request changes** to submit the drafts. Bakery starts the next attempt right away, and Pi gets your comments in its prompt. If the attempt can't start (Bakery is restarting, say), the card says why; click **Run again** once it can.
 
 Drafts must be submitted or removed before you can approve. Comments stay as history on later diffs, where their line positions may have moved.
 

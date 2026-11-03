@@ -1237,7 +1237,7 @@ export class Board {
       if (this.db.prepare("SELECT 1 FROM review_comments WHERE cardId=? AND runId=? AND fingerprint<>? AND state='draft'").get(cardId, runId, fingerprint)) throw new Error("Remove draft comments on older diffs before requesting changes");
       const result = this.db.prepare("UPDATE review_comments SET state='requested' WHERE cardId=? AND runId=? AND fingerprint=? AND state='draft'").run(cardId, runId, fingerprint);
       if (!result.changes) throw new Error("Add comments on the current diff before requesting changes");
-      this.noteCard(cardId, `Changes requested on attempt ${run.attempt} (${result.changes} comment${result.changes === 1 ? "" : "s"}); they go to Pi on the next run`);
+      this.noteCard(cardId, `Changes requested on attempt ${run.attempt} (${result.changes} comment${result.changes === 1 ? "" : "s"}); they go to Pi in the next attempt`);
       this.db.exec("COMMIT");
       return this.listReviewComments(cardId);
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }

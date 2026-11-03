@@ -793,12 +793,6 @@ export function CardDetails({
                               }),
                             },
                           );
-                          await api(
-                            `/boards/${boardId}/cards/${card.id}/start`,
-                            {
-                              method: "POST",
-                            },
-                          );
                           setReply("");
                         });
                       }}
@@ -1245,8 +1239,8 @@ export function CardDetails({
             )}
             {changesRequested && (
               <span className="self-center text-xs text-muted-foreground">
-                Changes requested. Run again when ready; Pi will receive your
-                feedback.
+                Changes requested, but the new attempt didn't start. Run again;
+                Pi will receive your feedback.
               </span>
             )}
             {card?.status === "review" &&
