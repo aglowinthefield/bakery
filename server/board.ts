@@ -333,6 +333,8 @@ export class Board {
     // Preserve old cards and runs. A stored repository path is never reinterpreted against today's cwd.
     for (const row of this.db.prepare("SELECT DISTINCT repo FROM cards WHERE repo NOT IN (SELECT repo FROM boards)").all() as { repo: string }[]) this.addRepo(row.repo);
   }
+  /** The database handle, for stores that keep their own tables beside the board's. */
+  get sqlite(): DatabaseSync { return this.db; }
   recoverInterruptedRuns(): void {
     // Only the server calls this under the exclusive data-directory lock.
     this.db.exec(`UPDATE runs SET status='interrupted', error='Server restarted while this run was active', finishedAt=datetime('now') WHERE status='running';
