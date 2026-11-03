@@ -8,6 +8,7 @@ const usage = `bakery-cli — local Bakery API client
 Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|high|urgent] [--board ID|PATH] [--json]
        bakery-cli doctor [--json]
        bakery-cli boards [--json]
+       bakery-cli board-add [PATH] [--json]
        bakery-cli board [ID|PATH] [--integration local|github-pr] [--merge-limit 0-99] [--json]
        bakery-cli pr CARD_ID [URL|off] [--board ID|PATH] [--json]
        bakery-cli cards [--board ID|PATH] [--json]
@@ -112,7 +113,7 @@ function selectBoard(boards, selector) {
   const here = boards.filter(item => cwd === item.repo || cwd.startsWith(item.repo + sep)).sort((a, b) => b.repo.length - a.repo.length)[0];
   if (!selector && here) return here;
   if (!selector && boards.length === 1) return boards[0];
-  if (!selector) throw new Error(boards.length ? "More than one board; choose one with --board ID|PATH" : "No boards yet. Add a repository in Bakery first.");
+  if (!selector) throw new Error(boards.length ? "More than one board; choose one with --board ID|PATH" : "No boards yet. Add one with bakery-cli board-add PATH, or in Bakery.");
   const path = /^~[\\/]/.test(selector) ? resolve(homedir(), selector.slice(2)) : resolve(selector);
   const matches = boards.filter(item => item.id === selector || item.repo === path);
   if (matches.length !== 1) throw new Error(`Board not found: ${selector}`);
@@ -159,11 +160,11 @@ async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
-  const expected = { doctor: 0, board: 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   const variadic = ["start", "archive", "add", "purge-attachments"];
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
-  if (command === "board" && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
-  if (command === "board" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
@@ -194,6 +195,13 @@ async function main() {
     const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards") });
     print(checks, opts.json, report(checks));
     if (checks.some(check => check.status === "fail")) process.exitCode = 1;
+    return;
+  }
+  if (command === "board-add") {
+    if (opts.board) throw new Error("Name the repository as PATH, not --board");
+    // The server resolves PATH to its git root and refuses a repository that already has a board.
+    const added = await request(origin, "/api/boards", "POST", { repo: resolve(args[0] ?? process.cwd()) });
+    print(added, opts.json, [`${added.id}\t${added.repo}`]);
     return;
   }
   const boards = await request(origin, "/api/boards");
