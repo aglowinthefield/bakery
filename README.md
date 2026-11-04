@@ -128,7 +128,7 @@ Issues and pull requests are welcome. Before you open one:
 
 ```sh
 npm test               # fake offline pi and temporary Git repositories; no model calls
-npm run build          # runs format:check, tsc, and vite build
+npm run build          # runs format:check, tsrs, and vite build
 npm run format         # fixes formatting in the covered frontend files
 ```
 
