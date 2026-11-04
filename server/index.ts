@@ -23,6 +23,10 @@ import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAtt
 const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: number; steps: { at: number; text: string }[] }; result: Promise<unknown> }>();
 import { PullRequestFeed } from "./pull-request-feed.js";
 import { cardHistory } from "./card-history.js";
+import { PrLocks } from "./pr-locks.js";
+import { RunLocks } from "./run-locks.js";
+import { Sentinel } from "./sentinel.js";
+import { SentinelStore } from "./sentinel-store.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
@@ -103,9 +107,15 @@ let updateTimer: NodeJS.Timeout | undefined;
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
+const sentinelStore = new SentinelStore(board.sqlite);
+const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.reviewFingerprint(card), github, undefined, "ci-fix")));
+// Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
+// BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
+const runLocks = new RunLocks(board, prLocks, sentinelStore, process.env.BAKERY_SENTINEL !== "0");
+const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000);
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
@@ -730,7 +740,7 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPullRequest.start(); autoPickup.start(); githubSync.start(); pullFeed.start();
+server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPullRequest.start(); autoPickup.start(); githubSync.start(); if (process.env.BAKERY_SENTINEL !== "0") sentinel.start(); pullFeed.start();
   if (updates) {
     updates.refresh();
     updateTimer = setInterval(() => updates.refresh(), 30_000);
@@ -753,7 +763,7 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
 });
 // Set once the dev supervisor asks for a drain. /api/status reports it so the UI can say a restart is coming.
 const draining = { on: false };
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); chats.shutdown();
+const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
   worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so

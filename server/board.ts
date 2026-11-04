@@ -333,6 +333,8 @@ export class Board {
     // Preserve old cards and runs. A stored repository path is never reinterpreted against today's cwd.
     for (const row of this.db.prepare("SELECT DISTINCT repo FROM cards WHERE repo NOT IN (SELECT repo FROM boards)").all() as { repo: string }[]) this.addRepo(row.repo);
   }
+  /** The database handle, for stores that keep their own tables beside the board's. */
+  get sqlite(): DatabaseSync { return this.db; }
   recoverInterruptedRuns(): void {
     // Only the server calls this under the exclusive data-directory lock.
     this.db.exec(`UPDATE runs SET status='interrupted', error='Server restarted while this run was active', finishedAt=datetime('now') WHERE status='running';
@@ -1408,7 +1410,9 @@ export class Board {
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);
       this.db.exec("COMMIT");
-      return this.getRun(id)!;
+      const started = this.getRun(id)!;
+      this.notifyRun("started", started);
+      return started;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   /** Attaches a reason to the status change the card_status_events trigger just recorded for this card. */
@@ -1470,5 +1474,20 @@ export class Board {
       if (status === "review") this.clearMergeFailure(run.cardId);
       this.db.exec("COMMIT");
     } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+    this.notifyRun("finished", this.getRun(id)!);
+  }
+  /** Listeners run after a run starts and after it finishes (review or failed). Their errors never reach the run. */
+  private runListeners: ((event: "started" | "finished", run: Run) => void | Promise<void>)[] = [];
+  onRun(listener: (event: "started" | "finished", run: Run) => void | Promise<void>): void { this.runListeners.push(listener); }
+  private notifyRun(event: "started" | "finished", run: Run): void {
+    for (const listener of this.runListeners) {
+      try { void Promise.resolve(listener(event, run)).catch(error => console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`)); }
+      catch (error) { console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+  }
+  /** Closes a card in Review whose work was delivered outside the card's own branch (the sentinel pushes to the PR's). */
+  closeDelivered(cardId: string, reason: string): void {
+    const result = this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=? AND status='review'").run(now(), cardId);
+    if (Number(result.changes) > 0) this.explain(cardId, reason);
   }
 }

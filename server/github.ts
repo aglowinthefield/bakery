@@ -48,7 +48,7 @@ function run(bin: string, args: string[], cwd?: string, timeout = 60_000): Promi
     });
   });
 }
-const git = async (repo: string, ...args: string[]) => (await run("git", ["-C", repo, ...args])).stdout.trim();
+export const git = async (repo: string, ...args: string[]) => (await run("git", ["-C", repo, ...args])).stdout.trim();
 async function isAncestor(repo: string, ancestor: string, descendant: string): Promise<boolean> {
   try { await run("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant]); return true; }
   catch (error) { if ((error as { exitCode?: unknown }).exitCode === 1) return false; throw error; }
@@ -199,6 +199,20 @@ export class GitHub {
   /** Posts a comment on a PR. */
   async comment(repo: string, number: number, body: string): Promise<void> {
     await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
+  }
+  /** The signed-in GitHub user. */
+  async viewer(): Promise<string> { return (await this.gh(["api", "user", "--jq", ".login"])).trim(); }
+  /** Every comment on a PR, oldest first. */
+  async listComments(repo: string, number: number): Promise<{ id: string; body: string; author: string }[]> {
+    const out = await this.gh(["api", "--paginate", `repos/${repo}/issues/${number}/comments`, "--jq", ".[] | {id: (.id | tostring), body: .body, author: .user.login} | tojson"]);
+    return out.split("\n").filter(Boolean).map(line => JSON.parse(line) as { id: string; body: string; author: string });
+  }
+  /** Posts a comment and returns its id. */
+  async createComment(repo: string, number: number, body: string): Promise<string> {
+    return (await this.gh(["api", "-X", "POST", `repos/${repo}/issues/${number}/comments`, "-f", `body=${body}`, "--jq", ".id"])).trim();
+  }
+  async editComment(repo: string, commentId: string, body: string): Promise<void> {
+    await this.gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`]);
   }
   /** Opens a PR and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
   async create(repo: string, branch: string, title: string, body: string): Promise<string> {
