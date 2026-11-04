@@ -146,6 +146,37 @@ export const maxCiReworks = 3;
 const maxConflictRepairs = 3;
 const ciFixUnchanged = (head: string) => `The CI fix run made no change, so CI still fails at ${head.slice(0, 12)}. Read its report, then rerun the failed checks on GitHub or fix it in the card worktree.`;
 
+/**
+ * A comment, review, or inline review comment on a PR, as `GitHub.prComments` reads it. `reviewId` ties an inline
+ * comment to its review. `at` is when it was posted; a pending (unsubmitted) review has none and is never read.
+ */
+export type PrComment = { id: string; at: string; author: string; association: string; body: string; path?: string; line?: number | null; reviewId?: string };
+/** One change a person asked Bakery for on GitHub, as the agent's prompt lists it. */
+export type PrRequest = { author: string; comment: string; path?: string; line?: number | null };
+// Only people with a say in the repository can send a card back; anyone else's comment is just a comment.
+const trustedAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
+const mentionsBakery = (body: string) => /^\s*\/bakery(?![\w-])/i.test(body);
+
+/**
+ * The requests in `comments` posted after `since`: each comment by a trusted author that starts with `/bakery`
+ * (not `@bakery`, which would notify an unrelated GitHub account). A review whose summary starts that way brings all of its inline comments along, so "Request changes"
+ * with `/bakery` in the summary sends the whole review. `latest` is the newest request's time, the next `since`.
+ */
+export function bakeryRequests(comments: PrComment[], since: string): { requests: PrRequest[]; latest: string | null } {
+  const asked = comments.filter(item => item.at > since && trustedAssociations.includes(item.association) && mentionsBakery(item.body));
+  const reviews = new Set(asked.filter(item => !item.path).map(item => item.id));
+  const picked = comments.filter(item => asked.includes(item) || (item.reviewId && reviews.has(item.reviewId) && item.body.trim()));
+  return {
+    requests: picked.map(item => ({ author: item.author, comment: item.body.trim().slice(0, 4000), ...(item.path ? { path: item.path, line: item.line } : {}) })),
+    latest: asked.reduce<string | null>((max, item) => !max || item.at > max ? item.at : max, null),
+  };
+}
+
+const prCommentsQuery = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+  comments(last: 100) { nodes { id createdAt authorAssociation author { login } body } }
+  reviews(last: 50) { nodes { id submittedAt authorAssociation author { login } body comments(first: 100) { nodes { id createdAt authorAssociation author { login } body path line originalLine } } } }
+} } }`;
+
 export class GitHub {
   constructor(private readonly ghBin = "gh", private readonly cwd?: string) {}
   private async gh(args: string[]): Promise<string> { return (await run(this.ghBin, args, this.cwd)).stdout; }
@@ -207,6 +238,21 @@ export class GitHub {
     await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
   }
   /** The signed-in GitHub user. */
+  /** A PR's recent comments, reviews and inline review comments, in one GraphQL call. */
+  async prComments(repo: string, number: number): Promise<PrComment[]> {
+    const [owner, name] = repo.split("/");
+    type Node = { id: string; createdAt?: string; submittedAt?: string | null; authorAssociation: string; author: { login: string } | null; body: string; path?: string; line?: number | null; originalLine?: number | null };
+    const out = JSON.parse(await this.gh(["api", "graphql", "-f", `query=${prCommentsQuery}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`]));
+    const pr = out.data.repository.pullRequest as { comments: { nodes: Node[] }; reviews: { nodes: (Node & { comments: { nodes: Node[] } })[] } };
+    const item = (node: Node, at: string, extra: Partial<PrComment> = {}): PrComment => ({ id: node.id, at, author: node.author?.login ?? "ghost", association: node.authorAssociation, body: node.body ?? "", ...extra });
+    return [
+      ...pr.comments.nodes.map(node => item(node, node.createdAt!)),
+      ...pr.reviews.nodes.filter(review => review.submittedAt).flatMap(review => [
+        item(review, review.submittedAt!),
+        ...review.comments.nodes.map(node => item(node, node.createdAt!, { path: node.path, line: node.line ?? node.originalLine ?? null, reviewId: review.id })),
+      ]),
+    ];
+  }
   async viewer(): Promise<string> { return (await this.gh(["api", "user", "--jq", ".login"])).trim(); }
   /** Every comment on a PR, oldest first. */
   async listComments(repo: string, number: number): Promise<{ id: string; body: string; author: string }[]> {
@@ -381,7 +427,7 @@ export class GitHubSync {
     if (pr.state === "OPEN") {
       if (await this.pushCiFix(card, pr, repo)) return;
       const fresh = this.board.getCard(card.id) ?? card;
-      const ci = await this.sendBackConflict(fresh, pr, repo) ?? await this.sendBackFailingCi(fresh, pr, repo);
+      const ci = await this.sendBackComments(fresh, pr, repo) ?? await this.sendBackConflict(fresh, pr, repo) ?? await this.sendBackFailingCi(fresh, pr, repo);
       console.debug(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} open checks=${checks}${ci.pending ? " ci-pending" : ""}${ci.rework ? " sending-back" : ""}${ci.error ? ` note=${ci.error.slice(0, 160)}` : ""}`);
       this.board.recordPullRequest(card.id, { ...pr, checks, error: ci.error, ciPending: ci.pending || !!ci.rework });
       if (ci.rework) {
@@ -407,6 +453,41 @@ export class GitHubSync {
     console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} merged as ${merge.slice(0, 12)}`);
     this.board.recordPullRequestMerge(card.id, pr.headRefOid || merge, merge);
     await this.removeWorktree(repoBoard.repo, card);
+  }
+  /**
+   * A comment on the PR that starts with `/bakery`, from someone with write-level access to the
+   * repository, goes back to the card's agent as requested changes. So does a submitted review whose summary starts
+   * that way, with its inline comments. Each is sent once: `prCommentsSeen` is the time of the newest one handled, and
+   * a PR is first read from the moment Bakery first looks at it, so old comments are not replayed. Like CI, the work
+   * is only sent when the card worktree is clean and holds the PR head; otherwise a person is already on it, and the
+   * request waits (unmoved cursor) until that is so. Unlike a CI fix, the result waits for Approve. Returns undefined
+   * when there is nothing to do, so conflict and CI handling carry on.
+   */
+  private async sendBackComments(card: Card, pr: PullRequest, repo: string): Promise<{ error?: string; rework?: () => unknown; pending?: boolean } | undefined> {
+    const head = pr.headRefOid;
+    if (!this.rework || card.prOverrideUrl || !head) return undefined;
+    const waiting = this.board.getCiFeedback(card.id);
+    // Sent back, but the run could not start (the board was at its run limit, say): try again.
+    if (waiting?.source === "comment") return this.startRework(card);
+    if (waiting) return undefined;
+    // Reading comments is a courtesy on top of CI and conflict handling: when it fails those still run.
+    let comments: PrComment[];
+    try { comments = await this.github.prComments(repo, pr.number); }
+    catch (error) { console.error(`[sync ${repo}] could not read comments on PR #${pr.number}: ${error instanceof Error ? error.message : String(error)}`); return undefined; }
+    if (!card.prCommentsSeen) { this.board.markCommentsSeen(card.id, comments.reduce((max, item) => item.at > max ? item.at : max, new Date().toISOString())); return undefined; }
+    const { requests, latest } = bakeryRequests(comments, card.prCommentsSeen);
+    if (!latest) return undefined;
+    const worktree = join(this.dataDir, "worktrees", card.id);
+    try {
+      if (!existsSync(worktree) || await git(worktree, "rev-parse", "HEAD") !== head || await git(worktree, "status", "--porcelain")) {
+        console.debug(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number}: a request is waiting for a clean card worktree at ${head.slice(0, 12)}`);
+        return undefined;
+      }
+    } catch { return undefined; }
+    console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} has ${requests.length} requested change(s) from ${[...new Set(requests.map(item => item.author))].join(", ")}`);
+    this.board.recordCommentRequests(card.id, head, JSON.stringify(requests, null, 1), latest);
+    await commentOnPullRequest(this.github, repo, pr.number, `Bakery sent this back to its coding agent with ${requests.length === 1 ? "the request" : `the ${requests.length} requested changes`} above. Its changes will wait for the operator's approval before they are pushed here.`);
+    return this.startRework(card);
   }
   /**
    * An open PR that GitHub says conflicts with main always goes back to the agent as a conflict-repair run,
