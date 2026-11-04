@@ -48,7 +48,7 @@ function fixture() {
   const github = {
     viewer: async () => "aglowinthefield",
     listOpenPullRequests: async () => prs.filter(pr => pr.state === "OPEN"),
-    listOpenPullRequestExtras: async () => prs.filter(pr => pr.state === "OPEN").map(pr => ({ number: pr.number, mergeable: pr.mergeable, statusCheckRollup: pr.failing ? [{ name: "test", conclusion: "FAILURE" }] : [] })),
+    health: async (_repo: string, number: number) => { const pr = prs.find(item => item.number === number)!; return { mergeable: pr.mergeable, statusCheckRollup: pr.failing ? [{ name: "test", conclusion: "FAILURE" }] : [] }; },
     view: async (_repo: string, number: number) => prs.find(pr => pr.number === number)!,
     listComments: async (_repo: string, number: number) => [...(comments.get(number) ?? [])],
     createComment: async (_repo: string, number: number, body: string) => { const id = String(nextComment++); comments.set(number, [...(comments.get(number) ?? []), { id, body, author: "bakery" }]); return id; },
