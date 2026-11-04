@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -267,5 +267,26 @@ test("when main moves during the run, Bakery rebases the result onto it and stil
     git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD");
     assert.equal(f.board.getCard(card.id)?.status, "done");
     assert.match(f.comments.get(pr.number)!.map(item => item.body).join("\n"), /pushed/);
+  } finally { f.cleanup(); }
+});
+
+test("a pre-push hook that refuses does not stop the sentinel's push", async () => {
+  const f = fixture();
+  try {
+    const commit = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    git(f.upstream, "checkout", "-q", "-b", "feat"); writeFileSync(join(f.upstream, "f.txt"), "f"); git(f.upstream, "add", "f.txt"); git(f.upstream, ...commit, "commit", "-q", "-m", "feat"); git(f.upstream, "push", "-q", "origin", "feat");
+    const head = git(f.upstream, "rev-parse", "HEAD");
+    git(f.upstream, "checkout", "-q", "main"); f.land("main2.txt");
+    f.addPr({ headRefName: "feat", headRefOid: head });
+    await f.sentinel.pass(f.repoBoard.id);
+    const [card] = f.sentinelCards();
+    const worktree = join(f.dir, "data", "worktrees", card.id);
+    execFileSync("git", ["clone", "-q", f.origin, worktree]);
+    writeFileSync(join(worktree, ".git", "hooks", "pre-push"), "#!/bin/sh\necho refused by hook >&2\nexit 1\n"); chmodSync(join(worktree, ".git", "hooks", "pre-push"), 0o755);
+    git(worktree, "switch", "-q", "-C", "feat", "origin/feat"); git(worktree, ...commit, "rebase", "-q", "origin/main");
+    const run = f.board.claim(card.id);
+    f.board.finish(run.id, "review");
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.equal(f.board.getCard(card.id)?.status, "done");
   } finally { f.cleanup(); }
 });
