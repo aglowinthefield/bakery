@@ -1,4 +1,4 @@
-import type { Board } from "./board.js";
+import { isSentinelCard, type Board } from "./board.js";
 import type { Worker } from "./worker.js";
 
 // The database claim is the final concurrency/cap guard. This timer only chooses eligible Ready cards, and Review
@@ -33,8 +33,9 @@ export class AutoPickup {
       }
       const candidates = this.board.listAutoPickupCandidates().filter(item => item.board.id === repoBoard.id);
       for (const { card } of candidates) {
-        if (this.board.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || (repoBoard.pickupDailyLimit > 0 && this.board.autoStartsToday(repoBoard.repo) >= repoBoard.pickupDailyLimit) ||
-          this.board.autoPickupBudgetReached(repoBoard.repo)) break;
+        const limited = !isSentinelCard(card) && (this.board.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency ||
+          (repoBoard.pickupDailyLimit > 0 && this.board.autoStartsToday(repoBoard.repo) >= repoBoard.pickupDailyLimit));
+        if (limited || this.board.autoPickupBudgetReached(repoBoard.repo)) { if (limited) continue; break; }
         try {
           console.log(`[pickup ${repoBoard.repo}] starting card ${card.id.slice(0, 8)} "${card.title.slice(0, 60)}"`);
           this.worker.start(card, "auto");

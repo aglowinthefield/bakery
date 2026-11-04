@@ -57,6 +57,8 @@ export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number |
  * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
  */
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
+/** Sentinel cards are created under an idempotency key that starts with `sentinel:`; they ignore the pickup concurrency and daily limits. */
+export const isSentinelCard = (card: { idempotencyKey: string | null }): boolean => !!card.idempotencyKey?.startsWith("sentinel:");
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null;
   /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
   createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
@@ -748,10 +750,12 @@ export class Board {
   listAutoPickupCandidates(): { card: Card; board: RepoBoard }[] {
     const result: { card: Card; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
-      if (this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || (repoBoard.pickupDailyLimit > 0 && repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError) continue;
+      if (repoBoard.autoPickupBudgetReached || repoBoard.integrationError) continue;
+      const atLimit = this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || (repoBoard.pickupDailyLimit > 0 && repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit);
       const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY priority DESC, createdAt, rowid").all(repoBoard.repo) as { id: string }[];
       // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
-      result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card)));
+      // At the start limits only sentinel cards stay eligible: they ignore the concurrency and daily limits.
+      result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card) && (!atLimit || isSentinelCard(item.card))));
     }
     return result;
   }
@@ -1399,10 +1403,10 @@ export class Board {
       if (this.db.prepare("SELECT 1 FROM auto_review_jobs WHERE cardId=? AND state='running' LIMIT 1").get(cardId))
         throw new Error("Agent review is in progress; wait for its result before running Pi again");
       const repoBoard = this.listBoards().find(item => item.repo === card.repo);
-      if (repoBoard?.autoPickupEnabled && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
+      if (repoBoard?.autoPickupEnabled && !isSentinelCard(card) && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
         throw new RunLimitError(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
-        (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
+        (repoBoard.pickupDailyLimit > 0 && !isSentinelCard(card) && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       const id = randomUUID(), sessionId = freshSession ? `bakery-${cardId}-${attempt}` : `bakery-${cardId}`;
