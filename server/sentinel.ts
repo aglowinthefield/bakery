@@ -160,15 +160,24 @@ export class Sentinel {
     try {
       if (!existsSync(worktree)) throw new Error("the card worktree is missing");
       await fetchOrigin(worktree);
-      const tip = await git(worktree, "rev-parse", "HEAD");
       const dirty = await git(worktree, "status", "--porcelain");
-      const onMain = await git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD").then(() => true, () => false);
-      console.log(`${tag} worktree tip ${tip.slice(0, 12)} (card head ${attempt.head.slice(0, 12)}), clean=${!dirty}, on origin/main=${onMain}`);
-      if (dirty || tip === attempt.head || !onMain) {
-        console.log(`${tag} not pushing: ${dirty ? "uncommitted changes" : tip === attempt.head ? "head unchanged" : "not rebased onto origin/main"}`);
-        await say(`Bakery's sentinel tried to fix this pull request and left it unchanged, so nothing was pushed. A person needs to take it from here.${quoted}`);
-        return;
+      if (dirty) { console.log(`${tag} not pushing: uncommitted changes`); await say(`Bakery's sentinel's fix was left with uncommitted changes in its worktree, so nothing was pushed. A person needs to take it from here.${quoted}`); return; }
+      if (await git(worktree, "rev-parse", "HEAD") === attempt.head) { console.log(`${tag} not pushing: head unchanged`); await say(`Bakery's sentinel tried to fix this pull request and left it unchanged, so nothing was pushed. A person needs to take it from here.${quoted}`); return; }
+      const onMain = () => git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD").then(() => true, () => false);
+      let rebased = false;
+      if (!await onMain()) {
+        // Main moved while the agent worked (a long verification run on a busy main). Catch up, and push only if that is clean.
+        console.log(`${tag} origin/main moved during the run; rebasing the result onto it`);
+        try { await git(worktree, "rebase", "origin/main"); rebased = true; }
+        catch (error) {
+          await git(worktree, "rebase", "--abort").catch(() => undefined);
+          console.log(`${tag} not pushing: rebasing onto the newer origin/main conflicts`);
+          await say(`Bakery's sentinel fixed this pull request, but main moved while it worked and rebasing onto the newer main conflicts: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}. Nothing was pushed. The next sentinel pass tries again against the new main.${quoted}`);
+          return;
+        }
       }
+      const tip = await git(worktree, "rev-parse", "HEAD");
+      console.log(`${tag} worktree tip ${tip.slice(0, 12)} (card head ${attempt.head.slice(0, 12)})${rebased ? ", after catching up with main" : ""}`);
       await git(worktree, "push", `--force-with-lease=refs/heads/${attempt.branch}:${attempt.head}`, "origin", `HEAD:refs/heads/${attempt.branch}`);
       console.log(`${tag} pushed ${tip.slice(0, 12)} to ${attempt.branch}`);
       this.board.closeDelivered(run.cardId, `Pushed to ${attempt.branch} on the pull request`);
