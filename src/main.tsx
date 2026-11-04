@@ -1571,7 +1571,7 @@ export function App() {
             <PanelLeftClose size={15} />
           </button>
         </div>
-        <div className="px-2 pt-1">
+        <div className="px-2 pt-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
           <button
             onClick={openToday}
             className={`mb-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
