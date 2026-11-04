@@ -9,7 +9,7 @@ import {
 
 export function RepoBadge({
   board,
-  size = 16,
+  size = 22,
 }: {
   board: Board;
   size?: number;

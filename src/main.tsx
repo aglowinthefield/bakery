@@ -22,6 +22,7 @@ import {
   Clock3,
   GitBranch,
   Bot,
+  GitMerge,
   GitPullRequest,
   Hourglass,
   Pencil,
@@ -333,7 +334,7 @@ function RemoteLink({ url }: { url: string }) {
       rel="noopener noreferrer"
       title={url}
       aria-label={`Remote repository: ${remote.label}`}
-      className="group mt-3 inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Icon size={13} className="shrink-0" aria-hidden="true" />
       <span className="truncate font-mono text-foreground">{remote.label}</span>
@@ -590,6 +591,18 @@ export function App() {
   );
   const [addingRepo, setAddingRepo] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
+  // Closing hides the dialog first and clears its state once the exit animation is done, so the
+  // Edit form doesn't flip to the Add form while it fades out.
+  const [repoDialogClosing, setRepoDialogClosing] = useState(false);
+  const closeRepoDialog = () => {
+    setRepoDialogClosing(true);
+    setTimeout(() => {
+      setAddingRepo(false);
+      setEditingBoard(null);
+      setRepoPath("");
+      setRepoDialogClosing(false);
+    }, 150);
+  };
   const [repoPath, setRepoPath] = useState("");
   const [iconDraft, setIconDraft] = useState<RepoIcon>("sprinkle_donut");
   const [colorDraft, setColorDraft] = useState<RepoColor>("violet");
@@ -1642,7 +1655,7 @@ export function App() {
                     )}
                     <ul
                       aria-label="Card counts"
-                      className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-[3.375rem] pr-3"
+                      className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-13.5 pr-3"
                     >
                       {sidebarCounts.map((group) => {
                         const Icon = group.icon;
@@ -1746,9 +1759,7 @@ export function App() {
             className={`mt-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
             <BarChart3 size={16} aria-hidden="true" />
-            <span className="text-[14px] font-medium text-foreground">
-              Statistics
-            </span>
+            <span>Statistics</span>
           </button>
           <button
             onClick={() => openPage("logs")}
@@ -1756,21 +1767,19 @@ export function App() {
             className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "logs" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
             <ScrollText size={16} aria-hidden="true" />
-            <span className="text-[14px] font-medium text-foreground">
-              Logs
-            </span>
+            <span>Logs</span>
           </button>
-          <Button
-            variant="ghost"
-            className="mt-1 w-full justify-start text-[length:var(--text-sidebar)] font-normal text-muted-foreground hover:text-foreground"
+          <button
             onClick={() => {
               setError("");
               openPage("settings");
             }}
             aria-current={view === "settings" ? "page" : undefined}
+            className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "settings" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
-            <Settings2 size={15} /> Settings
-          </Button>
+            <Settings2 size={16} aria-hidden="true" />
+            <span>Settings</span>
+          </button>
         </div>
         <div className="mt-auto hidden border-t border-border px-5 py-3 lg:block">
           <div className="flex items-center gap-2 text-[length:var(--text-sidebar-meta)] text-muted-foreground">
@@ -1919,11 +1928,8 @@ export function App() {
             supportsPullRequests(currentBoard))
         }
       >
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-6 lg:px-10">
-          <div>
-            <div className="mb-2 text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">
-              Workspace / Board
-            </div>
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-4 lg:px-10">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <h1 className="flex items-center gap-3 text-[27px] font-semibold tracking-[-.05em]">
               {currentBoard && <RepoBadge board={currentBoard} />}
               {currentBoard
@@ -1949,14 +1955,30 @@ export function App() {
               <RemoteLink url={currentBoard.remoteUrl} />
             )}
             {currentBoard && (
-              <p
+              <span
                 data-testid="integration-mode"
-                className="mt-1 text-xs text-muted-foreground"
+                tabIndex={0}
+                aria-describedby="integration-mode-tip"
+                className="group relative inline-flex cursor-help items-center gap-1.5 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
+                <span
+                  id="integration-mode-tip"
+                  role="tooltip"
+                  className="pointer-events-none absolute left-0 top-full z-50 mt-2 w-64 translate-y-1 rounded-md border border-border bg-popover px-3 py-2 text-xs leading-relaxed text-popover-foreground opacity-0 shadow-lg transition duration-150 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100"
+                >
+                  {currentBoard.integration === "github-pr"
+                    ? "Approve opens a GitHub pull request. The card is Done once the PR merges."
+                    : "Approve merges into local main. Bakery does not push to the remote."}
+                </span>
+                {currentBoard.integration === "github-pr" ? (
+                  <GitPullRequest size={13} aria-hidden="true" />
+                ) : (
+                  <GitMerge size={13} aria-hidden="true" />
+                )}
                 {currentBoard.integration === "github-pr"
-                  ? "Integration: GitHub pull requests. Approve opens a PR; Done once it merges"
-                  : "Integration: local main. Approve merges into local main; Bakery does not push"}
-              </p>
+                  ? "GitHub pull requests"
+                  : "Local main"}
+              </span>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -2012,7 +2034,7 @@ export function App() {
             </Button>
           </div>
         </header>
-        <div className="flex flex-wrap gap-x-7 gap-y-2 border-b border-border px-6 py-4 text-xs text-muted-foreground lg:px-10">
+        <div className="flex flex-wrap gap-x-7 gap-y-2 border-b border-border px-6 py-2.5 text-xs text-muted-foreground lg:px-10">
           <span>
             <strong className="mr-1 font-mono text-foreground">
               {loadedBoard === boardId
@@ -2290,7 +2312,7 @@ export function App() {
           </p>
         )}
         <div
-          className={`overflow-x-auto p-6 lg:p-10 ${boardId && loadedBoard !== boardId ? "hidden" : ""}`}
+          className={`overflow-x-auto p-6 lg:px-10 lg:pb-10 lg:pt-5 ${boardId && loadedBoard !== boardId ? "hidden" : ""}`}
         >
           <div className="flex min-h-[500px] min-w-max gap-4">
             {(splitReview ? pullRequestLanes : columns).map((column) => {
@@ -2761,13 +2783,9 @@ export function App() {
         </div>
       </main>
       <Dialog
-        open={addingRepo || !!editingBoard}
+        open={(addingRepo || !!editingBoard) && !repoDialogClosing}
         onOpenChange={(open) => {
-          if (!open) {
-            setAddingRepo(false);
-            setEditingBoard(null);
-            setRepoPath("");
-          }
+          if (!open) closeRepoDialog();
         }}
       >
         <DialogContent
@@ -2833,9 +2851,7 @@ export function App() {
                   ].sort((a, b) => a.repo.localeCompare(b.repo)),
                 );
                 openBoard(item.id);
-                setRepoPath("");
-                setAddingRepo(false);
-                setEditingBoard(null);
+                closeRepoDialog();
               });
             }}
           >

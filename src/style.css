@@ -321,6 +321,8 @@
 .repo-badge { color: var(--repo-color); }
 body { margin: 0; min-width: 320px; background: var(--background); color: var(--foreground); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
 @layer base { button, input, textarea { font: inherit; } }
+/* Native selects pin the arrow to the edge; draw our own with room on the right. */
+select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-repeat: no-repeat; background-position: right .6rem center; background-size: .7rem; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
 ::selection { background: var(--selection); color: var(--foreground); }
 ::-webkit-scrollbar { height: 8px; width: 8px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 12px; }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
@@ -394,10 +396,10 @@ body { margin: 0; min-width: 320px; background: var(--background); color: var(--
 }
 
 /* Dialogs: a short fade, with the panel easing up and in from just under full size. Radix keeps the node mounted until the exit finishes.
-   `scale` and `translate` are separate properties, so this doesn't fight the centring translate. */
+   Panels that are not centred (side pane, expanded) set --pop-x/--pop-y. The centring is Tailwind's `translate` (-50% -50%), the same property this animates, so the keyframe restates it; leaving it out makes the panel start from the bottom right. */
 @keyframes dialog-fade-in { from { opacity: 0; } }
 @keyframes dialog-fade-out { to { opacity: 0; } }
-@keyframes dialog-pop-in { from { opacity: 0; scale: 0.97; translate: 0 6px; } }
+@keyframes dialog-pop-in { from { opacity: 0; scale: 0.97; translate: var(--pop-x, -50%) var(--pop-y, calc(-50% + 6px)); } }
 @keyframes dialog-pop-out { to { opacity: 0; scale: 0.98; } }
 [data-dialog-overlay][data-state="open"] { animation: dialog-fade-in 160ms ease-out; }
 [data-dialog-overlay][data-state="closed"] { animation: dialog-fade-out 120ms ease-in forwards; }
