@@ -337,3 +337,18 @@ test("a refused push at the run limit keeps the hook output and goes to the agen
     assert.equal(item.board.getCiFeedback(refused.id), undefined, "the run took the hook output");
   } finally { await item.close(); }
 });
+
+test("sentinel cards ignore the concurrency and daily limits that hold back other Ready cards", async () => {
+  const item = fixture();
+  try {
+    const first = item.card("First"), second = item.card("Second");
+    const sentinel = item.board.setStatus(item.board.createCard({ title: "Fix PR #1", body: "Fix it", repo: item.repo, idempotencyKey: "sentinel:1:head:main" }).id, "ready");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.worker.start(first);
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(second.id).length, 0, "the plain card waits at the 1-run limit");
+    assert.equal(item.board.listRuns(sentinel.id)[0]?.status, "running", "the sentinel card starts past it");
+    item.release();
+    await waitFor(() => item.board.getCard(sentinel.id)?.status === "review");
+  } finally { await item.close(); }
+});
