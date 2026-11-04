@@ -14,7 +14,7 @@ export class PrLocks {
   /** Takes the lock for `holder`, or returns the live lock somebody else holds. */
   async acquire(repo: string, number: number, holder: string): Promise<{ acquired: true } | { acquired: false; lock: PrLock }> {
     const current = await this.current(repo, number);
-    if (current && current.status === "active" && current.lock.holder !== holder) return { acquired: false, lock: current.lock };
+    if (current && current.status === "active" && current.lock.holder !== holder) { console.log(`[lock ${repo}#${number}] ${holder} refused: held by ${current.lock.holder} since ${current.lock.startedAt}`); return { acquired: false, lock: current.lock }; }
     const lock: PrLock = { holder, startedAt: new Date(this.now()).toISOString() };
     this.store.beginLock(repo, number, holder, lock.startedAt);
     try {
@@ -23,6 +23,7 @@ export class PrLocks {
       if (existing) { await this.github.editComment(repo, existing, lockBody(lock)); id = existing; }
       else id = await this.github.createComment(repo, number, lockBody(lock));
       this.store.confirmLock(repo, number, id);
+      console.log(`[lock ${repo}#${number}] ${holder} ${existing ? "refreshed" : "took"} the lock (comment ${id})`);
     } catch (error) { this.store.dropPendingLock(repo, number); throw error; }
     return { acquired: true };
   }
@@ -34,6 +35,7 @@ export class PrLocks {
     const releasedAt = new Date(this.now()).toISOString();
     await this.github.editComment(repo, row.commentId, lockBody({ holder, startedAt: row.startedAt, releasedAt }));
     this.store.markReleased(repo, number, releasedAt);
+    console.log(`[lock ${repo}#${number}] ${holder} released the lock`);
   }
 
   /** The lock on the PR as GitHub shows it (the comment is the source of truth), with its status. */

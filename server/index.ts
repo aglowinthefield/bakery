@@ -39,6 +39,7 @@ const logs = new LogBuffer();
 logs.captureConsole();
 
 const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
+logs.persist(join(dataDir, "logs", "bakery.log"));
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 chmodSync(dataDir, 0o700);
 // Exclusive ownership of the local board; a lock left by a dead server is taken over.
