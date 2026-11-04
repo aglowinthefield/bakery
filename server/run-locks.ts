@@ -15,7 +15,7 @@ export class RunLocks {
   private timers = new Map<string, ReturnType<typeof setInterval>>();
   private taking = new Map<string, Promise<void>>();
   constructor(private readonly board: Board, private readonly locks: PrLocks, private readonly store: SentinelStore, private readonly enabled = true) {
-    if (enabled) board.runListener = (event, run) => void this.handle(event, run);
+    if (enabled) board.onRun((event, run) => this.handle(event, run));
   }
   shutdown(): void { for (const timer of this.timers.values()) clearInterval(timer); this.timers.clear(); }
 

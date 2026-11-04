@@ -1,4 +1,6 @@
-import type { Board, Card, RepoBoard } from "./board.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { reportFromOutput, type Board, type Card, type RepoBoard, type Run } from "./board.js";
 import { boardGithubRepo, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub } from "./github.js";
 import type { PrLocks } from "./pr-locks.js";
 import type { SentinelStore } from "./sentinel-store.js";
@@ -22,7 +24,7 @@ export function sentinelBrief(input: { repo: string; number: number; url: string
     `1. Fetch, then put the PR branch in this worktree: \`git fetch origin && git switch -C ${input.branch} origin/${input.branch}\`.`,
     "2. Before investigating anything, rebase it onto the latest origin/main: `git fetch origin main && git rebase origin/main`. Resolve conflicts that are mechanical. If one needs a human decision, run `git rebase --abort`, change nothing, and say exactly what the decision is.",
     "3. Only now look at CI. A failure may already be gone after the rebase; judge it against the rebased code, not the old head. Fix real failures and run the repository's local verification.",
-    `4. Push the result to the PR branch: \`git push --force-with-lease origin ${input.branch}\` (the rebase rewrites history). If origin/${input.branch} has moved since you started, stop and report instead of overwriting it.`,
+    `4. Leave the fixed result committed on \`${input.branch}\` in this worktree, with a clean working tree. Do not push: Bakery force-pushes it to the PR when you finish, and only if origin/${input.branch} still has the head named above.`,
     "Do not open a new PR, and change nothing outside this PR's scope.",
   ].join("\n");
 }
@@ -37,7 +39,9 @@ export class Sentinel {
   private owner?: string;
   private running = new Set<string>();
   constructor(private readonly board: Board, private readonly github: GitHub, private readonly store: SentinelStore, private readonly locks: PrLocks,
-    private readonly ownerLogin?: string, private readonly intervalMs = 5 * 60_000) {}
+    private readonly dataDir: string, private readonly ownerLogin?: string, private readonly intervalMs = 5 * 60_000) {
+    board.onRun((event, run) => event === "finished" ? this.afterRun(run) : undefined);
+  }
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => void this.tick(), this.intervalMs);
@@ -108,7 +112,7 @@ export class Sentinel {
     const card = this.board.createCard({ title: `Fix PR #${pr.number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: `sentinel:${pr.number}:${head}:${mainTip}`, priority: 0,
       body: sentinelBrief({ repo, number: pr.number, url: pr.url, branch, head, mainTip, problems }) });
     // The attempt is recorded before the lock so a failed comment cannot lead to a second card for the same state.
-    this.store.recordAttempt(repo, pr.number, head, mainTip, card.id, new Date().toISOString());
+    this.store.recordAttempt(repo, pr.number, branch, head, mainTip, card.id, new Date().toISOString());
     this.board.setStatus(card.id, "ready", "Created by Bakery's sentinel: the pull request is not mergeable and nothing is working on it");
     try { await this.locks.acquire(repo, pr.number, holderOf(card.id)); }
     catch (error) { console.error(`Sentinel could not lock ${repo}#${pr.number}: ${error instanceof Error ? error.message : String(error)}`); }
@@ -126,6 +130,36 @@ export class Sentinel {
         this.board.setStatus(card.id, "done", `Withdrawn by Bakery's sentinel: the pull request ${why}`);
         await this.locks.release(repo, number, holderOf(card.id));
       } catch (error) { console.error(`Sentinel could not withdraw card ${card.id}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+  }
+
+  /**
+   * A finished sentinel run leaves the fixed branch committed in its worktree. Bakery pushes it, because agents do not
+   * push. The push is leased to the head the card was made from, so it fails rather than overwrite a newer push by a
+   * person. With nothing to push, the agent's report goes on the PR for a person to read.
+   */
+  async afterRun(run: Run): Promise<void> {
+    const attempt = this.store.attemptFor(run.cardId);
+    if (!attempt || run.status !== "review") return;
+    const worktree = join(this.dataDir, "worktrees", run.cardId);
+    const say = (text: string) => commentOnPullRequest(this.github, attempt.repo, attempt.prNumber, text);
+    const report = (reportFromOutput(this.board.getRun(run.id)?.output ?? "") ?? "").trim();
+    const quoted = report ? `\n\nThe agent's report:\n\n${report.slice(0, 3000).split("\n").map(line => `> ${line}`).join("\n")}` : "";
+    try {
+      if (!existsSync(worktree)) throw new Error("the card worktree is missing");
+      await fetchOrigin(worktree);
+      const tip = await git(worktree, "rev-parse", "HEAD");
+      const dirty = await git(worktree, "status", "--porcelain");
+      const onMain = await git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD").then(() => true, () => false);
+      if (dirty || tip === attempt.head || !onMain) {
+        await say(`Bakery's sentinel tried to fix this pull request and left it unchanged, so nothing was pushed. A person needs to take it from here.${quoted}`);
+        return;
+      }
+      await git(worktree, "push", `--force-with-lease=refs/heads/${attempt.branch}:${attempt.head}`, "origin", `HEAD:refs/heads/${attempt.branch}`);
+      this.board.closeDelivered(run.cardId, `Pushed to ${attempt.branch} on the pull request`);
+      await say(`Bakery's sentinel rebased this pull request onto the latest main and pushed ${tip.slice(0, 12)}. If CI fails again, it checks again on its next pass.${quoted}`);
+    } catch (error) {
+      await say(`Bakery's sentinel could not push its fix: ${error instanceof Error ? error.message.slice(0, 500) : String(error)}. A person needs to take it from here.${quoted}`);
     }
   }
 }

@@ -58,12 +58,12 @@ function fixture() {
   const store = new SentinelStore(board.sqlite);
   let clock = Date.parse("2026-01-01T00:00:00.000Z");
   const locks = new PrLocks(store, github, () => clock);
-  const sentinel = new Sentinel(board, github, store, locks, "aglowinthefield");
+  const sentinel = new Sentinel(board, github, store, locks, join(dir, "data"), "aglowinthefield");
   let n = 100;
   const addPr = (over: Partial<Pr> = {}): Pr => { const number = n++; const pr = { number, title: `Change ${number}`, url: `https://github.com/acme/widgets/pull/${number}`, author: { login: "aglowinthefield" }, isDraft: false, mergeable: "CONFLICTING", state: "OPEN", headRefOid: `head${number}`.padEnd(40, "0"), headRefName: `feature-${number}`, ...over }; prs.push(pr); return pr; };
   const sentinelCards = () => board.listCards(repo).filter(card => card.title.startsWith("Fix PR #"));
   const land = (name: string) => { git(upstream, "pull", "-q", "--ff-only", "origin", "main"); writeFileSync(join(upstream, name), name); git(upstream, "add", name); git(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", name); git(upstream, "push", "-q", "origin", "main"); };
-  return { github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, sentinelCards, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, origin, upstream, github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, sentinelCards, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("a conflicting PR by the owner gets a Ready card whose brief rebases onto main first, and a lock", async () => {
@@ -160,10 +160,10 @@ test("a pending lock row left by a crash is settled from the PR", async () => {
   } finally { f.cleanup(); }
 });
 
-test("the brief names the branch and pushes with lease", () => {
+test("the brief names the branch and leaves the push to Bakery", () => {
   const brief = sentinelBrief({ repo: "acme/widgets", number: 5, url: "u", branch: "feat", head: "a".repeat(40), mainTip: "b".repeat(40), problems: ["It conflicts with main."] });
   assert.match(brief, /git switch -C feat origin\/feat/);
-  assert.match(brief, /--force-with-lease origin feat/);
+  assert.match(brief, /Bakery force-pushes it/);
 });
 
 test("a run locks its card's PR while it works, and releases it when it finishes", async () => {
@@ -183,5 +183,65 @@ test("a run locks its card's PR while it works, and releases it when it finishes
     assert.match(f.comments.get(pr.number)![0].body, /released/);
     assert.equal(f.comments.get(pr.number)!.length, 1, "the same comment is edited, not duplicated");
     runLocks.shutdown();
+  } finally { f.cleanup(); }
+});
+
+test("after a sentinel run Bakery pushes the rebased branch with a lease", async () => {
+  const f = fixture();
+  try {
+    const commit = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    git(f.upstream, "checkout", "-q", "-b", "feat"); writeFileSync(join(f.upstream, "f.txt"), "f"); git(f.upstream, "add", "f.txt"); git(f.upstream, ...commit, "commit", "-q", "-m", "feat"); git(f.upstream, "push", "-q", "origin", "feat");
+    const head = git(f.upstream, "rev-parse", "HEAD");
+    git(f.upstream, "checkout", "-q", "main"); f.land("main2.txt");
+    const pr = f.addPr({ headRefName: "feat", headRefOid: head });
+    await f.sentinel.pass(f.repoBoard.id);
+    const [card] = f.sentinelCards();
+    const worktree = join(f.dir, "data", "worktrees", card.id);
+    execFileSync("git", ["clone", "-q", f.origin, worktree]);
+    git(worktree, "switch", "-q", "-C", "feat", "origin/feat"); git(worktree, ...commit, "rebase", "-q", "origin/main");
+    const run = f.board.claim(card.id);
+    f.board.finish(run.id, "review");
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.notEqual(git(worktree, "ls-remote", "origin", "refs/heads/feat").split("\t")[0], head, "the branch moved");
+    assert.equal(f.board.getCard(card.id)?.status, "done");
+    assert.match(f.comments.get(pr.number)!.map(item => item.body).join("\n"), /rebased this pull request onto the latest main and pushed/);
+  } finally { f.cleanup(); }
+});
+
+test("a sentinel run that changes nothing puts its report on the PR instead of pushing", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr();
+    await f.sentinel.pass(f.repoBoard.id);
+    const [card] = f.sentinelCards();
+    const run = f.board.claim(card.id);
+    f.board.finish(run.id, "review");
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.match(f.comments.get(pr.number)!.map(item => item.body).join("\n"), /could not push its fix: the card worktree is missing/);
+    assert.equal(f.board.getCard(card.id)?.status, "review");
+  } finally { f.cleanup(); }
+});
+
+test("the push is refused when someone pushed to the PR branch after the card was made", async () => {
+  const f = fixture();
+  try {
+    const commit = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    git(f.upstream, "checkout", "-q", "-b", "feat"); writeFileSync(join(f.upstream, "f.txt"), "f"); git(f.upstream, "add", "f.txt"); git(f.upstream, ...commit, "commit", "-q", "-m", "feat"); git(f.upstream, "push", "-q", "origin", "feat");
+    const head = git(f.upstream, "rev-parse", "HEAD");
+    git(f.upstream, "checkout", "-q", "main"); f.land("main2.txt");
+    const pr = f.addPr({ headRefName: "feat", headRefOid: head });
+    await f.sentinel.pass(f.repoBoard.id);
+    const [card] = f.sentinelCards();
+    const worktree = join(f.dir, "data", "worktrees", card.id);
+    execFileSync("git", ["clone", "-q", f.origin, worktree]);
+    git(worktree, "switch", "-q", "-C", "feat", "origin/feat"); git(worktree, ...commit, "rebase", "-q", "origin/main");
+    git(f.upstream, "checkout", "-q", "feat"); writeFileSync(join(f.upstream, "g.txt"), "g"); git(f.upstream, "add", "g.txt"); git(f.upstream, ...commit, "commit", "-q", "-m", "person"); git(f.upstream, "push", "-q", "origin", "feat");
+    const theirs = git(f.upstream, "rev-parse", "HEAD");
+    const run = f.board.claim(card.id);
+    f.board.finish(run.id, "review");
+    await new Promise(resolve => setTimeout(resolve, 400));
+    assert.equal(git(worktree, "ls-remote", "origin", "refs/heads/feat").split("\t")[0], theirs, "the person's push survives");
+    assert.match(f.comments.get(pr.number)!.map(item => item.body).join("\n"), /could not push its fix/);
+    assert.equal(f.board.getCard(card.id)?.status, "review");
   } finally { f.cleanup(); }
 });

@@ -9,7 +9,7 @@ export class SentinelStore {
   constructor(private readonly db: DatabaseSync) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS pr_locks (repo TEXT NOT NULL, prNumber INTEGER NOT NULL, holder TEXT NOT NULL, startedAt TEXT NOT NULL, releasedAt TEXT, commentId TEXT, state TEXT NOT NULL CHECK(state IN ('pending','held','released')), PRIMARY KEY (repo, prNumber));
-      CREATE TABLE IF NOT EXISTS sentinel_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, prNumber INTEGER NOT NULL, head TEXT NOT NULL, mainTip TEXT NOT NULL, cardId TEXT NOT NULL, at TEXT NOT NULL, UNIQUE(repo, prNumber, head, mainTip));
+      CREATE TABLE IF NOT EXISTS sentinel_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, prNumber INTEGER NOT NULL, branch TEXT NOT NULL, head TEXT NOT NULL, mainTip TEXT NOT NULL, cardId TEXT NOT NULL, at TEXT NOT NULL, UNIQUE(repo, prNumber, head, mainTip));
       CREATE TABLE IF NOT EXISTS sentinel_given_up (repo TEXT NOT NULL, prNumber INTEGER NOT NULL, at TEXT NOT NULL, PRIMARY KEY (repo, prNumber));
     `);
   }
@@ -43,8 +43,8 @@ export class SentinelStore {
   hasAttempt(repo: string, prNumber: number, head: string, mainTip: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM sentinel_attempts WHERE repo=? AND prNumber=? AND head=? AND mainTip=?").get(repo, prNumber, head, mainTip);
   }
-  recordAttempt(repo: string, prNumber: number, head: string, mainTip: string, cardId: string, at: string): void {
-    this.db.prepare("INSERT INTO sentinel_attempts(repo, prNumber, head, mainTip, cardId, at) VALUES (?, ?, ?, ?, ?, ?)").run(repo, prNumber, head, mainTip, cardId, at);
+  recordAttempt(repo: string, prNumber: number, branch: string, head: string, mainTip: string, cardId: string, at: string): void {
+    this.db.prepare("INSERT INTO sentinel_attempts(repo, prNumber, branch, head, mainTip, cardId, at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(repo, prNumber, branch, head, mainTip, cardId, at);
   }
   /** Card ids of this PR's sentinel attempts, newest first. */
   attemptCards(repo: string, prNumber: number): string[] {
@@ -60,5 +60,8 @@ export class SentinelStore {
   }
   attemptPr(cardId: string): number | undefined {
     return (this.db.prepare("SELECT prNumber FROM sentinel_attempts WHERE cardId=?").get(cardId) as { prNumber: number } | undefined)?.prNumber;
+  }
+  attemptFor(cardId: string): { repo: string; prNumber: number; branch: string; head: string } | undefined {
+    return this.db.prepare("SELECT repo, prNumber, branch, head FROM sentinel_attempts WHERE cardId=?").get(cardId) as { repo: string; prNumber: number; branch: string; head: string } | undefined;
   }
 }

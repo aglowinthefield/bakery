@@ -1476,9 +1476,18 @@ export class Board {
     } catch (err) { this.db.exec("ROLLBACK"); throw err; }
     this.notifyRun("finished", this.getRun(id)!);
   }
-  /** Called after a run starts and after it finishes (review or failed). Listener errors never reach the run. */
-  runListener?: (event: "started" | "finished", run: Run) => void;
+  /** Listeners run after a run starts and after it finishes (review or failed). Their errors never reach the run. */
+  private runListeners: ((event: "started" | "finished", run: Run) => void | Promise<void>)[] = [];
+  onRun(listener: (event: "started" | "finished", run: Run) => void | Promise<void>): void { this.runListeners.push(listener); }
   private notifyRun(event: "started" | "finished", run: Run): void {
-    try { this.runListener?.(event, run); } catch (error) { console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`); }
+    for (const listener of this.runListeners) {
+      try { void Promise.resolve(listener(event, run)).catch(error => console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`)); }
+      catch (error) { console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+  }
+  /** Closes a card in Review whose work was delivered outside the card's own branch (the sentinel pushes to the PR's). */
+  closeDelivered(cardId: string, reason: string): void {
+    const result = this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=? AND status='review'").run(now(), cardId);
+    if (Number(result.changes) > 0) this.explain(cardId, reason);
   }
 }
