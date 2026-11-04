@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { reportFromOutput, type Board, type Card, type RepoBoard, type Run } from "./board.js";
-import { boardGithubRepo, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub } from "./github.js";
+import { boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub } from "./github.js";
 import type { PrLocks } from "./pr-locks.js";
 import type { SentinelStore } from "./sentinel-store.js";
 
@@ -69,8 +69,16 @@ export class Sentinel {
     // The latest main is what every judgment below is made against.
     await fetchOrigin(repoBoard.repo);
     const mainTip = await git(repoBoard.repo, "rev-parse", "origin/main");
-    const [prs, extras] = await Promise.all([this.github.listOpenPullRequests(repo), this.github.listOpenPullRequestExtras(repo)]);
-    const extra = new Map(extras.map(item => [item.number, item]));
+    // Only the owner's open PRs matter, so the listing is limited to them, and each non-draft one is checked on its own.
+    const prs = await this.github.listOpenPullRequests(repo, this.owner);
+    const extra = new Map<number, { mergeable?: string; statusCheckRollup?: Check[] } | undefined>();
+    const checkable = prs.filter(pr => !pr.isDraft && pr.author?.login?.toLowerCase() === this.owner!.toLowerCase());
+    for (let i = 0; i < checkable.length; i += 4) {
+      await Promise.all(checkable.slice(i, i + 4).map(async pr => {
+        try { extra.set(pr.number, await this.github.health(repo, pr.number)); }
+        catch (error) { extra.set(pr.number, undefined); console.error(`[sentinel ${repo}] #${pr.number}: could not read its state: ${error instanceof Error ? error.message : String(error)}`); }
+      }));
+    }
     const cards = this.board.listCards(repoBoard.repo).filter(isOpen);
     const sentinelCards = new Set(this.store.listAttemptCards(repo));
     const open = new Set(prs.map(pr => pr.number));
@@ -80,7 +88,8 @@ export class Sentinel {
 
     await this.withdrawResolved(repoBoard, repo, cards, sentinelCards, prs.filter(pr => {
       const item = extra.get(pr.number);
-      return item?.mergeable === "CONFLICTING" || fixableFailures({ statusCheckRollup: item?.statusCheckRollup }).length > 0;
+      // A PR whose state could not be read counts as broken, so its unstarted card is not withdrawn on a guess.
+      return !extra.has(pr.number) || !item || item.mergeable === "CONFLICTING" || fixableFailures({ statusCheckRollup: item?.statusCheckRollup }).length > 0;
     }).map(pr => pr.number), open);
 
     let openSentinel = cards.filter(card => sentinelCards.has(card.id)).length;
@@ -88,6 +97,7 @@ export class Sentinel {
       if (pr.author?.login?.toLowerCase() !== this.owner.toLowerCase()) { skip(pr, "not written by the owner"); continue; }
       if (pr.isDraft) { skip(pr, "draft"); continue; }
       const item = extra.get(pr.number);
+      if (!item) { skip(pr, "its state could not be read"); continue; }
       const problems: string[] = [];
       if (item?.mergeable === "CONFLICTING") problems.push("It conflicts with main.");
       const failing = fixableFailures({ statusCheckRollup: item?.statusCheckRollup });

@@ -155,12 +155,16 @@ export class GitHub {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "all", "--limit", "200", "--json", listFields])) as PullRequest[];
   }
   /** Open PRs for the Pull requests page: the cheap fields, about a second even on a busy repo. */
-  async listOpenPullRequests(repo: string): Promise<RepoPullRequest[]> {
-    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number,title,url,author,headRefName,isDraft,updatedAt,createdAt,labels,assignees"])) as RepoPullRequest[];
+  async listOpenPullRequests(repo: string, author?: string): Promise<RepoPullRequest[]> {
+    return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", ...(author ? ["--author", author] : []), "--limit", "1000", "--json", "number,title,url,author,headRefName,isDraft,updatedAt,createdAt,labels,assignees"])) as RepoPullRequest[];
   }
   /** The fields GitHub is slow to compute (seconds on a busy repo), fetched apart so they never hold up the list. */
   async listOpenPullRequestExtras(repo: string): Promise<(Pick<RepoPullRequest, "number" | "additions" | "deletions" | "reviewDecision"> & { mergeable?: string; statusCheckRollup?: Check[] })[]> {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number,reviewDecision,additions,deletions,mergeable,statusCheckRollup"]));
+  }
+  /** Whether one PR conflicts with main and what its CI checks say. One cheap call, so callers fetch it only for the PRs they care about. */
+  async health(repo: string, number: number): Promise<{ mergeable?: string; statusCheckRollup?: Check[] }> {
+    return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "mergeable,statusCheckRollup"]));
   }
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {
