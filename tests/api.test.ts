@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +46,33 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
         if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
         await new Promise(resolve => setTimeout(resolve, 25));
       }
+    }
+    // The dev supervisor preserves the public Host while the API listens on an internal port.
+    for (const [host, origin, expected] of [
+      ["127.0.0.1:4317", "http://127.0.0.1:4317", 200],
+      ["localhost:4317", "http://localhost:4317", 200],
+      ["bakery.localhost:49000", "http://bakery.localhost:49000", 200],
+      ["127.0.0.1:4317", "http://127.0.0.1:5173", 200],
+      ["127.0.0.1:4317", "http://127.0.0.1:49000", 403],
+      ["127.0.0.1:4317", "https://untrusted.example", 403],
+      ["127.0.0.1:4317", "null", 403],
+      ["untrusted.example:4317", "http://untrusted.example:4317", 403],
+    ] as const) {
+      // Node fetch replaces Host with the URL's port; use HTTP to model the supervisor's forwarded headers.
+      const response = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+        const req = httpRequest(`${url}/api/settings`, {
+          method: "PATCH", headers: { Host: host, Origin: origin, "Content-Type": "application/json" },
+        }, res => {
+          let body = "";
+          res.on("data", chunk => { body += chunk; });
+          res.on("end", () => resolve({ status: res.statusCode, body }));
+        });
+        req.on("error", reject);
+        req.end(JSON.stringify({ confirmRunStart: false }));
+      });
+      assert.equal(response.status, expected, `${host} with Origin ${origin}: ${response.body}`);
+      if (expected === 403)
+        assert.equal(JSON.parse(response.body).error, host.startsWith("untrusted.") ? "Local access only" : "Origin rejected");
     }
     assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
     // The Logs view: the server's own output, including a debug line for each failed request.
