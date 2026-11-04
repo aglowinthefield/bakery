@@ -403,7 +403,7 @@ When the fetch brings new commits, a notice in the bottom-left corner says how m
 
 ```sh
 npm test
-npm run build          # runs format:check, tsc, and vite build
+npm run build          # runs format:check, tsrs, and vite build
 npm run format         # fixes formatting in the covered frontend files
 ```
 

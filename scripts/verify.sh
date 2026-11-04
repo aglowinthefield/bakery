@@ -9,5 +9,5 @@ if [[ ! -e node_modules ]]; then
   main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
   ln -s "$main/node_modules" node_modules
 fi
-npx tsc -b
+npx tsrs -b
 npm test

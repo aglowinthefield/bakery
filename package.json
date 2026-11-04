@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "concurrently -k \"node scripts/dev-server.mjs\" \"BAKERY_VITE_PORT=15173 vite --host 127.0.0.1\"",
-    "build": "npm run format:check && tsc -b && vite build",
+    "build": "npm run format:check && tsrs -b && vite build",
     "dev:ui": "vite --host 127.0.0.1",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
@@ -50,6 +50,7 @@
     "concurrently": "^9.2.1",
     "playwright": "^1.64.1",
     "prettier": "^3.9.10",
+    "tsrs": "^0.21.0-ts7.1.0-beta",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^7.1.12"
