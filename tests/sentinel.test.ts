@@ -245,3 +245,27 @@ test("the push is refused when someone pushed to the PR branch after the card wa
     assert.equal(f.board.getCard(card.id)?.status, "review");
   } finally { f.cleanup(); }
 });
+
+test("when main moves during the run, Bakery rebases the result onto it and still pushes", async () => {
+  const f = fixture();
+  try {
+    const commit = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    git(f.upstream, "checkout", "-q", "-b", "feat"); writeFileSync(join(f.upstream, "f.txt"), "f"); git(f.upstream, "add", "f.txt"); git(f.upstream, ...commit, "commit", "-q", "-m", "feat"); git(f.upstream, "push", "-q", "origin", "feat");
+    const head = git(f.upstream, "rev-parse", "HEAD");
+    git(f.upstream, "checkout", "-q", "main"); f.land("main2.txt");
+    const pr = f.addPr({ headRefName: "feat", headRefOid: head });
+    await f.sentinel.pass(f.repoBoard.id);
+    const [card] = f.sentinelCards();
+    const worktree = join(f.dir, "data", "worktrees", card.id);
+    execFileSync("git", ["clone", "-q", f.origin, worktree]);
+    git(worktree, "switch", "-q", "-C", "feat", "origin/feat"); git(worktree, ...commit, "rebase", "-q", "origin/main");
+    f.land("main3.txt");
+    const run = f.board.claim(card.id);
+    f.board.finish(run.id, "review");
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.equal(git(worktree, "ls-remote", "origin", "refs/heads/feat").split("\t")[0], git(worktree, "rev-parse", "HEAD"));
+    git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD");
+    assert.equal(f.board.getCard(card.id)?.status, "done");
+    assert.match(f.comments.get(pr.number)!.map(item => item.body).join("\n"), /pushed/);
+  } finally { f.cleanup(); }
+});
