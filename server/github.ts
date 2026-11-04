@@ -33,8 +33,10 @@ const listFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid
 
 type Exec = { stdout: string; stderr: string };
 function run(bin: string, args: string[], cwd?: string, timeout = 60_000): Promise<Exec> {
+  const started = Date.now(), label = `${bin} ${args.filter(arg => !arg.startsWith("body=") && !arg.includes("\n")).slice(0, 6).join(" ").slice(0, 120)}`;
   return new Promise((resolve, reject) => {
     execFile(...command(bin, args), { cwd, timeout, maxBuffer: 16 * 1024 * 1024, encoding: "utf8", env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" } }, (error, stdout, stderr) => {
+      console.debug(`[gh] ${error ? "FAILED" : "ok"} ${Date.now() - started}ms ${label}`);
       if (error) {
         const code = (error as NodeJS.ErrnoException).code;
         const { killed, signal } = error as { killed?: boolean; signal?: string | null };
@@ -341,8 +343,10 @@ export class GitHubSync {
         this.board.setIntegrationWarning(boardId, message);
         return;
       }
+      const syncStart = Date.now();
       await this.settleCards(repoBoard, repo);
       await fastForwardMain(repoBoard.repo);
+      console.debug(`[sync ${repo}] settled ${this.board.listPullRequestCards(repoBoard.repo).length} PR card(s) in ${Date.now() - syncStart}ms`);
       this.board.recordIntegrationSync(boardId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -374,6 +378,7 @@ export class GitHubSync {
       if (await this.pushCiFix(card, pr, repo)) return;
       const fresh = this.board.getCard(card.id) ?? card;
       const ci = await this.sendBackConflict(fresh, pr, repo) ?? await this.sendBackFailingCi(fresh, pr, repo);
+      console.debug(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} open checks=${checks}${ci.pending ? " ci-pending" : ""}${ci.rework ? " sending-back" : ""}${ci.error ? ` note=${ci.error.slice(0, 160)}` : ""}`);
       this.board.recordPullRequest(card.id, { ...pr, checks, error: ci.error, ciPending: ci.pending || !!ci.rework });
       if (ci.rework) {
         try { await ci.rework(); }
@@ -382,6 +387,7 @@ export class GitHubSync {
       return;
     }
     if (pr.state === "CLOSED") {
+      console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} was closed without merging`);
       this.board.recordPullRequest(card.id, { ...pr, checks });
       this.board.closePullRequestUnmerged(card.id, `Pull request #${pr.number} was closed without merging. Reopen it on GitHub, or run the card again and approve to open a new one.`);
       return;
@@ -394,6 +400,7 @@ export class GitHubSync {
     catch { onMain = false; /* The merge commit is not fetched yet. */ }
     if (!onMain) { this.board.recordPullRequest(card.id, { ...pr, checks, error: `Merged on GitHub; waiting for ${merge.slice(0, 12)} to reach origin/main` }); return; }
     this.board.recordPullRequest(card.id, { ...pr, checks });
+    console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} merged as ${merge.slice(0, 12)}`);
     this.board.recordPullRequestMerge(card.id, pr.headRefOid || merge, merge);
     await this.removeWorktree(repoBoard.repo, card);
   }
@@ -408,7 +415,7 @@ export class GitHubSync {
     const head = pr.headRefOid;
     if (!this.rework || card.prOverrideUrl || !head || this.board.getCiFeedback(card.id)?.source === "ci") return undefined;
     const worktree = join(this.dataDir, "worktrees", card.id);
-    if (!existsSync(worktree)) return undefined;
+    if (!existsSync(worktree)) { console.debug(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number}: no card worktree, so no conflict repair from here`); return undefined; }
     let mainTip: string;
     try {
       if (await git(worktree, "rev-parse", "HEAD") !== head || await git(worktree, "status", "--porcelain")) return undefined;
@@ -456,6 +463,7 @@ export class GitHubSync {
     if (!this.rework || card.prOverrideUrl || !head) return {};
     // CI is re-running or went green (a label added, say) before the fix run started: those failures are stale.
     if (!failures.length) { this.board.dropCiFeedback(card.id); return {}; }
+    console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} has failing CI: ${failures.map(check => check.name || check.context || "a check").join(", ").slice(0, 200)} (reworks ${card.ciReworks}/${maxCiReworks})`);
     const limit = `CI is failing after ${maxCiReworks} automatic fix runs. Fix it in the card worktree and run again, or push to the PR yourself.`;
     if (card.ciReworkSha === head) {
       // Sent back, but the fix run could not start (the board was at its run limit, say): try again.
@@ -468,7 +476,7 @@ export class GitHubSync {
     // starts (a merge-queue-only check, say) must not hold back a failure that finished 10 minutes ago.
     const running = latestChecks(pr).some(check => unfinished.includes(outcome(check)));
     const settledFor = Date.now() - Math.max(...failures.map(check => Date.parse(check.completedAt ?? "") || 0));
-    if (running && settledFor < 10 * 60_000) return { pending: true };
+    if (running && settledFor < 10 * 60_000) { console.debug(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} waiting for running checks`); return { pending: true }; }
     const worktree = join(this.dataDir, "worktrees", card.id);
     if (!existsSync(worktree)) return {};
     try {

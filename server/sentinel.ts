@@ -55,10 +55,11 @@ export class Sentinel {
   async pass(boardId: string): Promise<void> {
     if (this.running.has(boardId)) return;
     this.running.add(boardId);
+    const started = Date.now();
     try {
       const repoBoard = this.board.getBoard(boardId);
       if (repoBoard?.integration === "github-pr") await this.passOnce(repoBoard);
-    } catch (error) { console.error(`Sentinel for ${boardId}: ${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) { console.error(`[sentinel ${boardId.slice(0, 8)}] pass failed after ${Date.now() - started}ms: ${error instanceof Error ? error.message : String(error)}`); }
     finally { this.running.delete(boardId); }
   }
 
@@ -73,6 +74,9 @@ export class Sentinel {
     const cards = this.board.listCards(repoBoard.repo).filter(isOpen);
     const sentinelCards = new Set(this.store.listAttemptCards(repo));
     const open = new Set(prs.map(pr => pr.number));
+    const tag = `[sentinel ${repo}]`, tally = new Map<string, number>();
+    const skip = (pr: { number: number }, why: string) => { tally.set(why, (tally.get(why) ?? 0) + 1); console.debug(`${tag} #${pr.number}: skipped, ${why}`); };
+    console.log(`${tag} pass: ${prs.length} open PR(s), origin/main ${mainTip.slice(0, 12)}, owner ${this.owner}, ${cards.filter(card => sentinelCards.has(card.id)).length} open sentinel card(s)`);
 
     await this.withdrawResolved(repoBoard, repo, cards, sentinelCards, prs.filter(pr => {
       const item = extra.get(pr.number);
@@ -81,31 +85,35 @@ export class Sentinel {
 
     let openSentinel = cards.filter(card => sentinelCards.has(card.id)).length;
     for (const pr of prs) {
-      if (pr.author?.login?.toLowerCase() !== this.owner.toLowerCase() || pr.isDraft) continue;
+      if (pr.author?.login?.toLowerCase() !== this.owner.toLowerCase()) { skip(pr, "not written by the owner"); continue; }
+      if (pr.isDraft) { skip(pr, "draft"); continue; }
       const item = extra.get(pr.number);
       const problems: string[] = [];
       if (item?.mergeable === "CONFLICTING") problems.push("It conflicts with main.");
       const failing = fixableFailures({ statusCheckRollup: item?.statusCheckRollup });
       if (failing.length) problems.push(`CI is failing: ${failing.map(check => check.name || check.context || check.workflowName || "a check").join(", ")}.`);
-      if (!problems.length) continue;
+      if (!problems.length) { skip(pr, `healthy (mergeable=${item?.mergeable ?? "unknown"}, no fixable failures)`); continue; }
       // A card the existing triggers still work on, or a sentinel card already open for it.
-      if (cards.some(card => card.prNumber === pr.number && !(card.ciReworks >= 3 && card.conflictRepairs >= 3) && !sentinelCards.has(card.id))) continue;
-      if (cards.some(card => card.prNumber === pr.number && sentinelCards.has(card.id))) continue;
+      if (cards.some(card => card.prNumber === pr.number && !(card.ciReworks >= 3 && card.conflictRepairs >= 3) && !sentinelCards.has(card.id))) { skip(pr, `broken (${problems.join(" ")}) but its own card still handles it`); continue; }
+      if (cards.some(card => card.prNumber === pr.number && sentinelCards.has(card.id))) { skip(pr, "a sentinel card is already open for it"); continue; }
       if (this.store.attemptCount(repo, pr.number) >= maxSentinelAttempts) {
+        console.log(`${tag} #${pr.number}: ${maxSentinelAttempts} attempts used; giving up`);
         if (this.store.markGivenUp(repo, pr.number, new Date().toISOString()))
           await commentOnPullRequest(this.github, repo, pr.number, `Bakery's sentinel tried ${maxSentinelAttempts} times to get this pull request mergeable and stopped. A person needs to take it from here.`);
         continue;
       }
-      if (openSentinel >= maxOpenSentinelCards) break;
+      if (openSentinel >= maxOpenSentinelCards) { console.log(`${tag} #${pr.number}: stopping, ${maxOpenSentinelCards} open sentinel cards is the cap`); break; }
       const lock = await this.locks.current(repo, pr.number);
-      if (lock?.status === "active") continue;
+      if (lock?.status === "active") { skip(pr, `broken but locked by ${lock.lock.holder} since ${lock.lock.startedAt}`); continue; }
       // Re-read the PR so the card is built from its current head, not the one in the listing.
       const fresh = await this.github.view(repo, pr.number);
-      if (fresh.state !== "OPEN" || !fresh.headRefOid) continue;
-      if (this.store.hasAttempt(repo, pr.number, fresh.headRefOid, mainTip)) continue;
+      if (fresh.state !== "OPEN" || !fresh.headRefOid) { skip(pr, `no longer open (${fresh.state})`); continue; }
+      if (this.store.hasAttempt(repo, pr.number, fresh.headRefOid, mainTip)) { skip(pr, `already tried at head ${fresh.headRefOid.slice(0, 12)} with main ${mainTip.slice(0, 12)}`); continue; }
+      console.log(`${tag} #${pr.number}: broken (${problems.join(" ")}) head ${fresh.headRefOid.slice(0, 12)}, no live lock; making a card`);
       const created = await this.createCard(repoBoard, repo, pr, fresh.headRefOid, fresh.headRefName, mainTip, problems);
       if (created) openSentinel += 1;
     }
+    console.log(`${tag} pass done: ${[...tally].map(([why, n]) => `${n}× ${why.replace(/ \(.*$/, "")}`).join("; ") || "nothing skipped"}`);
   }
 
   private async createCard(repoBoard: RepoBoard, repo: string, pr: { number: number; title: string; url: string }, head: string, branch: string, mainTip: string, problems: string[]): Promise<boolean> {
@@ -113,6 +121,7 @@ export class Sentinel {
       body: sentinelBrief({ repo, number: pr.number, url: pr.url, branch, head, mainTip, problems }) });
     // The attempt is recorded before the lock so a failed comment cannot lead to a second card for the same state.
     this.store.recordAttempt(repo, pr.number, branch, head, mainTip, card.id, new Date().toISOString());
+    console.log(`[sentinel ${repo}] #${pr.number}: created card ${card.id.slice(0, 8)} for branch ${branch}`);
     this.board.setStatus(card.id, "ready", "Created by Bakery's sentinel: the pull request is not mergeable and nothing is working on it");
     try { await this.locks.acquire(repo, pr.number, holderOf(card.id)); }
     catch (error) { console.error(`Sentinel could not lock ${repo}#${pr.number}: ${error instanceof Error ? error.message : String(error)}`); }
@@ -126,6 +135,7 @@ export class Sentinel {
       const number = this.store.attemptPr(card.id);
       if (number === undefined || (open.has(number) && broken.includes(number))) continue;
       const why = open.has(number) ? "is mergeable again" : "was merged or closed";
+      console.log(`[sentinel ${repo}] #${number}: withdrawing unstarted card ${card.id.slice(0, 8)}, the pull request ${why}`);
       try {
         this.board.setStatus(card.id, "done", `Withdrawn by Bakery's sentinel: the pull request ${why}`);
         await this.locks.release(repo, number, holderOf(card.id));
@@ -142,6 +152,8 @@ export class Sentinel {
     const attempt = this.store.attemptFor(run.cardId);
     if (!attempt || run.status !== "review") return;
     const worktree = join(this.dataDir, "worktrees", run.cardId);
+    const tag = `[sentinel ${attempt.repo}#${attempt.prNumber}]`;
+    console.log(`${tag} run ${run.id.slice(0, 8)} finished; checking ${worktree}`);
     const say = (text: string) => commentOnPullRequest(this.github, attempt.repo, attempt.prNumber, text);
     const report = (reportFromOutput(this.board.getRun(run.id)?.output ?? "") ?? "").trim();
     const quoted = report ? `\n\nThe agent's report:\n\n${report.slice(0, 3000).split("\n").map(line => `> ${line}`).join("\n")}` : "";
@@ -151,14 +163,18 @@ export class Sentinel {
       const tip = await git(worktree, "rev-parse", "HEAD");
       const dirty = await git(worktree, "status", "--porcelain");
       const onMain = await git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD").then(() => true, () => false);
+      console.log(`${tag} worktree tip ${tip.slice(0, 12)} (card head ${attempt.head.slice(0, 12)}), clean=${!dirty}, on origin/main=${onMain}`);
       if (dirty || tip === attempt.head || !onMain) {
+        console.log(`${tag} not pushing: ${dirty ? "uncommitted changes" : tip === attempt.head ? "head unchanged" : "not rebased onto origin/main"}`);
         await say(`Bakery's sentinel tried to fix this pull request and left it unchanged, so nothing was pushed. A person needs to take it from here.${quoted}`);
         return;
       }
       await git(worktree, "push", `--force-with-lease=refs/heads/${attempt.branch}:${attempt.head}`, "origin", `HEAD:refs/heads/${attempt.branch}`);
+      console.log(`${tag} pushed ${tip.slice(0, 12)} to ${attempt.branch}`);
       this.board.closeDelivered(run.cardId, `Pushed to ${attempt.branch} on the pull request`);
       await say(`Bakery's sentinel rebased this pull request onto the latest main and pushed ${tip.slice(0, 12)}. If CI fails again, it checks again on its next pass.${quoted}`);
     } catch (error) {
+      console.error(`${tag} push failed: ${error instanceof Error ? error.message : String(error)}`);
       await say(`Bakery's sentinel could not push its fix: ${error instanceof Error ? error.message.slice(0, 500) : String(error)}. A person needs to take it from here.${quoted}`);
     }
   }

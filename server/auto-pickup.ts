@@ -27,6 +27,7 @@ export class AutoPickup {
     for (const repoBoard of this.board.listBoards().filter(item => item.autoPickupEnabled)) {
       const blocker = this.board.autoPickupBlocker(repoBoard);
       if (blocker) {
+        console.log(`[pickup ${repoBoard.repo}] paused: ${blocker.reason}`);
         this.board.pauseAutoPickup(repoBoard.id, blocker.reason, blocker.kind === "failed_run");
         continue;
       }
@@ -35,8 +36,10 @@ export class AutoPickup {
         if (this.board.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || (repoBoard.pickupDailyLimit > 0 && this.board.autoStartsToday(repoBoard.repo) >= repoBoard.pickupDailyLimit) ||
           this.board.autoPickupBudgetReached(repoBoard.repo)) break;
         try {
+          console.log(`[pickup ${repoBoard.repo}] starting card ${card.id.slice(0, 8)} "${card.title.slice(0, 60)}"`);
           this.worker.start(card, "auto");
         } catch (error) {
+          console.error(`[pickup ${repoBoard.repo}] could not start card ${card.id.slice(0, 8)}: ${String(error)}`);
           this.board.pauseAutoPickup(repoBoard.id, `Could not start ${card.title}: ${String(error)}`);
           break;
         }

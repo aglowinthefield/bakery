@@ -1417,10 +1417,13 @@ export class Board {
   }
   /** Attaches a reason to the status change the card_status_events trigger just recorded for this card. */
   private explain(cardId: string, reason: string): void {
+    const event = this.db.prepare("SELECT fromStatus, toStatus FROM card_events WHERE id=(SELECT MAX(id) FROM card_events WHERE cardId=? AND toStatus IS NOT NULL)").get(cardId) as { fromStatus: string | null; toStatus: string } | undefined;
+    console.log(`[card ${cardId.slice(0, 8)}] ${event ? `${event.fromStatus ?? "new"} -> ${event.toStatus}: ` : ""}${reason}`);
     this.db.prepare("UPDATE card_events SET reason=? WHERE id=(SELECT MAX(id) FROM card_events WHERE cardId=? AND toStatus IS NOT NULL) AND reason=''").run(reason.slice(0, 2000), cardId);
   }
   /** Records something worth knowing about a card that did not change its status, such as a failed restart. */
   noteCard(cardId: string, reason: string): void {
+    console.log(`[card ${cardId.slice(0, 8)}] note: ${reason}`);
     this.db.prepare("INSERT INTO card_events(cardId, at, reason) VALUES (?, ?, ?)").run(cardId, now(), reason.slice(0, 2000));
   }
   listCardEvents(cardId: string): CardEvent[] {
@@ -1480,6 +1483,9 @@ export class Board {
   private runListeners: ((event: "started" | "finished", run: Run) => void | Promise<void>)[] = [];
   onRun(listener: (event: "started" | "finished", run: Run) => void | Promise<void>): void { this.runListeners.push(listener); }
   private notifyRun(event: "started" | "finished", run: Run): void {
+    const card = this.getCard(run.cardId);
+    const seconds = run.finishedAt ? Math.round((Date.parse(run.finishedAt) - Date.parse(run.startedAt)) / 1000) : undefined;
+    console.log(`[run ${run.id.slice(0, 8)}] ${event} card=${run.cardId.slice(0, 8)} "${card?.title.slice(0, 60) ?? "?"}" attempt=${run.attempt}${event === "started" ? ` by=${run.startedBy}` : ` status=${run.status}${seconds === undefined || Number.isNaN(seconds) ? "" : ` after=${seconds}s`} cost=$${Number(run.cost ?? 0).toFixed(2)}${run.error ? ` error=${run.error.slice(0, 300)}` : ""}`}`);
     for (const listener of this.runListeners) {
       try { void Promise.resolve(listener(event, run)).catch(error => console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`)); }
       catch (error) { console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`); }
