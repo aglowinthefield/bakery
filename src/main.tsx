@@ -90,7 +90,10 @@ import {
   type RemoteHost,
 } from "./remote-link.js";
 import {
-  byPriority,
+  cardSorts,
+  isCardSort,
+  sortCards,
+  type CardSort,
   PRIORITY_MAX,
   PRIORITY_MIN,
   parsePriorityInput,
@@ -702,6 +705,21 @@ export function App() {
   // A snapshot of Review card IDs, walked one at a time from Today.
   const [reviewQueue, setReviewQueue] = useState<string[] | null>(null);
   const [query, setQuery] = useState("");
+  const [cardSort, setCardSort] = useState<CardSort>(() => {
+    try {
+      const saved = localStorage.getItem("bakery-card-sort");
+      return isCardSort(saved) ? saved : "priority";
+    } catch {
+      return "priority";
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("bakery-card-sort", cardSort);
+    } catch {
+      // Private or full storage must not break the board.
+    }
+  }, [cardSort]);
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => setQuery(""), [boardId]);
   useEffect(() => {
@@ -2025,39 +2043,57 @@ export function App() {
             </strong>{" "}
             awaiting review
           </span>
-          <label className="ml-auto flex cursor-pointer items-center gap-2">
-            <input
-              type="checkbox"
-              disabled={!currentBoard || busy}
-              checked={currentBoard?.autoCollapseEmptySwimlanes ?? false}
+          <div className="ml-auto flex items-center gap-4">
+            <select
+              aria-label="Sort cards"
+              disabled={!boardId}
+              value={cardSort}
               onChange={(event) => {
-                const enabled = event.target.checked;
-                if (!boardId) return;
-                void action(async () => {
-                  const updated = await api<Board>(
-                    `/boards/${boardId}/settings`,
-                    {
-                      method: "PATCH",
-                      body: JSON.stringify({
-                        autoCollapseEmptySwimlanes: enabled,
-                      }),
-                    },
-                  );
-                  setBoards((previous) =>
-                    previous.map((item) =>
-                      item.id === updated.id ? updated : item,
-                    ),
-                  );
-                  setManualCollapse((previous) => ({
-                    ...previous,
-                    [updated.id]: {},
-                  }));
-                });
+                if (isCardSort(event.target.value))
+                  setCardSort(event.target.value);
               }}
-              className="accent-primary"
-            />{" "}
-            Auto-collapse lanes without active cards
-          </label>
+              className="rounded-md border border-input bg-background px-2 py-0.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {Object.entries(cardSorts).map(([value, label]) => (
+                <option key={value} value={value}>
+                  Sort: {label}
+                </option>
+              ))}
+            </select>
+            <label className="ml-auto flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                disabled={!currentBoard || busy}
+                checked={currentBoard?.autoCollapseEmptySwimlanes ?? false}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  if (!boardId) return;
+                  void action(async () => {
+                    const updated = await api<Board>(
+                      `/boards/${boardId}/settings`,
+                      {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          autoCollapseEmptySwimlanes: enabled,
+                        }),
+                      },
+                    );
+                    setBoards((previous) =>
+                      previous.map((item) =>
+                        item.id === updated.id ? updated : item,
+                      ),
+                    );
+                    setManualCollapse((previous) => ({
+                      ...previous,
+                      [updated.id]: {},
+                    }));
+                  });
+                }}
+                className="accent-primary"
+              />{" "}
+              Auto-collapse lanes without active cards
+            </label>
+          </div>
           {currentBoard?.autoPickupEnabled && (
             <span className="text-primary">
               Auto pickup · {currentBoard.pickupConcurrency} at a time
@@ -2258,10 +2294,11 @@ export function App() {
         >
           <div className="flex min-h-[500px] min-w-max gap-4">
             {(splitReview ? pullRequestLanes : columns).map((column) => {
-              const sorted = byPriority(
+              const sorted = sortCards(
                 visibleCards.filter(
                   (c) => laneOf(c, splitReview) === column.id,
                 ),
+                cardSort,
               );
               // Review splits into cards that need you, then cards an agent, CI or GitHub still has.
               const waitingCards = sorted.filter((c) => c.reviewWait);

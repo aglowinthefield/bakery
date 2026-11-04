@@ -152,6 +152,39 @@ export const priorityTone = (value: number) =>
 // Stable sort: equal priorities keep the server's existing order.
 export const byPriority = <T extends { priority?: number }>(items: T[]) =>
   [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+export const cardSorts = {
+  priority: "Priority",
+  updated: "Recently updated",
+  newest: "Newest",
+  oldest: "Oldest",
+  title: "Title",
+} as const;
+export type CardSort = keyof typeof cardSorts;
+export const isCardSort = (value: unknown): value is CardSort =>
+  typeof value === "string" && Object.hasOwn(cardSorts, value);
+type Sortable = {
+  title: string;
+  priority?: number;
+  createdAt: string;
+  updatedAt: string;
+};
+const time = (value: string) => Date.parse(value) || 0;
+/** Orders a lane's cards. Ties fall back to priority, then the server's order. */
+export const sortCards = <T extends Sortable>(items: T[], sort: CardSort) => {
+  const prioritized = byPriority(items);
+  if (sort === "priority") return prioritized;
+  const compare: Record<
+    Exclude<CardSort, "priority">,
+    (a: T, b: T) => number
+  > = {
+    updated: (a, b) => time(b.updatedAt) - time(a.updatedAt),
+    newest: (a, b) => time(b.createdAt) - time(a.createdAt),
+    oldest: (a, b) => time(a.createdAt) - time(b.createdAt),
+    title: (a, b) =>
+      a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+  };
+  return prioritized.sort(compare[sort]);
+};
 export type Card = {
   id: string;
   title: string;
