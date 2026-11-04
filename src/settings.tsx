@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { BakerySettings } from "./model.js";
 import { settingsSections, type SettingsSection } from "./route.js";
-import { themeNames, themes } from "./themes.js";
+import { themeFamilies, themeModes, themeParts } from "./themes.js";
 import { UpdatesPanel } from "./update-notice.js";
 
 const titles: Record<SettingsSection, { label: string; blurb: string }> = {
@@ -195,23 +195,65 @@ export function SettingsPage({
               <>
                 <fieldset className="text-sm" disabled={!settings || busy}>
                   <legend className="pt-5 font-medium">Theme</legend>
-                  <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
-                    {themeNames.map((theme) => (
-                      <label
-                        key={theme}
-                        className="flex cursor-pointer items-center gap-2"
-                      >
-                        <input
-                          type="radio"
-                          name="theme"
-                          checked={(settings?.theme ?? "default") === theme}
-                          onChange={() => saveSettings({ theme })}
-                          className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                        />
-                        {themes[theme].label}
-                      </label>
-                    ))}
-                  </div>
+                  {(() => {
+                    const { family, mode } = themeParts(
+                      settings?.theme ?? "default",
+                    );
+                    return (
+                      <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
+                        <select
+                          aria-label="Theme"
+                          value={family.id}
+                          onChange={(event) => {
+                            const next = themeFamilies.find(
+                              (item) => item.id === event.target.value,
+                            )!;
+                            const theme = next[mode] ?? next.dark ?? next.light;
+                            if (theme) saveSettings({ theme });
+                          }}
+                          className="rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+                        >
+                          {themeFamilies.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+                        <div
+                          className="flex gap-5"
+                          role="group"
+                          aria-label="Mode"
+                        >
+                          {themeModes.map((item) => {
+                            const theme = family[item];
+                            return (
+                              <label
+                                key={item}
+                                title={
+                                  theme
+                                    ? undefined
+                                    : `${family.label} has no ${item === "system" ? "light and dark pair" : item + " variant"}`
+                                }
+                                className="flex cursor-pointer items-center gap-2 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
+                              >
+                                <input
+                                  type="radio"
+                                  name="theme-mode"
+                                  disabled={!theme}
+                                  checked={mode === item}
+                                  onChange={() =>
+                                    theme && saveSettings({ theme })
+                                  }
+                                  className="accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                                />
+                                {item[0].toUpperCase() + item.slice(1)}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </fieldset>
                 <fieldset
                   className="mt-6 border-t border-border pt-5 text-sm"

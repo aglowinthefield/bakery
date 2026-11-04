@@ -14,9 +14,21 @@ export const themes = {
     dark: "compline",
   },
   light: { label: "Light", type: "light" },
+  "default-system": {
+    label: "Default (match system)",
+    type: "system",
+    light: "light",
+    dark: "default",
+  },
   hearth: { label: "Hearth", type: "dark" },
   "gruvbox-dark": { label: "Gruvbox Dark", type: "dark" },
   "gruvbox-light": { label: "Gruvbox Light", type: "light" },
+  "gruvbox-system": {
+    label: "Gruvbox (match system)",
+    type: "system",
+    light: "gruvbox-light",
+    dark: "gruvbox-dark",
+  },
   nord: { label: "Nord", type: "dark" },
 } as const;
 export type ThemeName = keyof typeof themes;
@@ -42,4 +54,46 @@ export function themeType(value: string | undefined): "light" | "dark" {
   if (!isTheme(value)) return "dark";
   const theme = themes[value];
   return theme.type === "system" ? "dark" : theme.type;
+}
+
+// The settings dialog picks a family from a dropdown and a mode with radios.
+// A mode a family has no palette for is left out; "system" needs both.
+export const themeFamilies: readonly {
+  id: string;
+  label: string;
+  light?: ThemeName;
+  dark?: ThemeName;
+  system?: ThemeName;
+}[] = [
+  {
+    id: "default",
+    label: "Default",
+    light: "light",
+    dark: "default",
+    system: "default-system",
+  },
+  {
+    id: "compline",
+    label: "Compline",
+    light: "compline-light",
+    dark: "compline",
+    system: "compline-system",
+  },
+  { id: "hearth", label: "Hearth", dark: "hearth" },
+  {
+    id: "gruvbox",
+    label: "Gruvbox",
+    light: "gruvbox-light",
+    dark: "gruvbox-dark",
+    system: "gruvbox-system",
+  },
+  { id: "nord", label: "Nord", dark: "nord" },
+];
+export type ThemeMode = "light" | "dark" | "system";
+export const themeModes: readonly ThemeMode[] = ["light", "dark", "system"];
+export function themeParts(value: ThemeName) {
+  for (const family of themeFamilies)
+    for (const mode of themeModes)
+      if (family[mode] === value) return { family, mode };
+  return { family: themeFamilies[0], mode: "dark" as ThemeMode };
 }
