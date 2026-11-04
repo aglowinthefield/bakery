@@ -155,12 +155,12 @@ export type PrComment = { id: string; at: string; author: string; association: s
 export type PrRequest = { author: string; comment: string; path?: string; line?: number | null };
 // Only people with a say in the repository can send a card back; anyone else's comment is just a comment.
 const trustedAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
-const mentionsBakery = (body: string) => /^\s*[@/]bakery(?![\w-])/i.test(body);
+const mentionsBakery = (body: string) => /^\s*\/bakery(?![\w-])/i.test(body);
 
 /**
- * The requests in `comments` posted after `since`: each comment by a trusted author that starts with `@bakery` or
- * `/bakery`. A review whose summary starts that way brings all of its inline comments along, so "Request changes"
- * with `@bakery` in the summary sends the whole review. `latest` is the newest request's time, the next `since`.
+ * The requests in `comments` posted after `since`: each comment by a trusted author that starts with `/bakery`
+ * (not `@bakery`, which would notify an unrelated GitHub account). A review whose summary starts that way brings all of its inline comments along, so "Request changes"
+ * with `/bakery` in the summary sends the whole review. `latest` is the newest request's time, the next `since`.
  */
 export function bakeryRequests(comments: PrComment[], since: string): { requests: PrRequest[]; latest: string | null } {
   const asked = comments.filter(item => item.at > since && trustedAssociations.includes(item.association) && mentionsBakery(item.body));
@@ -455,7 +455,7 @@ export class GitHubSync {
     await this.removeWorktree(repoBoard.repo, card);
   }
   /**
-   * A comment on the PR that starts with `@bakery` (or `/bakery`), from someone with write-level access to the
+   * A comment on the PR that starts with `/bakery`, from someone with write-level access to the
    * repository, goes back to the card's agent as requested changes. So does a submitted review whose summary starts
    * that way, with its inline comments. Each is sent once: `prCommentsSeen` is the time of the newest one handled, and
    * a PR is first read from the moment Bakery first looks at it, so old comments are not replayed. Like CI, the work
