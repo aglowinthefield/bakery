@@ -111,7 +111,7 @@ const pullFeed = new PullRequestFeed(board, github);
 const sentinelStore = new SentinelStore(board.sqlite);
 const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
-  card => worker.start(card, "manual", "to fix failing CI on the pull request"),
+  card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.reviewFingerprint(card), github, undefined, "ci-fix")));
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
 // BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
