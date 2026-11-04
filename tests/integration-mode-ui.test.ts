@@ -50,7 +50,8 @@ async function open(integration: "local" | "github-pr") {
 test("local board: header names local main, Done cards say whether they reached origin/main, and the button says local main", async () => {
   const page = await open("local");
   try {
-    assert.match(await page.getByTestId("integration-mode").innerText(), /local main.*does not push/);
+    assert.match(await page.getByTestId("integration-mode").innerText(), /Local main/);
+    assert.match((await page.getByRole("tooltip").textContent())!, /does not push/);
     const badge = (title: string) => page.getByRole("button", { name: new RegExp(title) }).getByTestId("origin-main-badge");
     assert.equal(await badge("Pushed card").innerText(), "On origin/main");
     assert.equal(await badge("Local card").innerText(), "Merged locally, not pushed");
