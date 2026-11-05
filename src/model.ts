@@ -61,6 +61,8 @@ export type Board = {
   newCards?: number;
   /** Finished chat turns the operator has not seen, summed over the board's chats. */
   chatUnread?: number;
+  /** Sentinel jobs that are running or queued to start. Done jobs never count. */
+  sentinelsInProgress?: number;
 };
 export type AutoReviewJob = {
   cardId: string;

@@ -963,6 +963,11 @@ export class Board {
     const rows = this.db.prepare("SELECT repo, COUNT(*) AS count FROM cards WHERE unseen=1 AND status!='archived' GROUP BY repo").all() as { repo: string; count: number }[];
     return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
   }
+  /** Per repo, how many sentinel jobs are in progress: running, or queued to start. Keep in step with `isSentinelLive` in src/sentinels.tsx. */
+  sentinelInProgressCounts(): Record<string, number> {
+    const rows = this.db.prepare(`SELECT repo, COUNT(*) AS count FROM cards WHERE status IN ('running', 'ready', 'triage') AND NOT ${notSentinelJob} GROUP BY repo`).all() as { repo: string; count: number }[];
+    return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
+  }
   /**
    * Marks seen the board's new cards among `cardIds` (the ones the operator's screen has loaded) and returns them,
    * so the UI can point them out for this visit. Other new cards, such as one created after that screen loaded, stay new.

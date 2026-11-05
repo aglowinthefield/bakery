@@ -328,6 +328,21 @@ function ChatUnreadBadge({
   );
 }
 
+/** Sentinel jobs running or queued to start, shown beside the Sentinels entry. */
+function SentinelsBadge({ count }: { count: number }) {
+  const label = `${count} sentinel ${count === 1 ? "job" : "jobs"} in progress`;
+  return (
+    <span
+      data-sentinels-in-progress={count}
+      aria-label={label}
+      title={label}
+      className="ml-auto shrink-0 rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
+    >
+      {count}
+    </span>
+  );
+}
+
 function RemoteLink({ url }: { url: string }) {
   const remote = describeRemote(url);
   const Icon = remoteIcons[remote.host];
@@ -1827,6 +1842,9 @@ export function App() {
                       className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${sentinelsActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <ShieldCheck size={13} aria-hidden="true" /> Sentinels
+                      {!!item.sentinelsInProgress && (
+                        <SentinelsBadge count={item.sentinelsInProgress} />
+                      )}
                     </button>
                   )}
                   {open && (
