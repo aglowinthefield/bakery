@@ -5,6 +5,7 @@ import {
   MessageSquare,
   Timer,
 } from "lucide-react";
+import { useState } from "react";
 import { date } from "./api.js";
 import type { Card } from "./model.js";
 
@@ -38,8 +39,13 @@ export function Sentinels({
   loaded: boolean;
   onOpenCard: (cardId: string) => void;
 }) {
-  const jobs = cards
-    .filter((card) => isSentinelJob(card) && card.status !== "archived")
+  const [showDone, setShowDone] = useState(false);
+  const all = cards.filter(
+    (card) => isSentinelJob(card) && card.status !== "archived",
+  );
+  const doneCount = all.filter((card) => card.status === "done").length;
+  const jobs = all
+    .filter((card) => showDone || card.status !== "done")
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const live = jobs.filter((card) => stateOf(card).live);
   const past = jobs.filter((card) => !stateOf(card).live).slice(0, 30);
@@ -89,7 +95,17 @@ export function Sentinels({
       {!loaded && (
         <p className="text-sm text-muted-foreground">Loading sentinel jobs…</p>
       )}
-      {loaded && jobs.length === 0 && (
+      {doneCount > 0 && (
+        <label className="mb-4 flex w-fit items-center gap-2 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showDone}
+            onChange={(event) => setShowDone(event.target.checked)}
+          />
+          Show completed ({doneCount})
+        </label>
+      )}
+      {loaded && all.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No sentinel jobs yet. They appear when the timer finds a broken pull
           request or someone comments /bakery on one.
