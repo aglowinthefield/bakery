@@ -335,3 +335,24 @@ test("a /bakery comment on a fork's PR is declined, and one on an issue is ignor
     assert.match(f.comments.get(pr.number)![0].body, /comes from a fork/);
   } finally { f.cleanup(); }
 });
+
+test("the sentinel starts its own jobs, from the timer or a /bakery comment, and retries one that could not start", async () => {
+  const f = fixture();
+  try {
+    const started: string[] = [];
+    let refuse = true;
+    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { if (refuse) throw new Error("draining"); started.push(card.title); });
+    const pr = f.addPr();
+    await sentinel.pass(f.repoBoard.id);
+    assert.deepEqual(started, [], "a refused start leaves the job Ready");
+    refuse = false;
+    sentinel.startReadyJobs();
+    assert.deepEqual(started, [`Fix PR #${pr.number}: ${pr.title}`]);
+    const other = f.addPr({ mergeable: "MERGEABLE" });
+    await sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    f.asked.push({ id: "issues/comments:9", at: new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString(), author: "aglowinthefield", association: "MEMBER", body: "/bakery add a test", prNumber: other.number });
+    await sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.equal(started.length, 2);
+    assert.match(started[1], /^Requested on PR/, "the request job starts as soon as it is made");
+  } finally { f.cleanup(); }
+});

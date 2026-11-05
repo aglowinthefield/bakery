@@ -42,6 +42,7 @@ import {
   Kanban,
   Workflow,
   MessageSquare,
+  ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
   type LucideIcon,
@@ -72,6 +73,7 @@ import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
 import { Visualizer } from "./visualizer/visualizer.js";
 import { ChatView } from "./chat.js";
+import { Sentinels, isSentinelJob } from "./sentinels.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
@@ -642,6 +644,7 @@ export function App() {
       saved === "pulls" ||
       saved === "visualizer" ||
       saved === "chat" ||
+      saved === "sentinels" ||
       saved === "stats" ||
       saved === "logs" ||
       saved === "settings"
@@ -1068,6 +1071,11 @@ export function App() {
     setView("visualizer");
     localStorage.setItem("bakery-view", "visualizer");
   };
+  const openSentinels = (id: string) => {
+    openBoard(id);
+    setView("sentinels");
+    localStorage.setItem("bakery-view", "sentinels");
+  };
   const openChat = (id: string) => {
     openBoard(id);
     setView("chat");
@@ -1454,7 +1462,9 @@ export function App() {
       setRepoPath("");
     });
   };
-  const active = cards.filter((item) => item.status === "running").length;
+  const active = cards.filter(
+    (item) => item.status === "running" && !isSentinelJob(item),
+  ).length;
   const needsYouCount = boards.reduce(
     (sum, item) =>
       sum +
@@ -1464,7 +1474,11 @@ export function App() {
       ),
     0,
   );
-  const visibleCards = filterCards(cards, query);
+  // Sentinel jobs have their own section; the kanban is for cards a person runs.
+  const visibleCards = filterCards(
+    cards.filter((item) => !isSentinelJob(item)),
+    query,
+  );
   const splitReview = currentBoard?.integration === "github-pr";
   // Bulk selection only covers cards the search leaves visible. Polling can
   // move cards out of the lane; only act on cards still there.
@@ -1677,9 +1691,15 @@ export function App() {
               const visualizerActive =
                 view === "visualizer" && boardId === item.id;
               const chatActive = view === "chat" && boardId === item.id;
+              const sentinelsActive =
+                view === "sentinels" && boardId === item.id;
               const open =
                 repoOpen[item.id] ??
-                (active || pullsActive || visualizerActive || chatActive);
+                (active ||
+                  pullsActive ||
+                  visualizerActive ||
+                  chatActive ||
+                  sentinelsActive);
               return (
                 <div
                   key={item.id}
@@ -1798,6 +1818,15 @@ export function App() {
                       className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${visualizerActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <Workflow size={13} aria-hidden="true" /> Visualizer
+                    </button>
+                  )}
+                  {open && supportsPullRequests(item) && (
+                    <button
+                      onClick={() => openSentinels(item.id)}
+                      aria-current={sentinelsActive ? "page" : undefined}
+                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${sentinelsActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                    >
+                      <ShieldCheck size={13} aria-hidden="true" /> Sentinels
                     </button>
                   )}
                   {open && (
@@ -1973,6 +2002,26 @@ export function App() {
           />
         </main>
       )}
+      {view === "sentinels" &&
+        boardId &&
+        currentBoard &&
+        supportsPullRequests(currentBoard) && (
+          <main className="page-fade min-w-0 flex-1">
+            <header className="border-b border-border px-6 py-6 lg:px-10">
+              <h1 className="text-[27px] font-semibold tracking-[-.05em]">
+                Sentinels
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {currentBoard.repo}
+              </p>
+            </header>
+            <Sentinels
+              cards={cards}
+              loaded={loadedBoard === boardId}
+              onOpenCard={setSelected}
+            />
+          </main>
+        )}
       {view === "chat" && boardId && currentBoard && (
         <main className="page-fade min-w-0 flex-1">
           <header className="border-b border-border px-6 py-6 lg:px-10">
@@ -2010,6 +2059,9 @@ export function App() {
           view === "today" ||
           (view === "visualizer" && !!currentBoard) ||
           (view === "chat" && !!currentBoard) ||
+          (view === "sentinels" &&
+            !!currentBoard &&
+            supportsPullRequests(currentBoard)) ||
           view === "stats" ||
           view === "logs" ||
           view === "settings" ||

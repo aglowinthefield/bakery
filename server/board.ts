@@ -59,8 +59,14 @@ export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number |
  * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
  */
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
-/** Sentinel cards are created under an idempotency key that starts with `sentinel:`; they ignore the pickup concurrency and daily limits. */
-export const isSentinelCard = (card: { idempotencyKey: string | null }): boolean => !!card.idempotencyKey?.startsWith("sentinel:");
+/**
+ * Sentinel jobs are the cards the sentinel makes on its own: a fix for a broken PR (idempotency key `sentinel:`) or a
+ * `/bakery` comment on a PR (`request:`). The sentinel starts them itself, so they live outside the kanban's workflow:
+ * auto-pickup never picks them, its limits and pauses do not hold them, and they take no run slot from other cards.
+ */
+export const isSentinelJob = (card: { idempotencyKey: string | null }): boolean => !!card.idempotencyKey && /^(sentinel|request):/.test(card.idempotencyKey);
+/** SQL for "this `cards` row is not a sentinel job"; keep in step with `isSentinelJob`. */
+const notSentinelJob = "(cards.idempotencyKey IS NULL OR (cards.idempotencyKey NOT LIKE 'sentinel:%' AND cards.idempotencyKey NOT LIKE 'request:%'))";
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null;
   /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
   createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
@@ -737,7 +743,7 @@ export class Board {
   private hasUnresolvedAutoFailure(repo: string, since: string | null): boolean {
     return !!this.db.prepare(`SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId
       WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed' AND runs.startedAt>=?
-        AND cards.status NOT IN ('done', 'archived')
+        AND cards.status NOT IN ('done', 'archived') AND ${notSentinelJob}
         AND NOT EXISTS (SELECT 1 FROM approvals WHERE approvals.cardId=cards.id AND approvals.merged=1)
         AND NOT EXISTS (SELECT 1 FROM external_integrations WHERE external_integrations.cardId=cards.id)
       LIMIT 1`).get(repo, since ?? "");
@@ -749,7 +755,7 @@ export class Board {
       const paused = this.db.prepare("SELECT id, repo, autoPickupEnabledAt FROM boards WHERE archived=0 AND autoPickupEnabled=0 AND autoPickupResumeOnResolution=1")
         .all() as { id: string; repo: string; autoPickupEnabledAt: string | null }[];
       for (const board of paused) {
-        if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status='interrupted' LIMIT 1").get(board.repo)) continue;
+        if (this.db.prepare(`SELECT 1 FROM cards WHERE repo=? AND status='interrupted' AND ${notSentinelJob} LIMIT 1`).get(board.repo)) continue;
         if (this.hasUnresolvedAutoFailure(board.repo, board.autoPickupEnabledAt)) continue;
         this.db.prepare("UPDATE boards SET autoPickupEnabled=1, autoPickupEnabledAt=COALESCE(autoPickupEnabledAt, ?), autoPickupError='', autoPickupResumeOnResolution=0 WHERE id=?")
           .run(now(), board.id);
@@ -758,7 +764,7 @@ export class Board {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   runningCount(repo: string): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM cards WHERE repo=? AND status='running'").get(repo) as { n: number }).n;
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM cards WHERE repo=? AND status='running' AND ${notSentinelJob}`).get(repo) as { n: number }).n;
   }
   autoPickupBudgetReached(repo: string): boolean {
     return !!this.listBoards().find(item => item.repo === repo)?.autoPickupBudgetReached;
@@ -772,15 +778,15 @@ export class Board {
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
       if (repoBoard.autoPickupBudgetReached || repoBoard.integrationError) continue;
       const atLimit = this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || (repoBoard.pickupDailyLimit > 0 && repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit);
-      const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='ready' ORDER BY priority DESC, createdAt, rowid").all(repoBoard.repo) as { id: string }[];
+      if (atLimit) continue;
+      const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='ready' AND ${notSentinelJob} ORDER BY priority DESC, createdAt, rowid`).all(repoBoard.repo) as { id: string }[];
       // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
-      // At the start limits only sentinel cards stay eligible: they ignore the concurrency and daily limits.
-      result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card) && (!atLimit || isSentinelCard(item.card))));
+      result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card)));
     }
     return result;
   }
   autoPickupBlocker(repoBoard: RepoBoard): { kind: "interrupted" | "failed_run"; reason: string } | undefined {
-    if (this.db.prepare("SELECT 1 FROM cards WHERE repo=? AND status='interrupted' LIMIT 1").get(repoBoard.repo))
+    if (this.db.prepare(`SELECT 1 FROM cards WHERE repo=? AND status='interrupted' AND ${notSentinelJob} LIMIT 1`).get(repoBoard.repo))
       return { kind: "interrupted", reason: "An interrupted run needs inspection before automatic pickup" };
     if (this.hasUnresolvedAutoFailure(repoBoard.repo, repoBoard.autoPickupEnabledAt))
       return { kind: "failed_run", reason: "An automatic run failed; inspect and integrate its card before pickup resumes" };
@@ -1423,10 +1429,10 @@ export class Board {
       if (this.db.prepare("SELECT 1 FROM auto_review_jobs WHERE cardId=? AND state='running' LIMIT 1").get(cardId))
         throw new Error("Agent review is in progress; wait for its result before running Pi again");
       const repoBoard = this.listBoards().find(item => item.repo === card.repo);
-      if (repoBoard?.autoPickupEnabled && !isSentinelCard(card) && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
+      if (repoBoard?.autoPickupEnabled && !isSentinelJob(card) && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
         throw new RunLimitError(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
-        (repoBoard.pickupDailyLimit > 0 && !isSentinelCard(card) && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
+        (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       const id = randomUUID(), sessionId = freshSession ? `bakery-${cardId}-${attempt}` : `bakery-${cardId}`;

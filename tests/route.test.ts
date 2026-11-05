@@ -10,6 +10,7 @@ const routes: Route[] = [
   { view: "settings", boardId: null, cardId: null, section: "updates" },
   { view: "board", boardId: "b1", cardId: null },
   { view: "pulls", boardId: "b1", cardId: null },
+  { view: "sentinels", boardId: "b1", cardId: null },
   { view: "visualizer", boardId: "b1", cardId: null },
   { view: "chat", boardId: "b1", cardId: null },
   { view: "visualizer", boardId: "b 1", cardId: null },
