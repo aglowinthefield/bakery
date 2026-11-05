@@ -1,4 +1,4 @@
-import { Discord } from "./discord.js";
+import { Discord, isDiscordWebhookUrl } from "./discord.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -117,8 +117,8 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
 // BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
 const runLocks = new RunLocks(board, prLocks, sentinelStore, process.env.BAKERY_SENTINEL !== "0");
-// BAKERY_DISCORD_WEBHOOK_URL posts a message to that Discord channel when a run finishes.
-new Discord(board, process.env.BAKERY_DISCORD_WEBHOOK_URL || undefined);
+// Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or BAKERY_DISCORD_WEBHOOK_URL when Settings has none.
+new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.BAKERY_DISCORD_WEBHOOK_URL);
 const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000, 60_000,
   card => worker.start(card, "manual", "by Bakery's sentinel"));
 /**
@@ -242,12 +242,13 @@ const server = createServer(async (req, res) => {
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
-      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input)) throw new Error("Specify a setting to update");
+      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input)) throw new Error("Specify a setting to update");
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("notifyOnReview" in input && typeof input.notifyOnReview !== "boolean") throw new Error("notifyOnReview must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
       if ("theme" in input && !isTheme(input.theme)) throw new Error(`theme must be one of: ${themeNames.join(", ")}`);
       if ("density" in input && input.density !== "compact" && input.density !== "default" && input.density !== "cozy") throw new Error("density must be compact, default, or cozy");
+      if ("discordWebhookUrl" in input && (typeof input.discordWebhookUrl !== "string" || (input.discordWebhookUrl !== "" && !isDiscordWebhookUrl(input.discordWebhookUrl)))) throw new Error("discordWebhookUrl must be empty or a https://discord.com/api/webhooks/ URL");
       if ("showCardModels" in input && typeof input.showCardModels !== "boolean") throw new Error("showCardModels must be a boolean");
       send(res, 200, board.updateSettings({
         confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
@@ -257,6 +258,7 @@ const server = createServer(async (req, res) => {
         density: "density" in input ? input.density as "compact" | "default" | "cozy" : undefined,
         showCardModels: "showCardModels" in input ? input.showCardModels as boolean : undefined,
         agentModels: "agentModels" in input ? validateAgentModels(input.agentModels) : undefined,
+        discordWebhookUrl: "discordWebhookUrl" in input ? input.discordWebhookUrl as string : undefined,
       })); return;
     }
     if (path === "/api/models" && req.method === "GET") { send(res, 200, await listModels()); return; }

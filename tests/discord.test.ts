@@ -21,7 +21,7 @@ function fixture() {
 
 test("posts review and failed runs, skips stopped ones", async () => {
   const { board, run, close } = fixture(), posts: { url: string; body: any }[] = [];
-  new Discord(board, "https://discord.test/hook", async (url, init) => { posts.push({ url, body: JSON.parse(init.body) }); return { ok: true, status: 204 }; });
+  new Discord(board, () => "https://discord.test/hook", async (url, init) => { posts.push({ url, body: JSON.parse(init.body) }); return { ok: true, status: 204 }; });
   run("review"); run("failed"); run("interrupted");
   await new Promise(r => setTimeout(r, 50));
   assert.equal(posts.length, 2);
@@ -36,7 +36,7 @@ test("posts review and failed runs, skips stopped ones", async () => {
 test("does nothing without a webhook URL", async () => {
   const { board, run, close } = fixture();
   let called = false;
-  new Discord(board, undefined, async () => { called = true; return { ok: true, status: 204 }; });
+  new Discord(board, () => undefined, async () => { called = true; return { ok: true, status: 204 }; });
   run("review"); await new Promise(r => setTimeout(r, 50));
   assert.equal(called, false); close();
 });

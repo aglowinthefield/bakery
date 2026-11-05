@@ -88,6 +88,7 @@ export type BakerySettings = {
   density: "compact" | "default" | "cozy";
   showCardModels?: boolean;
   agentModels?: AgentModels;
+  discordWebhookUrl?: string;
 };
 export type ReviewComment = {
   id: string;

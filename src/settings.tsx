@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { BakerySettings } from "./model.js";
 import { settingsSections, type SettingsSection } from "./route.js";
 import { themeFamilies, themeModes, themeParts } from "./themes.js";
@@ -137,6 +137,12 @@ export function SettingsPage({
                     </span>
                   </span>
                 </label>
+                <DiscordWebhookField
+                  key={settings?.discordWebhookUrl ?? ""}
+                  value={settings?.discordWebhookUrl ?? ""}
+                  disabled={!settings || busy}
+                  onSave={(discordWebhookUrl) => saveSettings({ discordWebhookUrl })}
+                />
                 <fieldset
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
@@ -332,5 +338,28 @@ export function SettingsPage({
         </section>
       </div>
     </main>
+  );
+}
+
+function DiscordWebhookField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (url: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  return (
+    <label className="mt-6 block border-t border-border pt-5 text-sm">
+      <span className="font-medium">Discord webhook</span>
+      <input
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        className="mt-3 block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        placeholder="https://discord.com/api/webhooks/..."
+        value={draft}
+        disabled={disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => { if (draft.trim() !== value) onSave(draft.trim()); }}
+      />
+      <span className="mt-1 block text-xs text-muted-foreground">
+        Bakery posts to this channel when a run finishes. Leave empty to turn it off (BAKERY_DISCORD_WEBHOOK_URL is used if set).
+      </span>
+    </label>
   );
 }

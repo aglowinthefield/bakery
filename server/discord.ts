@@ -2,15 +2,19 @@ import type { Board, Run } from "./board.js";
 
 type Post = (url: string, init: { method: "POST"; headers: Record<string, string>; body: string }) => Promise<{ ok: boolean; status: number }>;
 
-/** Posts a message when a run finishes: green for review, red for failed. Needs a Discord webhook URL; without one it does nothing. */
+/** Discord only accepts these hosts; anything else would send run reports to an arbitrary server. */
+export const isDiscordWebhookUrl = (value: string): boolean => /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(value);
+
+/** Posts a message when a run finishes: green for review, red for failed. The webhook is read on every run, so a Settings change applies at once; without one it does nothing. */
 export class Discord {
-  constructor(private readonly board: Board, private readonly url: string | undefined, private readonly post: Post = fetch) {
-    if (url) board.onRun((event, run) => event === "finished" ? this.finished(run) : undefined);
+  constructor(private readonly board: Board, private readonly webhook: () => string | undefined, private readonly post: Post = fetch) {
+    board.onRun((event, run) => event === "finished" ? this.finished(run) : undefined);
   }
 
   /** Discord caps embed titles at 256 characters and descriptions at 4096. Interrupted runs say nothing: they were stopped on purpose. */
   async finished(run: Run): Promise<void> {
-    if (!this.url || (run.status !== "review" && run.status !== "failed")) return;
+    const url = this.webhook();
+    if (!url || (run.status !== "review" && run.status !== "failed")) return;
     const card = this.board.getCard(run.cardId);
     const ok = run.status === "review";
     const detail = ok ? run.report ?? "" : run.error ?? "unknown error";
@@ -20,7 +24,7 @@ export class Discord {
       color: ok ? 0x2ecc71 : 0xe74c3c,
       footer: { text: `attempt ${run.attempt} · $${Number(run.cost ?? 0).toFixed(2)}` },
     };
-    const res = await this.post(this.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ embeds: [embed], allowed_mentions: { parse: [] } }) });
+    const res = await this.post(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ embeds: [embed], allowed_mentions: { parse: [] } }) });
     if (!res.ok) throw new Error(`Discord webhook returned ${res.status}`);
   }
 }
