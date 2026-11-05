@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { reportFromOutput, type Board, type Card, type RepoBoard, type Run } from "./board.js";
+import { isSentinelJob, reportFromOutput, type Board, type Card, type RepoBoard, type Run } from "./board.js";
 import { boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub, type RepoComment, trustedBakeryComments } from "./github.js";
 import type { PrLocks } from "./pr-locks.js";
 import type { SentinelStore } from "./sentinel-store.js";
@@ -58,7 +58,9 @@ export class Sentinel {
   private owner?: string;
   private running = new Set<string>();
   constructor(private readonly board: Board, private readonly github: GitHub, private readonly store: SentinelStore, private readonly locks: PrLocks,
-    private readonly dataDir: string, private readonly ownerLogin?: string, private readonly intervalMs = 5 * 60_000, private readonly requestMs = 60_000) {
+    private readonly dataDir: string, private readonly ownerLogin?: string, private readonly intervalMs = 5 * 60_000, private readonly requestMs = 60_000,
+    /** Starts a job's run. Without it (tests) jobs stay Ready. */
+    private readonly startRun?: (card: Card) => void) {
     board.onRun((event, run) => event === "finished" ? this.afterRun(run) : undefined);
   }
   start(): void {
@@ -83,8 +85,24 @@ export class Sentinel {
     finally { this.running.delete(boardId); }
   }
 
-  /** `/bakery` requests, on every github-pr board. */
+  /**
+   * Starts a sentinel job right away. Jobs skip auto-pickup, so a paused board, its limits or a card's failed run never
+   * hold them up. A start that throws (Bakery draining for a restart, say) leaves the card Ready for `startReadyJobs`.
+   */
+  private startJob(card: Card): void {
+    if (!this.startRun) return;
+    try { this.startRun(card); }
+    catch (error) { console.error(`[sentinel] could not start job ${card.id.slice(0, 8)} "${card.title.slice(0, 60)}": ${error instanceof Error ? error.message : String(error)}`); }
+  }
+  /** Ready jobs that could not start when they were made. */
+  startReadyJobs(): void {
+    for (const repoBoard of this.board.listBoards().filter(item => item.integration === "github-pr"))
+      for (const card of this.board.listCards(repoBoard.repo)) if (card.status === "ready" && isSentinelJob(card)) this.startJob(this.board.getCard(card.id) ?? card);
+  }
+
+  /** `/bakery` requests, on every github-pr board, then any job still waiting to start. */
   async requestsTick(): Promise<void> {
+    this.startReadyJobs();
     await Promise.all(this.board.listBoards().filter(item => item.integration === "github-pr").map(async item => {
       if (this.requesting.has(item.id)) return;
       this.requesting.add(item.id);
@@ -141,7 +159,7 @@ export class Sentinel {
     this.store.recordAttempt(repo, number, pr.headRefName, pr.headRefOid, mainTip, card.id, new Date().toISOString());
     this.store.markRequestCard(card.id);
     console.log(`${tag} #${number}: created card ${card.id.slice(0, 8)} for ${items.length} request(s) from ${[...new Set(items.map(item => item.author))].join(", ")}`);
-    this.board.setStatus(card.id, "ready", `Created by a /bakery comment on pull request #${number}`);
+    this.startJob(this.board.setStatus(card.id, "ready", `Created by a /bakery comment on pull request #${number}`));
     await commentOnPullRequest(this.github, repo, number, `Bakery picked this up as a card and will push the change to \`${pr.headRefName}\` when its coding agent finishes.`);
   }
 
@@ -214,9 +232,10 @@ export class Sentinel {
     // The attempt is recorded before the lock so a failed comment cannot lead to a second card for the same state.
     this.store.recordAttempt(repo, pr.number, branch, head, mainTip, card.id, new Date().toISOString());
     console.log(`[sentinel ${repo}] #${pr.number}: created card ${card.id.slice(0, 8)} for branch ${branch}`);
-    this.board.setStatus(card.id, "ready", "Created by Bakery's sentinel: the pull request is not mergeable and nothing is working on it");
+    const ready = this.board.setStatus(card.id, "ready", "Created by Bakery's sentinel: the pull request is not mergeable and nothing is working on it");
     try { await this.locks.acquire(repo, pr.number, holderOf(card.id)); }
     catch (error) { console.error(`Sentinel could not lock ${repo}#${pr.number}: ${error instanceof Error ? error.message : String(error)}`); }
+    this.startJob(ready);
     return true;
   }
 

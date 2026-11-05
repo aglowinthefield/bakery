@@ -116,7 +116,8 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
 // BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
 const runLocks = new RunLocks(board, prLocks, sentinelStore, process.env.BAKERY_SENTINEL !== "0");
-const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000);
+const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000, 60_000,
+  card => worker.start(card, "manual", "by Bakery's sentinel"));
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
