@@ -422,3 +422,8 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
 :root[data-desktop="macos"] .desktop-titlebar { display: block; position: fixed; inset: 0 0 auto 0; height: 28px; z-index: 40; }
 :root[data-desktop="macos"] .desktop-sidebar-head { padding-top: 2.5rem; }
 :root[data-desktop="macos"] .desktop-sidebar-toggle { top: 2.25rem; }
+
+/* Chat and discussion entries fade in when they mount: opacity only, short, so nothing shifts or reflows. */
+@keyframes chat-entry-in { from { opacity: 0; } }
+.chat-entry { animation: chat-entry-in 200ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .chat-entry { animation: none; } }
