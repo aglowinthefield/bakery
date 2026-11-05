@@ -234,6 +234,8 @@ export type Card = {
   reviewWait?: ReviewWait | null;
   /** For a card waiting on an agent review that has not started: its place in its board's queue. */
   reviewQueue?: { position: number; of: number } | null;
+  /** On a Review card that is your turn: what the next step is, once the server knows; see `reviewActionLabels`. */
+  reviewAction?: ReviewAction | null;
   /** A start was asked for during a restart drain and runs after the restart. */
   startQueued?: boolean;
   /** Files attached to the card; the Attachments section only fetches the list when this is above 0. */
@@ -251,6 +253,16 @@ export type CountKey = Status | "reviewWaiting";
 export const countKey = (card: Card): CountKey =>
   card.status === "review" && card.reviewWait ? "reviewWaiting" : card.status;
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
+export type ReviewAction = "pr_ready" | "accept_findings";
+export const reviewActionLabels: Record<ReviewAction, string> = {
+  pr_ready: "PR ready",
+  accept_findings: "Accept findings",
+};
+/** The next step on a Review card you can act on, or "" while it is waiting or the step is not known yet. */
+export const reviewActionText = (card: Card): string =>
+  needsYourReview(card) && card.reviewAction
+    ? reviewActionLabels[card.reviewAction]
+    : "";
 export const reviewWaitLabels: Record<ReviewWait, string> = {
   agent_review: "Agent reviewing",
   ci_fix: "CI fix queued",

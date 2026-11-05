@@ -265,6 +265,13 @@ export class Integration {
     return { fingerprint, paths, patchChars, unsupported };
   }
 
+  /** Notes how many files the card's reviewed run changes, so Review tiles can say Approve or Accept findings. Best effort. */
+  recordChangedFiles(card: Card): void {
+    const run = this.board.listRuns(card.id)[0];
+    if (card.status !== "review" || run?.status !== "review") return;
+    try { this.board.recordChangedFiles(run.id, this.reviewSummary(card, false).paths.length); } catch { /* The tile just stays unlabeled. */ }
+  }
+
   review(card: Card): ReviewDiff {
     const { fingerprint, files } = this.snapshot(card, true);
     return { fingerprint, files };

@@ -60,6 +60,12 @@ export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number |
  */
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
 /**
+ * What a person does next with a Review card that is their turn: approve changed files (`pr_ready`) or close a run
+ * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
+ * something else (an approval in progress, a merge failure, a closed PR or failing checks) has to be dealt with first.
+ */
+export type ReviewAction = "pr_ready" | "accept_findings";
+/**
  * Sentinel jobs are the cards the sentinel makes on its own: a fix for a broken PR (idempotency key `sentinel:`) or a
  * `/bakery` comment on a PR (`request:`). The sentinel starts them itself, so they live outside the kanban's workflow:
  * auto-pickup never picks them, its limits and pauses do not hold them, and they take no run slot from other cards.
@@ -76,6 +82,8 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   reviewWait: ReviewWait | null;
   /** Where the card waits for an agent review to start on its board (1 is next); null when it is not queued. */
   reviewQueue: { position: number; of: number } | null;
+  /** See `ReviewAction`. */
+  reviewAction: ReviewAction | null;
   /** A start was asked for during a restart drain and runs after the restart. */
   startQueued: boolean;
   /** Files attached to the card, including those sent with discussion messages. */
@@ -88,7 +96,7 @@ export type CardRef = { id: string; title: string; status: CardStatus };
 const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
-type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "reviewQueue" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
+type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number };
 /** A file on a card. `messageId` is set when it was sent with a discussion message. */
 export type Attachment = { id: string; cardId: string; messageId: string | null; name: string; type: string; size: number; createdAt: string };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string; attachments: Attachment[] };
@@ -102,7 +110,9 @@ export type Chat = { id: string; boardId: string; title: string; topic: string; 
 /** What an agent turn did, in order: reply text and the tools it ran. */
 export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
-export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null } & UsageFields;
+export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null;
+  /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
+  changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
@@ -308,6 +318,8 @@ export class Board {
     if (!runColumns.has("lastActivityAt")) this.db.exec("ALTER TABLE runs ADD COLUMN lastActivityAt TEXT");
     // 1 when the run was handed a PR's CI failures; its result is pushed to the PR without a manual Approve.
     if (!runColumns.has("ciFix")) this.db.exec("ALTER TABLE runs ADD COLUMN ciFix INTEGER NOT NULL DEFAULT 0");
+    // Lets a Review tile say whether the next step is Approve or Accept findings without loading the diff.
+    if (!runColumns.has("changedFiles")) this.db.exec("ALTER TABLE runs ADD COLUMN changedFiles INTEGER");
     // The agent's final message, kept apart from the transcript so the card can show it as markdown.
     if (!runColumns.has("report")) {
       this.db.exec("ALTER TABLE runs ADD COLUMN report TEXT");
@@ -852,9 +864,8 @@ export class Board {
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
   }
   /** See `ReviewWait`. Anything this does not recognize as someone else's turn is the person's turn. */
-  private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "startQueued">, repoBoard: RepoBoard | undefined): ReviewWait | null {
+  private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued">, repoBoard: RepoBoard | undefined, run = this.listRuns(card.id)[0]): ReviewWait | null {
     if (card.status !== "review" || !repoBoard) return null;
-    const run = this.listRuns(card.id)[0];
     if (run?.status !== "review") return null;
     if (repoBoard.integration === "github-pr") {
       // Before a pull request exists, an agent review in progress or queued is the agent's turn.
@@ -869,6 +880,17 @@ export class Board {
     if (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run)) return "agent_review";
     return null;
   }
+  /** See `ReviewAction`. Mirrors when card details offer Approve or Accept findings. */
+  private reviewAction(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued">, wait: ReviewWait | null, run: Run | undefined): ReviewAction | null {
+    if (card.status !== "review" || wait || run?.status !== "review" || run.changedFiles === null) return null;
+    if (this.getApproval(card.id) || this.getMergeFailure(card.id)) return null;
+    if (run.changedFiles === 0) return "accept_findings";
+    return card.prState === "CLOSED" || card.prChecks === "failing" ? null : "pr_ready";
+  }
+  /** Records how many files a run changes; see `Run.changedFiles`. */
+  recordChangedFiles(runId: string, count: number) {
+    this.db.prepare("UPDATE runs SET changedFiles=? WHERE id=? AND (changedFiles IS NULL OR changedFiles!=?)").run(count, runId, count);
+  }
   private toCards(rows: CardRow[]): Card[] {
     const boards = new Map(this.listBoards().map(item => [item.repo, item]));
     const reviewQueues = new Map<string, { cardId: string }[]>();
@@ -882,8 +904,9 @@ export class Board {
     const queued = new Set((this.db.prepare("SELECT cardId FROM queued_starts").all() as { cardId: string }[]).map(item => item.cardId));
     return rows.map(row => {
       const card = { ...row, createdCardIds: row.createdCardIds === null ? null : JSON.parse(row.createdCardIds) as string[], dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0, locallyMerged: row.locallyMerged !== 0, planOnly: row.planOnly !== 0 };
-      const reviewWait = this.reviewWait(card, boards.get(card.repo));
-      return { ...card, reviewWait, reviewQueue: reviewQueue(card, reviewWait), startQueued: queued.has(card.id) };
+      const run = card.status === "review" ? this.listRuns(card.id)[0] : undefined;
+      const reviewWait = this.reviewWait(card, boards.get(card.repo), run);
+      return { ...card, reviewWait, reviewQueue: reviewQueue(card, reviewWait), reviewAction: this.reviewAction(card, reviewWait, run), startQueued: queued.has(card.id) };
     });
   }
   autoReviewMergesToday(repo: string): number {
