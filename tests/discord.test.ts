@@ -14,7 +14,7 @@ function fixture() {
   const run = (status: "review" | "failed" | "interrupted") => {
     const card = board.createCard({ repo, title: "Add a new line", body: "" });
     board.setStatus(card.id, "ready");
-    const r = board.claim(card.id); board.finish(r.id, status, status === "failed" ? "boom" : undefined);
+    const r = board.claim(card.id); board.finish(r.id, status as "review", status === "failed" ? "boom" : undefined);
   };
   return { board, run, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
