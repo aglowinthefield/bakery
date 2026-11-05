@@ -157,6 +157,9 @@ export function ChatView({
   const end = useRef<HTMLDivElement>(null);
   // Whether the open chat is known to hold a message (messages are never removed, so this cannot go stale the wrong way), and the chats with a first send in flight.
   const latest = useRef({ count: 0, live: false });
+  // A reply the operator watched stream in is already on screen; its saved copy mounts under a new key and must not fade in again.
+  const liveShown = useRef(false);
+  const quiet = useRef(new Set<string>());
   latest.current.count = state.messages.length;
   latest.current.live = !!state.live;
   const sendsInFlight = useRef(new Set<string>());
@@ -346,6 +349,8 @@ export function ChatView({
   // The transcript comes from one fetch, then the event stream carries the live reply and each saved message.
   useEffect(() => {
     setState({ messages: [], live: null });
+    liveShown.current = false;
+    quiet.current.clear();
     if (!chatId) return;
     let current = true;
     const url = `${base}/${chatId}`;
@@ -353,15 +358,27 @@ export function ChatView({
       api<{ messages: ChatMessage[]; live: ChatLive }>(url)
         .then((data) => {
           if (!current) return;
-          setState((previous) => ({
-            messages: [
-              ...data.messages,
-              ...previous.messages.filter(
-                (item) => !data.messages.some((saved) => saved.id === item.id),
-              ),
-            ],
-            live: previous.live ?? data.live,
-          }));
+          setState((previous) => {
+            // A reply watched live whose saved copy only arrives through this catch-up is already on screen.
+            const known = new Set(previous.messages.map((item) => item.id));
+            const caught = data.messages.filter(
+              (item) => item.role === "agent" && !known.has(item.id),
+            );
+            if (liveShown.current && caught.length) {
+              liveShown.current = false;
+              quiet.current.add(caught[caught.length - 1].id);
+            }
+            return {
+              messages: [
+                ...data.messages,
+                ...previous.messages.filter(
+                  (item) =>
+                    !data.messages.some((saved) => saved.id === item.id),
+                ),
+              ],
+              live: previous.live ?? data.live,
+            };
+          });
         })
         .catch((err) => current && fail(err));
     void load();
@@ -418,10 +435,15 @@ export function ChatView({
               ) ?? previous,
           );
         } else if (data.type === "live") {
+          if (data.live) liveShown.current = true;
           setState((previous) => ({ ...previous, live: data.live }));
           if (data.live === null) void refresh();
         } else {
           const message = data.message;
+          if (message.role === "agent" && liveShown.current) {
+            liveShown.current = false;
+            quiet.current.add(message.id);
+          }
           setState((previous) => ({
             ...previous,
             messages: previous.messages.some((item) => item.id === message.id)
@@ -780,7 +802,7 @@ export function ChatView({
             <li
               key={item.id}
               data-role={item.role}
-              className={`rounded-md border p-3 ${item.role === "user" ? "ml-8 border-primary/30 bg-primary/10" : item.role === "error" ? "mr-8 border-destructive/30 bg-destructive/10 text-destructive" : "mr-8 border-border bg-accent/10"}`}
+              className={`${quiet.current.has(item.id) ? "" : "chat-entry "}rounded-md border p-3 ${item.role === "user" ? "ml-8 border-primary/30 bg-primary/10" : item.role === "error" ? "mr-8 border-destructive/30 bg-destructive/10 text-destructive" : "mr-8 border-border bg-accent/10"}`}
             >
               <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                 <span>
@@ -815,7 +837,7 @@ export function ChatView({
           {state.live && (
             <li
               data-live="true"
-              className="mr-8 rounded-md border border-border bg-accent/10 p-3"
+              className="chat-entry mr-8 rounded-md border border-border bg-accent/10 p-3"
             >
               <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                 Agent
