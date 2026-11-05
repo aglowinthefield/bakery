@@ -57,6 +57,7 @@ import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { FilePicker, formatSize, uploadAttachment } from "./attachments.js";
 import { ago, api, date, listModels } from "./api.js";
+import { applyOrder, moveId } from "./model.js";
 import {
   agentPhases,
   emptyAgentModels,
@@ -668,6 +669,25 @@ export function App() {
       localStorage.setItem("bakery-repo-open", JSON.stringify(next));
       return next;
     });
+  const [repoOrder, setRepoOrder] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("bakery-repo-order") ?? "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [dragRepo, setDragRepo] = useState<string | null>(null);
+  const [dropRepo, setDropRepo] = useState<string | null>(null);
+  const sortedBoards = applyOrder(boards, repoOrder);
+  const dropRepoBefore = (before: string | null) => {
+    if (dragRepo && dragRepo !== before) {
+      const next = moveId(sortedBoards, dragRepo, before);
+      setRepoOrder(next);
+      localStorage.setItem("bakery-repo-order", JSON.stringify(next));
+    }
+    setDragRepo(null);
+    setDropRepo(null);
+  };
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     Math.min(
       480,
@@ -1618,7 +1638,7 @@ export function App() {
             )}
           </button>
           <div id="sidebar-repositories" hidden={reposCollapsed}>
-            {boards.map((item) => {
+            {sortedBoards.map((item) => {
               const active = view === "board" && boardId === item.id;
               const pullsActive = view === "pulls" && boardId === item.id;
               const visualizerActive =
@@ -1628,7 +1648,30 @@ export function App() {
                 repoOpen[item.id] ??
                 (active || pullsActive || visualizerActive || chatActive);
               return (
-                <div key={item.id} className="rounded-md">
+                <div
+                  key={item.id}
+                  draggable
+                  data-repo-id={item.id}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", item.id);
+                    setDragRepo(item.id);
+                  }}
+                  onDragOver={(event) => {
+                    if (!dragRepo) return;
+                    event.preventDefault();
+                    setDropRepo(item.id);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    dropRepoBefore(item.id);
+                  }}
+                  onDragEnd={() => {
+                    setDragRepo(null);
+                    setDropRepo(null);
+                  }}
+                  className={`rounded-md ${dragRepo === item.id ? "opacity-50" : ""} ${dropRepo === item.id && dragRepo && dragRepo !== item.id ? "border-t-2 border-primary" : ""}`}
+                >
                   {/* The whole row toggles; keyboard clicks on the button bubble up to it. */}
                   <div
                     className="cursor-pointer rounded-md pb-1.5 hover:bg-accent/30"
@@ -1742,6 +1785,20 @@ export function App() {
                 </div>
               );
             })}
+            {dragRepo && (
+              <div
+                data-repo-end
+                className={`h-3 rounded-md ${dropRepo === "" ? "border-t-2 border-primary" : ""}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDropRepo("");
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  dropRepoBefore(null);
+                }}
+              />
+            )}
             <Button
               variant="ghost"
               className="mt-1 w-full justify-start text-[length:var(--text-sidebar)] font-normal text-muted-foreground hover:text-foreground"

@@ -416,3 +416,28 @@ export type ChatMessage = {
 };
 /** The reply being written; null when the agent is idle. */
 export type ChatLive = { startedAt: string; parts: ChatPart[] } | null;
+/** `items` sorted by the saved id order; ids not in the order (new repos) keep their place after the ordered ones. */
+export function applyOrder<T extends { id: string }>(
+  items: T[],
+  order: string[],
+) {
+  const rank = (id: string) => {
+    const index = order.indexOf(id);
+    return index === -1 ? order.length : index;
+  };
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => rank(a.item.id) - rank(b.item.id) || a.index - b.index)
+    .map((entry) => entry.item);
+}
+/** The ids of `items` with `from` moved to sit before `before`, or to the end when `before` is null. */
+export function moveId(
+  items: { id: string }[],
+  from: string,
+  before: string | null,
+) {
+  const ids = items.map((item) => item.id).filter((id) => id !== from);
+  const at = before === null ? -1 : ids.indexOf(before);
+  ids.splice(at === -1 ? ids.length : at, 0, from);
+  return ids;
+}
