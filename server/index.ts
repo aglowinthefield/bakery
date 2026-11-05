@@ -1,3 +1,4 @@
+import { Discord } from "./discord.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -116,6 +117,8 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
 // BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
 const runLocks = new RunLocks(board, prLocks, sentinelStore, process.env.BAKERY_SENTINEL !== "0");
+// BAKERY_DISCORD_WEBHOOK_URL posts a message to that Discord channel when a run finishes.
+new Discord(board, process.env.BAKERY_DISCORD_WEBHOOK_URL || undefined);
 const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000, 60_000,
   card => worker.start(card, "manual", "by Bakery's sentinel"));
 /**
