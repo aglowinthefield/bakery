@@ -102,6 +102,7 @@ import {
   cardActivity,
   countKey,
   dropTargets,
+  sharedDropTargets,
   readyCompanions,
   needsYourReview,
   reviewWaitText,
@@ -888,12 +889,16 @@ export function App() {
   // What the last drop moved, shown until dismissed or replaced.
   const [moveNotice, setMoveNotice] = useState("");
   const [dropLane, setDropLane] = useState<Status | null>(null);
-  const [selectingDone, setSelectingDone] = useState(false);
-  const [doneSelection, setDoneSelection] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    setSelectingDone(false);
-    setDoneSelection(new Set());
-  }, [boardId]);
+  // The lane being multi-selected, and the cards ticked in it.
+  const [selectingLane, setSelectingLane] = useState<Lane["id"] | null>(null);
+  const [laneSelection, setLaneSelection] = useState<Set<string>>(new Set());
+  const [bulkTarget, setBulkTarget] = useState<Status | "">("");
+  const stopSelecting = () => {
+    setSelectingLane(null);
+    setLaneSelection(new Set());
+    setBulkTarget("");
+  };
+  useEffect(stopSelecting, [boardId]);
   const [manualCollapse, setManualCollapse] = useState<
     Record<string, Partial<Record<Status, boolean>>>
   >({});
@@ -1428,27 +1433,55 @@ export function App() {
   );
   const visibleCards = filterCards(cards, query);
   const splitReview = currentBoard?.integration === "github-pr";
-  // Bulk selection only covers cards the search leaves visible.
-  const doneIds = visibleCards
-    .filter((item) => item.status === "done")
-    .map((item) => item.id);
-  // Polling can move cards out of Done; only act on cards still there.
-  const selectedDone = doneIds.filter((id) => doneSelection.has(id));
-  const toggleDoneSelection = (id: string) =>
-    setDoneSelection((previous) => {
+  // Bulk selection only covers cards the search leaves visible. Polling can
+  // move cards out of the lane; only act on cards still there.
+  const selectedCards = selectingLane
+    ? visibleCards.filter(
+        (item) =>
+          laneOf(item, splitReview) === selectingLane &&
+          laneSelection.has(item.id),
+      )
+    : [];
+  const bulkTargets = sharedDropTargets(selectedCards);
+  const toggleLaneSelection = (id: string) =>
+    setLaneSelection((previous) => {
       const next = new Set(previous);
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  const archiveSelected = () => {
-    if (!boardId || selectedDone.length === 0) return;
+  const moveSelected = async () => {
+    if (
+      !boardId ||
+      selectedCards.length === 0 ||
+      !bulkTargets.includes(bulkTarget as Status)
+    )
+      return;
+    const to = bulkTarget as Status;
+    const path = `/boards/${boardId}/cards`;
+    const ids = selectedCards.map((item) => item.id);
+    if (
+      to === "running" &&
+      settings?.confirmRunStart &&
+      !(await confirmAction(
+        `Start Pi on ${ids.length} ${ids.length === 1 ? "card" : "cards"}? These runs may use paid model tokens and can edit their Git worktrees.`,
+      ))
+    )
+      return;
     void action(async () => {
-      await api(`/boards/${boardId}/cards/archive`, {
-        method: "POST",
-        body: JSON.stringify({ cardIds: selectedDone }),
-      });
-      setSelectingDone(false);
-      setDoneSelection(new Set());
+      if (to === "archived" || selectedCards[0].status === "archived")
+        await api(`${path}/${to === "archived" ? "archive" : "unarchive"}`, {
+          method: "POST",
+          body: JSON.stringify({ cardIds: ids }),
+        });
+      else
+        for (const id of ids)
+          await api(`${path}/${id}/${to === "running" ? "start" : "status"}`, {
+            method: "POST",
+            ...(to === "running"
+              ? {}
+              : { body: JSON.stringify({ status: to }) }),
+          });
+      stopSelecting();
     });
   };
   // Each drop calls the same endpoint as the matching button in the card's details.
@@ -2330,7 +2363,14 @@ export function App() {
                   (column.id === "archived" ||
                     (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
               const selecting =
-                column.id === "done" && selectingDone && laneCards.length > 0;
+                selectingLane === column.id && laneCards.length > 0;
+              const laneIds = laneCards.map((item) => item.id);
+              const selectedInLane = laneIds.filter((id) =>
+                laneSelection.has(id),
+              );
+              const canSelect = laneCards.some(
+                (item) => dropTargets(item).length > 0,
+              );
               const droppable =
                 !!dragging?.targets.includes(column.status) &&
                 column.id === column.status;
@@ -2414,20 +2454,20 @@ export function App() {
                         <span className="ml-auto rounded-md bg-secondary px-2 py-0.5 font-mono text-xs text-muted-foreground">
                           {laneCards.length}
                         </span>
-                        {column.id === "done" &&
-                          laneCards.length > 0 &&
-                          !selecting && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectingDone(true);
-                                setDoneSelection(new Set());
-                              }}
-                              className="rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            >
-                              Select
-                            </button>
-                          )}
+                        {canSelect && !selecting && (
+                          <button
+                            type="button"
+                            aria-label={`Select in ${column.label}`}
+                            onClick={() => {
+                              setSelectingLane(column.id);
+                              setLaneSelection(new Set());
+                              setBulkTarget("");
+                            }}
+                            className="rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            Select
+                          </button>
+                        )}
                         <button
                           type="button"
                           aria-label={`Collapse ${column.label} lane`}
@@ -2454,49 +2494,76 @@ export function App() {
                       {selecting && (
                         <div
                           role="toolbar"
-                          aria-label="Done card selection"
+                          aria-label={`${column.label} card selection`}
                           className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs"
                         >
                           <label className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               className="accent-primary"
-                              checked={selectedDone.length === doneIds.length}
+                              checked={selectedInLane.length === laneIds.length}
                               ref={(element) => {
                                 if (element)
                                   element.indeterminate =
-                                    selectedDone.length > 0 &&
-                                    selectedDone.length < doneIds.length;
+                                    selectedInLane.length > 0 &&
+                                    selectedInLane.length < laneIds.length;
                               }}
                               onChange={(event) =>
-                                setDoneSelection(
-                                  new Set(event.target.checked ? doneIds : []),
+                                setLaneSelection(
+                                  new Set(event.target.checked ? laneIds : []),
                                 )
                               }
                             />
                             Select all
                           </label>
                           <span className="text-muted-foreground">
-                            {selectedDone.length} selected
+                            {selectedInLane.length} selected
                           </span>
+                          <select
+                            aria-label="Move selected cards to"
+                            className="min-w-0 rounded-md border border-border bg-background px-2 py-1"
+                            disabled={busy || selectedCards.length === 0}
+                            value={
+                              bulkTargets.includes(bulkTarget as Status)
+                                ? bulkTarget
+                                : ""
+                            }
+                            onChange={(event) =>
+                              setBulkTarget(event.target.value as Status | "")
+                            }
+                          >
+                            <option value="">
+                              {selectedCards.length > 0 &&
+                              bulkTargets.length === 0
+                                ? "No shared move"
+                                : "Move to…"}
+                            </option>
+                            {bulkTargets.map((status) => (
+                              <option key={status} value={status}>
+                                {columns.find((lane) => lane.status === status)
+                                  ?.label ?? status}
+                              </option>
+                            ))}
+                          </select>
                           <div className="ml-auto flex gap-1">
                             <Button
                               size="sm"
                               variant="ghost"
                               disabled={busy}
-                              onClick={() => {
-                                setSelectingDone(false);
-                                setDoneSelection(new Set());
-                              }}
+                              onClick={stopSelecting}
                             >
                               Cancel
                             </Button>
                             <Button
                               size="sm"
-                              disabled={busy || selectedDone.length === 0}
-                              onClick={archiveSelected}
+                              disabled={
+                                busy ||
+                                selectedCards.length === 0 ||
+                                !bulkTargets.includes(bulkTarget as Status)
+                              }
+                              onClick={moveSelected}
                             >
-                              Archive
+                              Move
                             </Button>
                           </div>
                         </div>
@@ -2637,7 +2704,7 @@ export function App() {
                           const cardClass =
                             "group block w-full rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
                           if (selecting) {
-                            const checked = doneSelection.has(item.id);
+                            const checked = laneSelection.has(item.id);
                             return (
                               <label
                                 key={item.id}
@@ -2648,7 +2715,7 @@ export function App() {
                                   className="absolute top-3 right-3 size-4 accent-primary"
                                   aria-label={`Select ${item.title}`}
                                   checked={checked}
-                                  onChange={() => toggleDoneSelection(item.id)}
+                                  onChange={() => toggleLaneSelection(item.id)}
                                 />
                                 {content}
                               </label>

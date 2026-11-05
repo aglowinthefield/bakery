@@ -310,6 +310,15 @@ export function dropTargets(card: Card): Status[] {
       return [];
   }
 }
+/** The lanes every one of these cards can move to, so a bulk move never half-applies. */
+export const sharedDropTargets = (cards: Card[]): Status[] =>
+  cards.length === 0
+    ? []
+    : cards
+        .map(dropTargets)
+        .reduce((shared, targets) =>
+          shared.filter((status) => targets.includes(status)),
+        );
 const finished = (status: Status) => status === "done" || status === "archived";
 /**
  * The cards this card still waits on, from the cards the page already has. Only Today's list
