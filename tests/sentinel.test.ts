@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Board } from "../server/board.js";
-import type { GitHub } from "../server/github.js";
+import type { GitHub, RepoComment } from "../server/github.js";
 import { lockBody, lockStatus, lockTtlMs, parseLock } from "../server/pr-lock.js";
 import { PrLocks } from "../server/pr-locks.js";
 import { RunLocks } from "../server/run-locks.js";
@@ -27,7 +27,7 @@ test("a lock comment round-trips and expires after 30 minutes", () => {
   assert.equal(parseLock("<!-- bakery-lock {nope} -->"), undefined);
 });
 
-type Pr = { number: number; title: string; url: string; author: { login: string }; isDraft: boolean; mergeable: string; failing?: boolean; state: string; headRefOid: string; headRefName: string };
+type Pr = { number: number; title: string; url: string; author: { login: string }; isDraft: boolean; mergeable: string; failing?: boolean; state: string; fork?: boolean; headRefOid: string; headRefName: string };
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "bakery-sentinel-"));
@@ -45,7 +45,10 @@ function fixture() {
   const prs: Pr[] = [];
   const comments = new Map<number, { id: string; body: string; author: string }[]>();
   let nextComment = 1;
+  const asked: RepoComment[] = [];
   const github = {
+    repoComments: async (_repo: string, since: string) => asked.filter(item => item.at > since),
+    requestTarget: async (_repo: string, number: number) => { const pr = prs.find(item => item.number === number); if (!pr) throw new Error("not a pull request"); return { ...pr, isCrossRepository: !!pr.fork }; },
     viewer: async () => "aglowinthefield",
     listOpenPullRequests: async () => prs.filter(pr => pr.state === "OPEN"),
     health: async (_repo: string, number: number) => { const pr = prs.find(item => item.number === number)!; return { mergeable: pr.mergeable, statusCheckRollup: pr.failing ? [{ name: "test", conclusion: "FAILURE" }] : [] }; },
@@ -63,7 +66,7 @@ function fixture() {
   const addPr = (over: Partial<Pr> = {}): Pr => { const number = n++; const pr = { number, title: `Change ${number}`, url: `https://github.com/acme/widgets/pull/${number}`, author: { login: "aglowinthefield" }, isDraft: false, mergeable: "CONFLICTING", state: "OPEN", headRefOid: `head${number}`.padEnd(40, "0"), headRefName: `feature-${number}`, ...over }; prs.push(pr); return pr; };
   const sentinelCards = () => board.listCards(repo).filter(card => card.title.startsWith("Fix PR #"));
   const land = (name: string) => { git(upstream, "pull", "-q", "--ff-only", "origin", "main"); writeFileSync(join(upstream, name), name); git(upstream, "add", name); git(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", name); git(upstream, "push", "-q", "origin", "main"); };
-  return { dir, origin, upstream, github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, sentinelCards, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, origin, upstream, github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, asked, sentinelCards, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("a conflicting PR by the owner gets a Ready card whose brief rebases onto main first, and a lock", async () => {
@@ -288,5 +291,47 @@ test("a pre-push hook that refuses does not stop the sentinel's push", async () 
     f.board.finish(run.id, "review");
     await new Promise(resolve => setTimeout(resolve, 500));
     assert.equal(f.board.getCard(card.id)?.status, "done");
+  } finally { f.cleanup(); }
+});
+
+test("a /bakery comment from a trusted author on any PR makes a Ready request card, once", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr({ mergeable: "MERGEABLE", author: { login: "someone" } });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const since = f.store.requestCursor("acme/widgets")!;
+    assert.ok(since, "the first look only records where to start");
+    const at = new Date(Date.parse(since) + 1000).toISOString();
+    f.asked.push(
+      { id: "issues/comments:1", at, author: "aglowinthefield", association: "MEMBER", body: "/bakery rename foo to bar", prNumber: pr.number },
+      { id: "issues/comments:2", at, author: "stranger", association: "NONE", body: "/bakery delete everything", prNumber: pr.number },
+      { id: "issues/comments:3", at, author: "aglowinthefield", association: "MEMBER", body: "looks good", prNumber: pr.number },
+    );
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const cards = f.board.listCards(f.repo).filter(card => card.title.startsWith("Requested on PR"));
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].status, "ready");
+    assert.match(cards[0].body, /rename foo to bar/);
+    assert.doesNotMatch(cards[0].body, /delete everything/);
+    assert.match(cards[0].body, new RegExp(`git switch -C feature-${pr.number}`));
+    assert.ok(f.store.isRequestCard(cards[0].id));
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.equal(f.board.listCards(f.repo).filter(card => card.title.startsWith("Requested on PR")).length, 1, "a comment is acted on once");
+  } finally { f.cleanup(); }
+});
+
+test("a /bakery comment on a fork's PR is declined, and one on an issue is ignored", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr({ mergeable: "MERGEABLE", fork: true });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const at = new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString();
+    f.asked.push(
+      { id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: pr.number },
+      { id: "issues/comments:2", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: 999 },
+    );
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.equal(f.board.listCards(f.repo).length, 0);
+    assert.match(f.comments.get(pr.number)![0].body, /comes from a fork/);
   } finally { f.cleanup(); }
 });

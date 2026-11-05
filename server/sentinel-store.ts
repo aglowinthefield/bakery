@@ -10,6 +10,8 @@ export class SentinelStore {
     db.exec(`
       CREATE TABLE IF NOT EXISTS pr_locks (repo TEXT NOT NULL, prNumber INTEGER NOT NULL, holder TEXT NOT NULL, startedAt TEXT NOT NULL, releasedAt TEXT, commentId TEXT, state TEXT NOT NULL CHECK(state IN ('pending','held','released')), PRIMARY KEY (repo, prNumber));
       CREATE TABLE IF NOT EXISTS sentinel_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, prNumber INTEGER NOT NULL, branch TEXT NOT NULL, head TEXT NOT NULL, mainTip TEXT NOT NULL, cardId TEXT NOT NULL, at TEXT NOT NULL, UNIQUE(repo, prNumber, head, mainTip));
+      CREATE TABLE IF NOT EXISTS pr_request_cursor (repo TEXT PRIMARY KEY, since TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS pr_request_cards (cardId TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS sentinel_given_up (repo TEXT NOT NULL, prNumber INTEGER NOT NULL, at TEXT NOT NULL, PRIMARY KEY (repo, prNumber));
     `);
   }
@@ -37,11 +39,25 @@ export class SentinelStore {
   markReleased(repo: string, prNumber: number, releasedAt: string): void {
     this.db.prepare("UPDATE pr_locks SET releasedAt=?, state='released' WHERE repo=? AND prNumber=?").run(releasedAt, repo, prNumber);
   }
+  /** Comments up to this time have been read for `/bakery` requests; undefined until the repository is first looked at. */
+  requestCursor(repo: string): string | undefined {
+    return (this.db.prepare("SELECT since FROM pr_request_cursor WHERE repo=?").get(repo) as { since: string } | undefined)?.since;
+  }
+  setRequestCursor(repo: string, since: string): void {
+    this.db.prepare("INSERT INTO pr_request_cursor(repo, since) VALUES (?, ?) ON CONFLICT(repo) DO UPDATE SET since=excluded.since").run(repo, since);
+  }
+  /** Marks an attempt's card as made for a `/bakery` request, not to fix a broken PR: the sentinel's limits and withdrawal leave it alone. */
+  markRequestCard(cardId: string): void { this.db.prepare("INSERT OR IGNORE INTO pr_request_cards(cardId) VALUES (?)").run(cardId); }
+  isRequestCard(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM pr_request_cards WHERE cardId=?").get(cardId); }
+  /** Request cards of this repo with the PR each is for. */
+  listRequestCards(repo: string): { cardId: string; prNumber: number }[] {
+    return this.db.prepare("SELECT a.cardId, a.prNumber FROM sentinel_attempts a JOIN pr_request_cards r ON r.cardId=a.cardId WHERE a.repo=?").all(repo) as { cardId: string; prNumber: number }[];
+  }
   attemptCount(repo: string, prNumber: number): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM sentinel_attempts WHERE repo=? AND prNumber=?").get(repo, prNumber) as { n: number }).n;
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM sentinel_attempts WHERE repo=? AND prNumber=? AND cardId NOT IN (SELECT cardId FROM pr_request_cards)").get(repo, prNumber) as { n: number }).n;
   }
   hasAttempt(repo: string, prNumber: number, head: string, mainTip: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM sentinel_attempts WHERE repo=? AND prNumber=? AND head=? AND mainTip=?").get(repo, prNumber, head, mainTip);
+    return !!this.db.prepare("SELECT 1 FROM sentinel_attempts WHERE repo=? AND prNumber=? AND head=? AND mainTip=? AND cardId NOT IN (SELECT cardId FROM pr_request_cards)").get(repo, prNumber, head, mainTip);
   }
   recordAttempt(repo: string, prNumber: number, branch: string, head: string, mainTip: string, cardId: string, at: string): void {
     this.db.prepare("INSERT INTO sentinel_attempts(repo, prNumber, branch, head, mainTip, cardId, at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(repo, prNumber, branch, head, mainTip, cardId, at);
@@ -56,7 +72,7 @@ export class SentinelStore {
   }
   /** Card ids of every sentinel attempt on a repo. */
   listAttemptCards(repo: string): string[] {
-    return (this.db.prepare("SELECT cardId FROM sentinel_attempts WHERE repo=?").all(repo) as { cardId: string }[]).map(row => row.cardId);
+    return (this.db.prepare("SELECT cardId FROM sentinel_attempts WHERE repo=? AND cardId NOT IN (SELECT cardId FROM pr_request_cards)").all(repo) as { cardId: string }[]).map(row => row.cardId);
   }
   attemptPr(cardId: string): number | undefined {
     return (this.db.prepare("SELECT prNumber FROM sentinel_attempts WHERE cardId=?").get(cardId) as { prNumber: number } | undefined)?.prNumber;

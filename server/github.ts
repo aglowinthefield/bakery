@@ -177,6 +177,16 @@ const prCommentsQuery = `query($owner: String!, $name: String!, $number: Int!) {
   reviews(last: 50) { nodes { id submittedAt authorAssociation author { login } body comments(first: 100) { nodes { id createdAt authorAssociation author { login } body path line originalLine } } } }
 } } }`;
 
+/** A `/bakery` request found by scanning a repository's comments, before the PR it is on is looked up. */
+export type RepoComment = { id: string; at: string; author: string; association: string; body: string; prNumber: number; path?: string; line?: number | null };
+/** A PR as a request on it needs to see it: Bakery can only push to a branch in the same repository. */
+export type RequestTarget = { number: number; title: string; url: string; state: PullRequest["state"]; headRefName: string; headRefOid: string; isCrossRepository: boolean };
+
+/** The `/bakery` comments among `comments` from trusted authors, oldest first. */
+export function trustedBakeryComments<T extends { association: string; body: string; at: string }>(comments: T[]): T[] {
+  return comments.filter(item => trustedAssociations.includes(item.association) && mentionsBakery(item.body)).sort((a, b) => a.at.localeCompare(b.at));
+}
+
 export class GitHub {
   constructor(private readonly ghBin = "gh", private readonly cwd?: string) {}
   private async gh(args: string[]): Promise<string> { return (await run(this.ghBin, args, this.cwd)).stdout; }
@@ -237,7 +247,20 @@ export class GitHub {
   async comment(repo: string, number: number, body: string): Promise<void> {
     await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
   }
-  /** The signed-in GitHub user. */
+  /**
+   * Every conversation comment and inline review comment in the repository updated since `since`, on issues and PRs
+   * alike (the caller looks up which are PRs). Two paginated calls however many PRs are open.
+   */
+  async repoComments(repo: string, since: string): Promise<RepoComment[]> {
+    const jq = ".[] | {id: (.id | tostring), at: .created_at, author: .user.login, association: .author_association, body: .body, number: ((.issue_url // .pull_request_url) | split(\"/\") | last | tonumber), path: .path, line: (.line // .original_line)} | tojson";
+    const read = async (endpoint: string) => (await this.gh(["api", "--paginate", `repos/${repo}/${endpoint}?since=${encodeURIComponent(since)}&per_page=100`, "--jq", jq])).split("\n").filter(Boolean)
+      .map(line => { const item = JSON.parse(line); return { id: `${endpoint}:${item.id}`, at: item.at, author: item.author ?? "ghost", association: item.association, body: item.body ?? "", prNumber: item.number, ...(item.path ? { path: item.path, line: item.line } : {}) } as RepoComment; });
+    return [...await read("issues/comments"), ...await read("pulls/comments")];
+  }
+  /** What a request needs to know about a PR; throws when the number is an issue, not a PR. */
+  async requestTarget(repo: string, number: number): Promise<RequestTarget> {
+    return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "number,title,url,state,headRefName,headRefOid,isCrossRepository"])) as RequestTarget;
+  }
   /** A PR's recent comments, reviews and inline review comments, in one GraphQL call. */
   async prComments(repo: string, number: number): Promise<PrComment[]> {
     const [owner, name] = repo.split("/");
@@ -253,6 +276,7 @@ export class GitHub {
       ]),
     ];
   }
+  /** The signed-in GitHub user. */
   async viewer(): Promise<string> { return (await this.gh(["api", "user", "--jq", ".login"])).trim(); }
   /** Every comment on a PR, oldest first. */
   async listComments(repo: string, number: number): Promise<{ id: string; body: string; author: string }[]> {
