@@ -109,6 +109,7 @@ import {
   sharedDropTargets,
   readyCompanions,
   needsYourReview,
+  reviewActionText,
   reviewWaitText,
   type BakerySettings,
   type Board,
@@ -4128,11 +4129,17 @@ function ActivityBadge({
     return (
       <span
         data-testid="activity-badge"
-        title="Ready for your review"
+        title={
+          card.reviewAction === "accept_findings"
+            ? "The run changed no files; accept its findings to finish the card"
+            : card.reviewAction === "pr_ready"
+              ? "The run's changes are ready for you to review and approve"
+              : "Ready for your review"
+        }
         className="flex items-center gap-1 rounded border border-status-review bg-status-review px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] text-background"
       >
         <Eye size={10} aria-hidden />
-        Your turn
+        {reviewActionText(card) || "Your turn"}
       </span>
     );
   if (activity !== "quiet" || !card.lastActivityAt) return null;

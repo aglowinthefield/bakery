@@ -65,6 +65,17 @@ const chats = new Chats(board, {
 });
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
 const integration = new Integration(board, dataDir);
+board.onRun((event, run) => {
+  const card = event === "finished" && run.status === "review" ? board.getCard(run.cardId) : undefined;
+  if (card) integration.recordChangedFiles(card);
+});
+// Runs that reached Review before the count was kept; one at a time so a big backlog does not hold the server up.
+void (async () => {
+  for (const card of board.listCards().filter(item => item.status === "review" && board.listRuns(item.id)[0]?.changedFiles === null)) {
+    integration.recordChangedFiles(card);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+})();
 /** Drafts a pull request title and body like the Approve dialog does. Takes minutes; callers recheck the card afterwards. */
 async function draftForPullRequest(card: Card, fingerprint: string, lead: string): Promise<{ title: string; body: string }> {
   const run = board.listRuns(card.id)[0], diff = integration.review(card);
@@ -591,7 +602,10 @@ const server = createServer(async (req, res) => {
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
         if (req.method === "GET" && action === "review") {
           if (new URL(req.url ?? "/", "http://localhost").searchParams.has("fingerprint")) { send(res, 200, { fingerprint: integration.reviewFingerprint(item) }); return; }
-          send(res, 200, integration.review(item)); return;
+          const reviewed = integration.review(item);
+          const reviewedRun = board.listRuns(id)[0];
+          if (reviewedRun) board.recordChangedFiles(reviewedRun.id, reviewed.files.length);
+          send(res, 200, reviewed); return;
         }
         if (req.method === "GET" && action === "dependencies") { send(res, 200, board.listDependencies(id)); return; }
         if (req.method === "POST" && action === "dependencies") {

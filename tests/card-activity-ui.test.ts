@@ -13,6 +13,9 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     mine: { status: "review", reviewWait: null },
     agent: { status: "running", reviewWait: null, lastActivityAt: recent },
     github: { status: "review", reviewWait: "github" },
+    code: { status: "review", reviewWait: null, reviewAction: "pr_ready" },
+    findings: { status: "review", reviewWait: null, reviewAction: "accept_findings" },
+    checking: { status: "review", reviewWait: "agent_review", reviewAction: null },
     busy: { status: "running", lastActivityAt: recent },
     quiet: { status: "running", lastActivityAt: stale },
   };
@@ -50,11 +53,18 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     assert.equal(await tile("mine").getAttribute("data-activity"), null);
     assert.equal(await tile("mine").getAttribute("data-turn"), "yours");
     assert.match(await tile("mine").innerText(), /Your turn/i);
+    assert.doesNotMatch(await tile("mine").innerText(), /PR ready|Accept findings/i, "an unknown next step keeps the generic label");
+    assert.match(await tile("code").innerText(), /PR ready/i);
+    assert.equal(await tile("code").getAttribute("data-turn"), "yours");
+    assert.match(await tile("findings").innerText(), /Accept findings/i);
+    assert.equal(await tile("findings").getAttribute("data-turn"), "yours");
+    assert.doesNotMatch(await tile("checking").innerText(), /PR ready|Accept findings/i, "a card an agent still has is not labeled");
+    assert.doesNotMatch(await tile("github").innerText(), /PR ready|Accept findings/i);
     assert.equal(await tile("github").getAttribute("data-turn"), null);
     assert.doesNotMatch(await tile("github").innerText(), /Your turn/i);
     const nav = page.getByRole("list", { name: "Card counts" });
-    assert.equal(await nav.locator('[data-group="review"]').getAttribute("aria-label"), "Review: 1", "only the card you can act on counts as Review");
-    assert.equal(await nav.locator('[data-group="in-progress"]').getAttribute("aria-label"), "In progress: 4");
+    assert.equal(await nav.locator('[data-group="review"]').getAttribute("aria-label"), "Review: 3", "only the cards you can act on count as Review");
+    assert.equal(await nav.locator('[data-group="in-progress"]').getAttribute("aria-label"), "In progress: 5");
 
     // The run finishes and an agent reviews it: no notice yet, and it sits below the cards that need you.
     cards.agent = { status: "review", reviewWait: "agent_review" };
