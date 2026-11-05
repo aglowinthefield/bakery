@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-test("Done cards can be multi-selected or all selected and archived into the Archive lane", async () => {
+test("Cards in any lane can be multi-selected and moved with the dropdown, here Done into the Archive lane", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
@@ -34,17 +34,20 @@ test("Done cards can be multi-selected or all selected and archived into the Arc
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     const done = page.locator('section[data-status="done"]');
     await done.getByRole("button", { name: /one card/ }).waitFor();
-    assert.equal(await page.locator('section[data-status="ready"]').getByRole("button", { name: "Select" }).count(), 0, "only Done offers selection");
+    assert.equal(await page.locator('section[data-status="ready"]').getByRole("button", { name: "Select in Ready" }).count(), 1, "every lane with movable cards offers selection");
+    assert.equal(await page.locator('section[data-status="review"]').getByRole("button", { name: /^Select/ }).count(), 0, "lanes with no moves offer none");
     const total = page.locator("span", { hasText: /^\s*\d+\s+cards$/ }).locator("strong");
     assert.equal(await total.textContent(), "4");
 
-    await done.getByRole("button", { name: "Select" }).click();
-    const archive = done.getByRole("button", { name: "Archive" });
+    await done.getByRole("button", { name: "Select in Done" }).click();
+    const archive = done.getByRole("button", { name: "Move", exact: true });
+    const target = done.getByLabel("Move selected cards to");
     assert.equal(await archive.isDisabled(), true, "nothing selected yet");
     await done.getByRole("checkbox", { name: "Select one card" }).check();
     await done.getByRole("checkbox", { name: "Select three card" }).check();
     await done.getByText("2 selected").waitFor();
     assert.equal(await done.getByRole("checkbox", { name: "Select all" }).evaluate(el => (el as HTMLInputElement).indeterminate), true);
+    await target.selectOption({ label: "Archive" });
     await archive.click();
     await done.getByRole("button", { name: /two card/ }).waitFor();
     assert.deepEqual(requests, [["one", "three"]]);
@@ -58,10 +61,11 @@ test("Done cards can be multi-selected or all selected and archived into the Arc
     await archived.getByRole("button", { name: /one card/ }).waitFor();
     assert.equal(await archived.getByRole("button", { name: /three card/ }).isVisible(), true);
 
-    await done.getByRole("button", { name: "Select" }).click();
+    await done.getByRole("button", { name: "Select in Done" }).click();
     await done.getByRole("checkbox", { name: "Select all" }).check();
     await done.getByText("1 selected").waitFor();
-    await done.getByRole("button", { name: "Archive" }).click();
+    await target.selectOption({ label: "Archive" });
+    await done.getByRole("button", { name: "Move", exact: true }).click();
     await archived.getByRole("button", { name: /two card/ }).waitFor();
     assert.deepEqual(requests, [["one", "three"], ["two"]]);
     assert.equal(await done.getByText("Nothing here yet.").isVisible(), true);
