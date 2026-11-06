@@ -1497,9 +1497,9 @@ export class Board {
         (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
-      // After a recovery the card's session is the recovery run's, not the rejected original.
-      const resumed = this.db.prepare("SELECT sessionId FROM runs WHERE cardId=? AND recoveryOf IS NOT NULL ORDER BY attempt DESC LIMIT 1").get(cardId) as { sessionId: string } | undefined;
-      const id = randomUUID(), sessionId = freshSession || recoveryOf ? `bakery-${cardId}-${attempt}` : resumed?.sessionId ?? `bakery-${cardId}`;
+      // Later runs resume the session the card's latest run used, which is a fresh one after a recovery or a narration-free retry.
+      const latest = this.db.prepare("SELECT sessionId FROM runs WHERE cardId=? ORDER BY attempt DESC LIMIT 1").get(cardId) as { sessionId: string } | undefined;
+      const id = randomUUID(), sessionId = freshSession || recoveryOf ? `bakery-${cardId}-${attempt}` : latest?.sessionId ?? `bakery-${cardId}`;
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, recoveryOf, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy, recoveryOf);
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);

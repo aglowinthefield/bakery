@@ -37,6 +37,8 @@ export function isOutputDuplicationBlock(error: string | null): boolean {
   return !!error && /violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs/i.test(error);
 }
 
+type HandedOff = { headSha: string; failures: string; source: "ci" | "push" | "comment" | "conflict" };
+
 /** The latest run's session was rejected by the provider, so resuming it would fail the same way. Recover in a fresh session. */
 export class PoisonedSessionError extends Error {
   constructor(readonly cardId: string, readonly runId: string, detail: string) {
@@ -264,7 +266,7 @@ export class Worker {
     child.on("error", error => settle(`Worktrunk could not start: ${error.message}`));
     child.on("close", (code, signal) => settle(code === 0 ? null : `Worktrunk pre-start hooks failed (${signal ?? code ?? "unknown"}); hook output is in the transcript`));
   }
-  private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: { headSha: string; failures: string; source: "ci" | "push" | "comment" | "conflict" }): Run {
+  private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: HandedOff): Run {
     let child: ChildProcess;
     try {
       const models = piModelArgs(this.board.agentModelFor(card.repo, phase));
@@ -379,7 +381,7 @@ export class Worker {
       this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `${failure}${protocolError ? `; ${protocolError}` : ""}${stderr.trim() ? `; stderr: ${stderr.trim().slice(-1500)}` : ""}`, ok ? null : failureKind);
       if (!ok) console.error(`Pi exit for run ${run.id}: pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"} source=${reason ?? "unknown"} elapsedMs=${Date.now() - startedAt}`);
       if (stderr) console.error(`Pi diagnostics for run ${run.id}:`, stderr);
-      if (retryPlain) this.retryWithoutNarration(card, run, worktree, prompt.replace(NARRATION, PLAIN_RETRY), phase);
+      if (retryPlain) this.retryWithoutNarration(card, run, worktree, prompt.replace(NARRATION, PLAIN_RETRY), phase, handedOff);
       else if (!ok && failureKind === "invalid-history") this.recoverAfterRejection(card, run, handedOff);
     });
     return this.board.getRun(run.id)!;
@@ -389,7 +391,7 @@ export class Worker {
    * fresh-session recovery. A recovery run that is rejected again stops here: the card stays Failed with a note, and
    * only an operator's explicit `recover` tries again. Nothing else (billing, auth, other 400s) is retried here.
    */
-  private recoverAfterRejection(card: Card, failed: Run, handedOff?: { headSha: string; failures: string; source: "ci" | "push" | "comment" | "conflict" }) {
+  private recoverAfterRejection(card: Card, failed: Run, handedOff?: HandedOff) {
     if (handedOff) this.board.restoreCiFeedback(card.id, handedOff);
     if (failed.recoveryOf) {
       this.board.noteCard(card.id, `Attempt ${failed.attempt}, a fresh-session recovery, was rejected by the provider again; Bakery will not recover automatically a second time. Inspect the session evidence, then recover again by hand if it is safe`);
@@ -416,20 +418,20 @@ export class Worker {
     return this.board.getRun(run.id)!;
   }
   /** Starts the next attempt in a fresh session, since the blocked session's history is full of narration. */
-  private retryWithoutNarration(card: Card, blocked: Run, worktree: string, prompt: string, phase: AgentPhase) {
+  private retryWithoutNarration(card: Card, blocked: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: HandedOff) {
     if (this.draining) {
       this.board.noteCard(card.id, `Anthropic blocked attempt ${blocked.attempt} as reverse engineering; Bakery is restarting, so it did not retry without narration`);
       return;
     }
     let run: Run;
-    try { run = this.board.claim(card.id, "manual", `without the narration instruction, in a fresh session, because Anthropic blocked attempt ${blocked.attempt} as reverse engineering`, true); }
+    try { run = this.board.claim(card.id, "manual", `without the narration instruction, in a fresh session, because Anthropic blocked attempt ${blocked.attempt} as reverse engineering`, true, blocked.recoveryOf); }
     catch (error) {
       this.board.noteCard(card.id, `Anthropic blocked attempt ${blocked.attempt} as reverse engineering; Bakery could not retry without narration: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
     if (blocked.ciFix) this.board.startCiFix(card.id, run.id, blocked.ciFix === 2 ? "conflict" : "ci");
     this.board.append(run.id, `Retry of attempt ${blocked.attempt}, which Anthropic blocked as reverse engineering. This attempt runs in a fresh session without the narration instruction, so the live status line shows only tool activity.\n`);
-    this.launchPi(card, run, worktree, prompt, phase);
+    this.launchPi(card, run, worktree, prompt, phase, handedOff);
   }
   stop(id: string) {
     const child = this.active.get(id);

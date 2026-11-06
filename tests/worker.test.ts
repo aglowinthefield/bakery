@@ -761,3 +761,48 @@ test("restart-time migration classifies provider failures already recorded, so t
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+const outputBlocked = JSON.stringify("This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs.");
+
+test("a recovery's spent budget survives a narration-free retry: invalid-history, recovery, output-blocked, retry, invalid-history stops", async () => {
+  const f = providerFixture([rejectedHistory, outputBlocked, rejectedHistory, "ok"]);
+  try {
+    f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
+    await new Promise(resolve => setTimeout(resolve, 400));
+    const runs = f.board.listRuns(f.card.id);
+    assert.equal(runs.length, 3, "no second automatic recovery");
+    assert.deepEqual(runs.map(run => run.failureKind), ["invalid-history", "output-blocked", "invalid-history"]);
+    assert.ok(runs[0].recoveryOf, "the narration-free retry keeps the recovery lineage");
+    assert.equal(f.board.getCard(f.card.id)!.status, "failed");
+    assert.ok(f.board.listCardEvents(f.card.id).some(event => /will not recover automatically a second time/.test(event.reason)));
+  } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("CI feedback a run consumed is restored when its narration-free replacement is rejected, then reaches the recovery run", async () => {
+  const f = providerFixture([outputBlocked, rejectedHistory, "ok"]);
+  try {
+    f.board.recordCiFailure(f.card.id, "abc1234", "FAILED unit tests: SENTINEL_CI_FAILURE");
+    f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
+    const [recovery, , first] = f.board.listRuns(f.card.id);
+    assert.equal(first.failureKind, "output-blocked");
+    assert.equal(recovery.status, "review");
+    const prompts = f.fake.calls();
+    assert.match(prompts[0].prompt, /SENTINEL_CI_FAILURE/);
+    assert.match(prompts[2].prompt, /SENTINEL_CI_FAILURE/, "the recovery run is handed the same CI failures");
+  } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("later runs resume the session of the latest run, including a successful narration-free replacement after a recovery", async () => {
+  const f = providerFixture([rejectedHistory, outputBlocked, "ok"]);
+  try {
+    f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
+    const [replacement, , original] = f.board.listRuns(f.card.id);
+    assert.equal(replacement.status, "review");
+    assert.equal(replacement.sessionId, `bakery-${f.card.id}-3`);
+    assert.notEqual(replacement.sessionId, original.sessionId);
+    assert.equal(f.board.claim(f.card.id).sessionId, replacement.sessionId);
+  } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
