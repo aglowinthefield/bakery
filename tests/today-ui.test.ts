@@ -109,6 +109,73 @@ test("review queue walks Review cards oldest first and moves on once a card leav
   } finally { await page.close(); }
 });
 
+// Resolves after the page has polled the card lists twice since now, so a change made to `state` was seen.
+const polled = async (page: Page, requests: { method: string; path: string }[]) => {
+  const count = () => requests.filter(item => item.method === "GET" && /\/cards$/.test(item.path)).length;
+  const start = count();
+  for (let waited = 0; count() < start + 2; waited += 100) {
+    assert.ok(waited < 10000, "the page polled the cards");
+    await page.waitForTimeout(100);
+  }
+};
+const openToday = (page: Page, name: RegExp, lane = "Needs you") => section(page, lane).getByRole("button", { name }).click();
+const openBoard = async (page: Page, repo: string, title: string) => {
+  await page.getByRole("button", { name: repo, exact: true }).click();
+  await page.getByRole("button", { name: "Kanban" }).click();
+  await page.locator("section[data-status]").getByText(title, { exact: true }).click();
+};
+const asStatus = (state: { cards: ReturnType<typeof card>[] }, id: string, status: string) => {
+  state.cards = state.cards.map(item => item.id === id ? { ...item, status } : item);
+};
+
+for (const terminal of ["done", "archived"]) {
+  test(`an open card closes in Today when it reaches ${terminal}`, async () => {
+    const { page, state } = await open({ cards: [card("open", "/code/alpha", "review", "2026-03-01T10:00:00.000Z")] });
+    try {
+      await openToday(page, /Card open/);
+      await page.getByRole("dialog").getByRole("heading", { name: "Card open" }).waitFor();
+      asStatus(state, "open", terminal);
+      await page.getByRole("dialog").waitFor({ state: "detached", timeout: 10000 });
+    } finally { await page.close(); }
+  });
+
+  test(`an open card closes on its board when it reaches ${terminal}`, async () => {
+    const { page, state } = await open({ cards: [card("open", "/code/alpha", "review", "2026-03-01T10:00:00.000Z")] });
+    try {
+      await openBoard(page, "alpha", "Card open");
+      await page.getByRole("dialog").getByRole("heading", { name: "Card open" }).waitFor();
+      asStatus(state, "open", terminal);
+      await page.getByRole("dialog").waitFor({ state: "detached", timeout: 10000 });
+    } finally { await page.close(); }
+  });
+}
+
+test("an open card stays open through a nonterminal change", async () => {
+  const { page, state, requests } = await open({ cards: [card("open", "/code/alpha", "review", "2026-03-01T10:00:00.000Z")] });
+  try {
+    await openBoard(page, "alpha", "Card open");
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("heading", { name: "Card open" }).waitFor();
+    asStatus(state, "open", "running");
+    await polled(page, requests);
+    await dialog.getByRole("heading", { name: "Card open" }).waitFor();
+  } finally { await page.close(); }
+});
+
+test("opening a card that is already done or archived keeps it open", async () => {
+  const { page, requests } = await open({ cards: [
+    card("shipped", "/code/alpha", "done", "2026-03-01T10:00:00.000Z"),
+    card("old", "/code/alpha", "archived", "2026-03-01T09:00:00.000Z"),
+  ] });
+  try {
+    await openBoard(page, "alpha", "Card shipped");
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("heading", { name: "Card shipped" }).waitFor();
+    await polled(page, requests);
+    await dialog.getByRole("heading", { name: "Card shipped" }).waitFor();
+  } finally { await page.close(); }
+});
+
 test("sidebar switches between Today and a repository board, and the choice persists", async () => {
   const { page } = await open({ cards: [card("idea", "/code/beta", "triage", "2026-03-02T08:00:00.000Z")] });
   try {
