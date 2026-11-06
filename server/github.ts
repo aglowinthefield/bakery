@@ -372,6 +372,8 @@ export async function linkedPullRequest(github: GitHub, repo: string, card: Card
  */
 export class GitHubSync {
   private timer?: ReturnType<typeof setInterval>;
+  /** Set by shutdown: a pass still in flight then finds the database closed, and must end quietly instead of crashing the server. */
+  private stopped = false;
   private lastRun = new Map<string, number>();
   private inFlight = new Map<string, Promise<void>>();
   /** When fetching first failed in the current run of failures, per board. */
@@ -382,10 +384,11 @@ export class GitHubSync {
     private readonly rework?: (card: Card) => unknown, private readonly autoApprove?: (card: Card) => Promise<unknown>) {}
   start(): void {
     if (this.timer) return;
+    this.stopped = false;
     this.timer = setInterval(() => void this.tick(), 5000);
     void this.tick();
   }
-  shutdown(): void { if (this.timer) clearInterval(this.timer); this.timer = undefined; }
+  shutdown(): void { this.stopped = true; if (this.timer) clearInterval(this.timer); this.timer = undefined; }
   /** Starts due boards; resolves when the boards it started have finished. */
   async tick(force = false): Promise<void> {
     const due = this.board.listBoards().filter(item => item.integration === "github-pr" &&
@@ -423,6 +426,7 @@ export class GitHubSync {
       console.debug(`[sync ${repo}] settled ${this.board.listPullRequestCards(repoBoard.repo).length} PR card(s) in ${Date.now() - syncStart}ms`);
       this.board.recordIntegrationSync(boardId);
     } catch (error) {
+      if (this.stopped) return;
       const message = error instanceof Error ? error.message : String(error);
       if (this.board.getBoard(boardId)?.integrationError !== message) console.error(`GitHub sync for ${repoBoard.repo}: ${message}`);
       this.board.setIntegrationError(boardId, message);
