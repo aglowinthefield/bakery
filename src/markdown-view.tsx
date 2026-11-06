@@ -125,6 +125,17 @@ function renderInline(nodes: Inline[]): ReactNode[] {
         return <em key={index}>{renderInline(node.children)}</em>;
       case "del":
         return <del key={index}>{renderInline(node.children)}</del>;
+      case "image":
+        return (
+          <a key={index} href={node.src} target="_blank" rel="noreferrer">
+            <img
+              src={node.src}
+              alt={node.alt}
+              loading="lazy"
+              className="my-3 max-h-[36rem] max-w-full rounded border border-border object-contain"
+            />
+          </a>
+        );
       case "link":
         return (
           <a key={index} href={node.href} target="_blank" rel="noreferrer">

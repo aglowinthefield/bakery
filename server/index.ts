@@ -17,6 +17,7 @@ import { AutoPickup } from "./auto-pickup.js";
 import { AutoPullRequest } from "./auto-pull-request.js";
 import { discuss, discussionPrompt } from "./discuss.js";
 import { Chats, writeTopic } from "./chat.js";
+import { chatImagePath, publishChatImages, rasterType } from "./chat-images.js";
 import { draftPullRequest } from "./pr-draft.js";
 import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
 
@@ -527,6 +528,17 @@ const server = createServer(async (req, res) => {
       for (const item of purged) removeCardAttachmentFiles(dataDir, item.cardId);
       send(res, 200, purged); return;
     }
+    const imageRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats\/([\w-]+)\/images\/([a-f0-9]{64})$/);
+    if (imageRoute && req.method === "GET") {
+      const chat = board.getChat(imageRoute[2]);
+      if (!chat || chat.boardId !== imageRoute[1] || !board.getBoard(imageRoute[1])) { send(res, 404, { error: "Image not found" }); return; }
+      const file = chatImagePath(join(dataDir, "chat-sessions"), chat.id, imageRoute[3]);
+      if (!existsSync(file)) { send(res, 404, { error: "Image not found" }); return; }
+      const bytes = readFileSync(file), type = rasterType(bytes);
+      if (!type) { send(res, 404, { error: "Image not found" }); return; }
+      res.writeHead(200, { "Content-Type": type, "Content-Length": bytes.length, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox", "Cache-Control": "private, max-age=3600" });
+      res.end(bytes); return;
+    }
     const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events|view|discard))?)?$/);
     if (chatRoute) {
       const repoBoard = board.getBoard(chatRoute[1]), chatId = chatRoute[2], action = chatRoute[3];
@@ -540,7 +552,11 @@ const server = createServer(async (req, res) => {
       } else {
         const chat = board.getChat(chatId);
         if (!chat || chat.boardId !== repoBoard.id) { send(res, 404, { error: "Chat not found on this board" }); return; }
-        if (req.method === "GET" && !action) { send(res, 200, { chat, messages: board.listChatMessages(chatId), live: chats.live(chatId) }); return; }
+        if (req.method === "GET" && !action) {
+          const publish = (text: string) => publishChatImages(text, join(dataDir, "chat-sessions"), chatId, repoBoard.id, repoBoard.repo);
+          const messages = board.listChatMessages(chatId).map(message => message.role !== "agent" ? message : ({ ...message, body: publish(message.body), parts: message.parts.map(part => part.type === "text" ? { ...part, text: publish(part.text) } : part) }));
+          send(res, 200, { chat, messages, live: chats.live(chatId) }); return;
+        }
         if (req.method === "DELETE" && !action) { chats.delete(chatId); send(res, 200, { ok: true }); return; }
         if (req.method === "PATCH" && !action) {
           const { model, thinking } = await body(req);

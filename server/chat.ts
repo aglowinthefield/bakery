@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { command } from "./platform.js";
 import { settledReply } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
+import { publishChatImages } from "./chat-images.js";
 import type { Board, Card, Chat, ChatMessage, ChatPart, RepoBoard } from "./board.js";
 
 /** The reply being written: the parts so far. Null when the chat is idle. */
@@ -212,6 +213,7 @@ export class Chats {
       clearTimeout(flush);
       this.turns.delete(chatId);
       const parts = turn.live.parts.map(part => part.type === "tool" && part.status === "running" ? { ...part, status: "error" as const } : part);
+      for (const part of parts) if (part.type === "text") part.text = publishChatImages(part.text, this.options.sessionDir, chatId, repoBoard.id, repoBoard.repo);
       const text = replyText(parts);
       if (this.board.getChat(chatId)) {
         if (parts.length) this.emit(chatId, { type: "message", message: this.board.addChatMessage(chatId, "agent", text, parts) });
