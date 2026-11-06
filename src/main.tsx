@@ -1332,6 +1332,22 @@ export function App() {
   useEffect(() => {
     if (reviewQueue && card && card.status !== "review") advanceQueue();
   }, [reviewQueue, card?.id, card?.status]);
+  // An open card that reaches a terminal state (done, archived) while you watch closes its
+  // window. Opening an already-finished card keeps it open: only a change of status closes it.
+  const watchedStatus = useRef<{ id: string; status: string } | null>(null);
+  useEffect(() => {
+    const previous = watchedStatus.current;
+    watchedStatus.current = card ? { id: card.id, status: card.status } : null;
+    // A review queue hands over to its next card instead (see advanceQueue above).
+    if (
+      card &&
+      !reviewQueue &&
+      previous?.id === card.id &&
+      previous.status !== card.status &&
+      (card.status === "done" || card.status === "archived")
+    )
+      setSelected(null);
+  }, [card?.id, card?.status]);
   // Auto pickup is configured per repository in its edit dialog. Read the
   // polled board so start counts and pauses stay current while it is open.
   const pickupBoard = editingBoard
@@ -2034,11 +2050,7 @@ export function App() {
                 {currentBoard.repo}
               </p>
             </header>
-            <Sentinels
-              cards={cards}
-              loaded={loadedBoard === boardId}
-              onOpenCard={setSelected}
-            />
+            <Sentinels boardId={boardId} onOpenCard={setSelected} />
           </main>
         )}
       {view === "chat" && boardId && currentBoard && (
@@ -2053,6 +2065,8 @@ export function App() {
           </header>
           <ChatView
             boardId={boardId}
+            cards={cards}
+            onOpenCard={setSelected}
             onError={setError}
             boardUnread={currentBoard.chatUnread ?? 0}
             onUnreadChange={(total) =>

@@ -141,7 +141,9 @@ export function SettingsPage({
                   key={settings?.discordWebhookUrl ?? ""}
                   value={settings?.discordWebhookUrl ?? ""}
                   disabled={!settings || busy}
-                  onSave={(discordWebhookUrl) => saveSettings({ discordWebhookUrl })}
+                  onSave={(discordWebhookUrl) =>
+                    saveSettings({ discordWebhookUrl })
+                  }
                 />
                 <fieldset
                   className="mt-6 border-t border-border pt-5 text-sm"
@@ -341,7 +343,15 @@ export function SettingsPage({
   );
 }
 
-function DiscordWebhookField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (url: string) => void }) {
+function DiscordWebhookField({
+  value,
+  disabled,
+  onSave,
+}: {
+  value: string;
+  disabled: boolean;
+  onSave: (url: string) => void;
+}) {
   const [draft, setDraft] = useState(value);
   return (
     <label className="mt-6 block border-t border-border pt-5 text-sm">
@@ -355,10 +365,13 @@ function DiscordWebhookField({ value, disabled, onSave }: { value: string; disab
         value={draft}
         disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => { if (draft.trim() !== value) onSave(draft.trim()); }}
+        onBlur={() => {
+          if (draft.trim() !== value) onSave(draft.trim());
+        }}
       />
       <span className="mt-1 block text-xs text-muted-foreground">
-        Bakery posts to this channel when a run finishes. Leave empty to turn it off (BAKERY_DISCORD_WEBHOOK_URL is used if set).
+        Bakery posts to this channel when a run finishes. Leave empty to turn it
+        off (BAKERY_DISCORD_WEBHOOK_URL is used if set).
       </span>
     </label>
   );

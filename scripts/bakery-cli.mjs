@@ -28,6 +28,8 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|hi
        bakery-cli recover CARD_ID [--board ID|PATH] --yes
        bakery-cli runs CARD_ID [--board ID|PATH] [--json]
        bakery-cli conflicts [--board ID|PATH] [--json]
+       bakery-cli sentinels [--board ID|PATH] [--json]
+       bakery-cli sentinel-pause|sentinel-resume|sentinel-run SENTINEL_ID [--board ID|PATH] [--json]
        bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--budget USD|off] [--board ID|PATH] [--yes]
 
 doctor checks Node, git, pi, gh, worktrunk, the data directory, the server and each board, printing PASS, WARN or FAIL
@@ -56,6 +58,9 @@ merges onto origin/main (needs gh and a GitHub remote link), --integration local
 --merge-limit sets the most unattended review merges per rolling 24 hours (0 means no limit); at the limit
 cards wait in Review for a person.
 pr links a card to a pull request URL instead of the bakery/CARD_ID branch lookup; off removes the link.
+sentinels lists the board's sentinels, persistent monitors that are not cards: paused or enabled, schedule, next run and
+latest run. sentinel-pause stops its future runs (and holds its unstarted jobs); sentinel-resume lets it run again at
+once; sentinel-run makes an enabled one run now. Pausing or finishing a job card never changes a sentinel.
 --yes is required before start, enabling or resetting pickup, or moving a card to Ready on a pickup-enabled
 board; each can start paid Pi runs. No command approves a merge.`;
 
@@ -162,8 +167,8 @@ async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
-  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   const variadic = ["start", "recover", "archive", "add", "purge-attachments"];
+  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
   if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
@@ -312,6 +317,19 @@ async function main() {
     const card = args.length === 1 ? await findCard(origin, path, args[0])
       : await request(origin, `${path}/cards/${encodeURIComponent(args[0])}/pull-request`, "PUT", { url: args[1] === "off" ? "" : args[1] });
     print(card, opts.json, [`${card.id}\t${card.prUrl ?? "no pull request"}${card.prOverrideUrl ? "\t(linked)" : ""}${card.prState ? `\t${card.prState.toLowerCase()}` : ""}${card.prChecks ? `\tchecks:${card.prChecks}` : ""}${card.prError ? `\t${card.prError}` : ""}`]);
+  } else if (command === "sentinels") {
+    const sentinels = await request(origin, `${path}/sentinels`);
+    print(sentinels, opts.json, sentinels.map(item => {
+      const last = item.runs[0];
+      return `${item.sentinel.id}\t${item.sentinel.kind}\t${item.sentinel.enabled ? "enabled" : "paused"}\tevery:${Math.round(item.sentinel.intervalMs / 1000)}s\tnext:${item.sentinel.enabled ? item.sentinel.nextRunAt : "-"}\tlast-run:${last ? `${last.status} ${last.startedAt}` : "none"}\tjobs:${item.jobs.length}`;
+    }));
+  } else if (command === "sentinel-pause" || command === "sentinel-resume" || command === "sentinel-run") {
+    const id = encodeURIComponent(args[0]);
+    const sentinels = await request(origin, `${path}/sentinels`);
+    if (!sentinels.some(item => item.sentinel.id === args[0])) throw new Error(`Sentinel not found on this board: ${args[0]}`);
+    const updated = command === "sentinel-run" ? await request(origin, `/api/sentinels/${id}/run`, "POST")
+      : await request(origin, `/api/sentinels/${id}`, "PATCH", { enabled: command === "sentinel-resume" });
+    print(updated, opts.json, [`${updated.id}\t${updated.kind}\t${updated.enabled ? "enabled" : "paused"}\tnext:${updated.nextRunAt}`]);
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));

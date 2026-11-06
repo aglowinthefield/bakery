@@ -28,6 +28,7 @@ flowchart LR
 - [Visualizer](#visualizer)
 - [Reviewing and merging](#reviewing-and-merging)
 - [GitHub pull request mode](#github-pull-request-mode)
+- [Sentinels](#sentinels)
 - [Watching a run](#watching-a-run)
 - [Automation (opt-in)](#automation-opt-in)
 - [CLI](#cli)
@@ -227,6 +228,19 @@ Publishing doesn't touch local `main`. Once every local commit on `main` is a Ba
 - Force-pushes that rewrite `origin/main` after a card is Done.
 - PRs merged into a branch other than `main`. They never reach `origin/main`, so the card stays in Review.
 
+## Sentinels
+
+A sentinel is a persistent monitor, not a card. It never enters Triage, Ready, Running, Review or Done, is never reviewed or merged, and is not counted in lane counts, Today or SDLC stats. A pull-request board has two, listed under **Sentinels** in the sidebar:
+
+- **Broken pull requests** looks every 5 minutes (`BAKERY_SENTINEL_MS`) for open PRs by the repository owner that conflict with main or fail CI.
+- **/bakery requests** looks every minute for `/bakery` comments on any open PR.
+
+Each has instructions (added to every job's brief), a schedule, an enabled or paused state and a next-run time. Each execution is a run with its start and end, outcome, findings and any error; the Sentinels screen shows the latest runs. **Pause** stops future runs and holds jobs that have not started; **Resume** runs it at once; **Run now** runs an enabled sentinel on the next check. `bakery-cli sentinels`, `sentinel-pause`, `sentinel-resume` and `sentinel-run` do the same from a shell, and `PATCH /api/sentinels/:id` takes `enabled`, `intervalMs` and `instructions`. Changing `intervalMs` moves the next run to one new interval after the last run (or now, if that has passed), so shortening takes effect at once. Jobs that are queued but not started are checked against their pull request again before they start, including after a resume or restart, and are withdrawn if it was fixed, merged or closed. A job card, its attempt record and its Ready status are saved together, so a crash cannot leave a finding that later runs skip; an older half-made card is recovered on the next run. `BAKERY_SENTINEL=0` turns them all off: no timer, no run-now (the API answers 409), and no dispatch on resume.
+
+What a sentinel finds becomes an ordinary job card, linked back by sentinel, run and a stable finding key (`pr:<number>` for a broken PR). The card runs on the usual worker, with the same logs, usage and budget, and Bakery pushes its result to the PR branch itself, so Approve, merge and auto-review do not apply to it. While a finding's card is open, later runs add no second card for it. Once that card is Done and the PR is still broken (a new head or main), the next run makes a new card, up to three per PR. Finishing a card never completes or pauses its sentinel. A run only one process can hold at a time, and a run cut off by a restart is marked interrupted.
+
+Jobs made before sentinels had records are linked to their sentinel on first start, keeping their ids, status, PR locks and any running agent. The link is made in one transaction and is safe to repeat.
+
 ## Watching a run
 
 Each attempt in a card's **Attempts** list shows:
@@ -319,6 +333,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `create --after CARD_ID` makes the new card depend on that card. Repeat it for several. `depend` and `undepend` add or remove one dependency on an existing card. See [Dependencies](#dependencies).
 - `edit` changes a card's title, description, or both. `--body ""` clears the description. You can't edit a running card.
 - `archive` follows the same rules as the UI: it accepts only Done cards, and if any card isn't Done, nothing is archived. `restore` moves one archived card back to Done.
+- `sentinels` lists the board's sentinels with their state, next run and latest run; `sentinel-pause`, `sentinel-resume` and `sentinel-run` take a sentinel ID (see Sentinels).
 - `stats` prints the board's card count in each lane and its pickup state.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.

@@ -7,6 +7,7 @@ export type Inline =
   | { type: "code"; text: string }
   | { type: "strong" | "em" | "del"; children: Inline[] }
   | { type: "link"; href: string; children: Inline[] }
+  | { type: "image"; src: string; alt: string }
   | { type: "break" };
 
 export type ListItem = { checked?: boolean; children: Block[] };
@@ -395,6 +396,20 @@ function parseInline(source: string, depth: number): Inline[] {
       text += run;
       index += run.length;
       continue;
+    }
+
+    if (character === "!" && source[index + 1] === "[") {
+      const image = parseLink(source, index + 1);
+      if (
+        image &&
+        /^\/api\/boards\/[\w-]+\/chats\/[\w-]+\/images\/[a-f0-9]{64}$/.test(
+          image.href,
+        )
+      ) {
+        push({ type: "image", src: image.href, alt: image.label });
+        index = image.end;
+        continue;
+      }
     }
 
     if (character === "[" && depth < MAX_DEPTH) {
