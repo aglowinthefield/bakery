@@ -13,6 +13,7 @@ import { CardHistory, type CardHistoryEntry } from "./card-history.js";
 import { CardAttachments } from "./attachments.js";
 import { DiscussionPanel } from "./discussion.js";
 import { CardLinks, Markdown } from "./markdown-view.js";
+import { formatRoute } from "./route.js";
 import { Button } from "./components/ui/button";
 import {
   Dialog,
@@ -333,7 +334,8 @@ export function CardDetails({
     <CardLinks.Provider
       value={{
         open: onOpenCard,
-        title: (id) => boardCards.find((item) => item.id === id)?.title,
+        card: (id) => boardCards.find((item) => item.id === id),
+        href: (id) => formatRoute({ view: "board", boardId, cardId: id }),
       }}
     >
       <Dialog

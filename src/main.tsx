@@ -2049,6 +2049,8 @@ export function App() {
           </header>
           <ChatView
             boardId={boardId}
+            cards={cards}
+            onOpenCard={setSelected}
             onError={setError}
             boardUnread={currentBoard.chatUnread ?? 0}
             onUnreadChange={(total) =>
