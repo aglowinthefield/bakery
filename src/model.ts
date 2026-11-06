@@ -382,6 +382,10 @@ export type Run = {
   agent: string;
   /** The agent's final message, in markdown. Null for runs that never replied. */
   report: string | null;
+  /** Why a failed run's provider call failed (for example "invalid-history"), or null. */
+  failureKind?: string | null;
+  /** Id of the failed run whose rejected session this run replaced, or null. */
+  recoveryOf?: string | null;
 } & UsageFields;
 
 /** A file attached to a card, or to one of its discussion messages (`messageId`). */

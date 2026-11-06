@@ -25,6 +25,7 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|hi
        bakery-cli ready CARD_ID [--board ID|PATH] [--yes]
        bakery-cli triage CARD_ID [--board ID|PATH]
        bakery-cli start CARD_ID... [--board ID|PATH] --yes
+       bakery-cli recover CARD_ID [--board ID|PATH] --yes
        bakery-cli runs CARD_ID [--board ID|PATH] [--json]
        bakery-cli conflicts [--board ID|PATH] [--json]
        bakery-cli sentinels [--board ID|PATH] [--json]
@@ -41,6 +42,7 @@ including agent reviews; runs --json prints { cardId, total, runs, reviews }.
 create --key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status,
 it is printed instead of creating another.
 start runs Pi on Ready, Review or Failed cards (a retry reuses the card's worktree and Pi session).
+recover starts a fresh Pi session on a Failed card whose provider rejected its saved session history (start refuses it). The worktree, edits and review feedback carry over; the old session and log are kept.
 create --after CARD_ID (repeatable) makes the new card wait until each named card is Done or archived.
 depend CARD_ID --on OTHER adds that dependency (repeat --on for several); undepend removes it. A card
 waiting on an unfinished dependency is not picked up, and start refuses it until its dependencies are Done.
@@ -165,8 +167,8 @@ async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
+  const variadic = ["start", "recover", "archive", "add", "purge-attachments"];
   const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
-  const variadic = ["start", "archive", "add", "purge-attachments"];
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
   if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
@@ -188,9 +190,10 @@ async function main() {
   if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
   [...opts.after, ...opts.on].forEach(cardId);
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
-  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "purge-attachments")) throw new Error("--yes is only valid with ready, start, pickup or purge-attachments");
+  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "recover" || command === "purge-attachments")) throw new Error("--yes is only valid with ready, start, recover, pickup or purge-attachments");
   if (command === "purge-attachments" && !opts.yes) throw new Error("Purging deletes the attached files from disk and cannot be undone, even if the card is restored. Repeat with --yes to confirm.");
-  if (command === "start") {
+  if (command === "recover" && args.length !== 1) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (command === "start" || command === "recover") {
     args.forEach(cardId);
     if (!opts.yes) throw new Error(`Starting ${args.length === 1 ? "a run" : `${args.length} runs`} uses paid Pi. Repeat with --yes to confirm.`);
   }
@@ -243,6 +246,9 @@ async function main() {
     if (command === "ready" && board.autoPickupEnabled && !opts.yes) throw new Error("Auto pickup is enabled: Ready may start paid Pi immediately. Repeat with --yes to confirm.");
     const card = await request(origin, `${path}/cards/${cardId(args[0])}/status`, "POST", { status: command });
     print(card, opts.json, [`${card.id}\t${card.status}\t${card.title ?? ""}`]);
+  } else if (command === "recover") {
+    const run = await request(origin, `${path}/cards/${cardId(args[0])}/recover`, "POST");
+    print({ cardId: args[0], run }, opts.json, [`${args[0]}\trecovery attempt #${run.attempt}\t${run.status}\tsession ${run.sessionId}`]);
   } else if (command === "start") {
     // Each card starts independently so one refusal does not block the others.
     const results = [];
