@@ -172,4 +172,4 @@ No live Impression API request or access-boundary test was performed for this dr
 
 ## Next design artifact
 
-Sketch colleague setup, room membership/context, the composer with visible lead, queued-message steering, standups, context-used inspection, and card handoff. Check this flow against existing Bakery UI before creating implementation cards. Keep this spec's agreed behavior separate from unresolved proposals during that pass.
+The [proposed UI flow](colleagues-ui-flow.md) sketches colleague setup, room membership/context, the composer with visible lead, queued-message steering, standups, context-used inspection, and card handoff. Check this flow against existing Bakery UI before creating implementation cards. Keep this spec's agreed behavior separate from unresolved proposals during that pass.
