@@ -104,6 +104,7 @@ stateDiagram-v2
 - **Close without merging** moves a Review card to Done after a confirmation, or from the CLI with `bakery-cli close CARD_ID`. The worktree and branch stay, and **Reopen** returns it to Review. It never touches Linear or GitHub.
 - **Mark done** closes a Triage or Ready card that never ran. An unrun Ready card can also go back to Triage.
 - **Retries reuse the card's worktree and Pi session**, so Pi continues where it left off.
+- **A rejected session is recovered, not resumed.** When the provider answers HTTP 400 `invalid_request_error` about the `messages` array (for example `messages.103: role 'system' must precede an 'assistant' message`), the saved session replays the same history and fails every time. The run is marked as a provider failure, not a clean exit, and Run again refuses it (HTTP 409 `session_rejected`). Bakery starts one automatic recovery: a fresh Pi session in the same worktree, with the card's uncommitted edits, review comments, CI feedback and last report. A recovery that is rejected again stops; **Recover in a fresh session** on the card (or `bakery recover CARD_ID --yes`) tries again by hand. The old session file and run log are kept, and the card history records each recovery. Billing, authentication, other HTTP 400 errors and temporary errors (429, 5xx, network) are never recovered this way.
 - **Interrupted** cards can't be retried until you check the worktree and release the card. Bakery first confirms that the recorded PID is no longer running. A PID reused by an unrelated process also blocks release.
 - **Reopen** returns a Done card to Review when its work was left unmerged in the worktree. If the card was already merged, it returns to Ready.
 - **History** (Details tab, collapsed) lists every status change with its reason, plus agent-review verdicts and notes such as a failed restart after the reviewer sent a card back. Changes made before this existed show attempts and reviews only.
@@ -300,6 +301,7 @@ npm run bakery -- stats
 npm run bakery -- ready CARD_ID [--yes]
 npm run bakery -- triage CARD_ID
 npm run bakery -- start CARD_ID... --yes
+npm run bakery -- recover CARD_ID --yes
 npm run bakery -- runs CARD_ID
 npm run bakery -- conflicts
 npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]

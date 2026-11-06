@@ -1,0 +1,8 @@
+{
+  "note": "Redacted shape of the Anthropic request that failed for Bakery card d51f86db attempts 8-10 (req_011CgmyfKFT3ApAfWu9orHuk: messages.105). Pi 1.5.0 builds this ordering correctly from the session file (checked by replaying the saved session through pi-ai's convertMessages: no violation). The inbound request to the local billion-context 0.1.212 proxy had 178 messages; the proxy logged `I1 violation: mid-history-drop @2` and forwarded a shorter outbound array. A content-bearing mid-conversation system message (tool_addition/tool_removal blocks) must be followed by an assistant message or end the array; the proxy's rewrite left one followed by a user message. Letters: u=user, a=assistant, s=system with content, e=directive-only system (content: [] + output_config).",
+  "pi_wire_order": "useaus*seauseaus*seauuuuuus*s*s*s*se",
+  "invalid_after_proxy_rewrite": "useaus*useau",
+  "provider_error": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.105: role 'system' must precede an 'assistant' message or end the array; the directive-only form (content: [] with output_config) is accepted at any position\"},\"request_id\":\"req_REDACTED\"}",
+  "pi_wire_order_note": "Abridged from the real replay (177 messages); each content-bearing s is followed by a directive-only e and then an assistant, or ends the array.",
+  "invalid_after_proxy_rewrite_note": "Illustrative, not captured: the outbound array was never recorded. It shows the shape the 400 describes (content-bearing system followed by a non-assistant). Capturing the real outbound body needs the billion-context proxy's debug dump."
+}

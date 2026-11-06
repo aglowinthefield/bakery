@@ -832,12 +832,40 @@ export function CardDetails({
                     role="alert"
                     className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm"
                   >
-                    <strong>Run failed</strong>
+                    <strong>
+                      {runs[0].failureKind
+                        ? "Provider request failed"
+                        : "Run failed"}
+                    </strong>
                     <p className="mt-1 text-destructive">{runs[0].error}</p>
                     <p className="mt-2 text-xs text-muted-foreground">
                       Inspect the latest attempt and its worktree below before
                       retrying. No changes were merged from this run.
                     </p>
+                    {runs[0].failureKind === "invalid-history" && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <p className="text-xs text-muted-foreground">
+                          The provider rejected this card&apos;s saved Pi
+                          session, so Run again would fail the same way.
+                          Recovering starts a fresh session in the same worktree
+                          and keeps its changes and the old session as evidence.
+                        </p>
+                        <Button
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() =>
+                            action(() =>
+                              api(
+                                `/boards/${boardId}/cards/${card.id}/recover`,
+                                { method: "POST" },
+                              ),
+                            )
+                          }
+                        >
+                          Recover in a fresh session
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </>

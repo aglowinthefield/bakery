@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
-import { Worker } from "./worker.js";
+import { PoisonedSessionError, Worker } from "./worker.js";
 import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
@@ -668,6 +668,11 @@ const server = createServer(async (req, res) => {
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
           send(res, 202, worker.start(item)); return;
         }
+        if (req.method === "POST" && action === "recover") {
+          // Same gates as /start, since a recovery is a paid run.
+          if (draining.on) throw new Error("Bakery is restarting to load code changes; recover this card after the restart");
+          send(res, 202, worker.recover(id)); return;
+        }
         if (req.method === "DELETE" && action === "start") { send(res, 200, { cancelled: board.cancelQueuedStart(id) }); return; }
         if (req.method === "GET" && action === "pr-draft") { const job = draftJobs.get(id); send(res, 200, { ...(job?.progress ?? { startedAt: 0, steps: [] }), fingerprint: job?.fingerprint ?? null }); return; }
         if (req.method === "POST" && action === "pr-draft") {
@@ -755,6 +760,7 @@ const server = createServer(async (req, res) => {
       send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details });
       return;
     }
+    if (error instanceof PoisonedSessionError) { send(res, 409, { code: "session_rejected", error: error.message, cardId: error.cardId, runId: error.runId }); return; }
     const message = error instanceof Error ? error.message : "Unknown error";
     const status = /not found/i.test(message) ? 404 : 400;
     console.debug(`${req.method} ${req.url} -> ${status}: ${message}`);

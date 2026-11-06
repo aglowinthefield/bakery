@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
-import { Worker } from "../server/worker.js";
+import { PoisonedSessionError, Worker } from "../server/worker.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
 
 test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
@@ -600,5 +600,164 @@ test("starts queued during a drain persist and are taken once, oldest first", ()
     assert.deepEqual(reopened.takeQueuedStarts(), [a.id]);
     assert.deepEqual(reopened.takeQueuedStarts(), []);
     reopened.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A fake Pi whose behavior is chosen per call from a script file: one line per call, `ok`, or an error message.
+// Each call records its session id and appends to README.md once, so tests can see edits survive across sessions.
+function fakeProviderPi(dir: string, script: string[]) {
+  const pi = join(dir, "pi-fake"), calls = join(dir, "calls"), scriptFile = join(dir, "script");
+  writeFileSync(scriptFile, script.join("\n") + "\n");
+  writeFileSync(join(dir, "count"), "0");
+  writeFileSync(pi, `#!/bin/sh
+n=$(( $(cat '${dir}/count') + 1 )); printf '%s' "$n" > '${dir}/count'
+printf '%s\\t%s\\n' "$4" "$(printf '%s' "$6" | head -c 100000 | tr '\\n' ' ')" >> '${calls}'
+printf 'edit from call %s\\n' "$n" >> README.md
+line=$(sed -n "\${n}p" '${scriptFile}')
+if [ "$line" = ok ]; then printf '%s\\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}' '{"type":"agent_settled","aborted":false}'
+else printf '%s\\n' "{\\"type\\":\\"message_end\\",\\"message\\":{\\"role\\":\\"assistant\\",\\"stopReason\\":\\"error\\",\\"errorMessage\\":$line}}" '{"type":"agent_settled","aborted":false}'; fi
+`);
+  chmodSync(pi, 0o755);
+  return { pi, calls: () => readFileSync(calls, "utf8").split("\n").filter(Boolean).map(line => { const [session, ...prompt] = line.split("\t"); return { session, prompt: prompt.join("\t") }; }) };
+}
+const rejectedHistory = JSON.stringify(`400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.105: role 'system' must precede an 'assistant' message or end the array; the directive-only form (content: [] with output_config) is accepted at any position"},"request_id":"req_x"}`);
+
+function providerFixture(script: string[]) {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo");
+  execFileSync("git", ["init", "-q", repo]);
+  writeFileSync(join(repo, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  const fake = fakeProviderPi(dir, script);
+  const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fake.pi);
+  const card = board.createCard({ title: "Verify", body: "Add the flag", repo });
+  board.setStatus(card.id, "ready");
+  const settled = () => board.listRuns(card.id).every(run => run.status !== "running");
+  return { dir, repo, board, worker, card, fake, settled, worktree: join(dir, "data", "worktrees", card.id) };
+}
+
+test("a rejected message history fails as a provider failure, then recovers once in a fresh session that keeps the worktree edits", async () => {
+  const f = providerFixture([rejectedHistory, "ok"]);
+  try {
+    const first = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.listRuns(f.card.id).length === 2 && f.settled());
+    const [recovery, rejected] = f.board.listRuns(f.card.id);
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.failureKind, "invalid-history");
+    assert.match(rejected.error!, /^Provider request failed \(HTTP 400\).*invalid-history.*; Pi exited \(0\); settled/s, "the provider failure leads; the clean exit code is only detail");
+    assert.equal(recovery.status, "review");
+    assert.equal(recovery.failureKind, null);
+    assert.equal(recovery.recoveryOf, first.id);
+    assert.notEqual(recovery.sessionId, rejected.sessionId);
+    assert.equal(recovery.sessionId, `bakery-${f.card.id}-2`);
+    const calls = f.fake.calls();
+    assert.equal(calls[0].session, rejected.sessionId);
+    assert.equal(calls[1].session, recovery.sessionId);
+    assert.match(calls[1].prompt, /rejected by the model provider \(invalid message history\)/);
+    assert.match(calls[1].prompt, /Do not discard or reset existing changes/);
+    assert.match(calls[1].prompt, /Add the flag/, "card context is repeated in the fresh session");
+    // The first run's edit is still in the same worktree when the recovery run adds its own.
+    assert.equal(readFileSync(join(f.worktree, "README.md"), "utf8"), "fixture\nedit from call 1\nedit from call 2\n");
+    assert.match(recovery.output, /Fresh-session recovery of attempt 1/);
+    assert.ok(f.board.listCardEvents(f.card.id).some(event => /Attempt 2 started in a fresh session to recover from attempt 1's rejected session history \(automatic\)/.test(event.reason)));
+    // The rejected run's log stays as evidence.
+    assert.match(f.board.getRun(first.id)!.error!, /messages\.105/);
+    // Later runs resume the recovery session, not the rejected one.
+    const next = f.board.claim(f.card.id);
+    assert.equal(next.sessionId, recovery.sessionId);
+  } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("a recovery that is rejected again stops; ordinary retry refuses the poisoned session; manual recover runs again", async () => {
+  const f = providerFixture([rejectedHistory, rejectedHistory, rejectedHistory, "ok"]);
+  try {
+    f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.listRuns(f.card.id).length === 2 && f.settled());
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(f.board.listRuns(f.card.id).length, 2, "no third automatic attempt");
+    assert.equal(f.board.getCard(f.card.id)!.status, "failed");
+    assert.ok(f.board.listCardEvents(f.card.id).some(event => /fresh-session recovery, was rejected by the provider again; Bakery will not recover automatically a second time/.test(event.reason)));
+    assert.throws(() => f.worker.start(f.board.getCard(f.card.id)!), (error: unknown) => error instanceof PoisonedSessionError && /recover this card in a fresh session/.test(error.message));
+    assert.equal(f.board.listRuns(f.card.id).length, 2, "the refused retry claimed nothing");
+    const manual = f.worker.recover(f.card.id);
+    assert.equal(manual.attempt, 3);
+    assert.equal(manual.sessionId, `bakery-${f.card.id}-3`);
+    await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(f.board.listRuns(f.card.id).length, 3, "a rejected manual recovery is not followed by another automatic one");
+    assert.equal(f.board.getRun(manual.id)!.failureKind, "invalid-history");
+    // Evidence is kept: every attempt's error and every edit is still there.
+    assert.equal(readFileSync(join(f.worktree, "README.md"), "utf8"), "fixture\nedit from call 1\nedit from call 2\nedit from call 3\n");
+    // A fourth call finally succeeds, by hand again.
+    const last = f.worker.recover(f.card.id);
+    await waitFor(() => f.board.getRun(last.id)!.status !== "running");
+    assert.equal(f.board.getRun(last.id)!.status, "review");
+  } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("only a rejected-history failure can be recovered", async () => {
+  const f = providerFixture([JSON.stringify("503 upstream unavailable")]);
+  try {
+    f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.settled());
+    assert.throws(() => f.worker.recover(f.card.id), /Only a failed card whose latest run was rejected/);
+  } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+for (const [name, message, kind] of [
+  ["transient", "503 upstream unavailable", "transient"],
+  ["billing", `400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}`, "billing"],
+  ["auth", `401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, "auth"],
+  ["other 400", `400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: 999999 > 128000"}}`, "invalid-request"],
+] as const) {
+  test(`a ${name} provider failure is classified, not recovered automatically, and an ordinary retry resumes the same session`, async () => {
+    const f = providerFixture([JSON.stringify(message), "ok"]);
+    try {
+      const first = f.worker.start(f.board.getCard(f.card.id)!);
+      await waitFor(() => f.settled());
+      await new Promise(resolve => setTimeout(resolve, 300));
+      assert.equal(f.board.listRuns(f.card.id).length, 1, "no automatic second run");
+      assert.equal(f.board.getRun(first.id)!.status, "failed");
+      assert.equal(f.board.getRun(first.id)!.failureKind, kind);
+      assert.match(f.board.getRun(first.id)!.error!, /^Provider request failed/);
+      const retry = f.worker.start(f.board.getCard(f.card.id)!);
+      assert.equal(retry.sessionId, first.sessionId);
+      await waitFor(() => f.board.getRun(retry.id)!.status !== "running");
+      assert.equal(f.board.getRun(retry.id)!.status, "review");
+      assert.equal(f.board.getRun(retry.id)!.recoveryOf, null);
+    } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+  });
+}
+
+test("a clean run records no failure kind and reads as a success", async () => {
+  const f = providerFixture(["ok"]);
+  try {
+    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.settled());
+    const done = f.board.getRun(run.id)!;
+    assert.equal(done.status, "review");
+    assert.equal(done.error, null);
+    assert.equal(done.failureKind, null);
+  } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("restart-time migration classifies provider failures already recorded, so the affected card can be recovered", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const first = new Board(path);
+    const card = first.createCard({ title: "Old", body: "", repo: dir });
+    first.close();
+    const db = new DatabaseSync(path);
+    db.exec("ALTER TABLE runs DROP COLUMN failureKind; ALTER TABLE runs DROP COLUMN recoveryOf");
+    const error = `Pi exited (0); settled; Provider request failed (HTTP 400): ${JSON.parse(rejectedHistory)}; stderr: x`;
+    db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, error, startedAt) VALUES ('r1', ?, 1, 'failed', 's', ?, '2026-01-01')").run(card.id, error);
+    db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, error, startedAt) VALUES ('r2', ?, 2, 'failed', 's', 'Pi exited (143)', '2026-01-02')").run(card.id);
+    db.close();
+    const board = new Board(path);
+    assert.equal(board.getRun("r1")!.failureKind, "invalid-history");
+    assert.equal(board.getRun("r2")!.failureKind, null);
+    board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

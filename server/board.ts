@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { addAgent, type Usage } from "./agent.js";
 import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
+import { classifyProviderFailure, isProviderFailureKind, type ProviderFailureKind } from "./provider-failure.js";
 import type { ThemeName } from "../src/themes.js";
 import { parsePlan } from "../src/plan.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
@@ -111,6 +112,10 @@ export type Chat = { id: string; boardId: string; title: string; topic: string; 
 export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
 export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null;
+  /** Why a failed run's provider call failed, when the error text names one; null for other failures and successes. */
+  failureKind: ProviderFailureKind | null;
+  /** Id of the failed run whose rejected session this run replaced with a fresh one; null for ordinary runs. */
+  recoveryOf: string | null;
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
@@ -327,6 +332,15 @@ export class Board {
       for (const row of this.db.prepare("SELECT id, output FROM runs WHERE status!='running'").all() as { id: string; output: string }[])
         update.run(reportFromOutput(row.output), row.id);
     }
+    // Which kind of provider failure ended a run, so a retry can refuse to resume a session the provider rejects.
+    if (!runColumns.has("failureKind")) {
+      this.db.exec("ALTER TABLE runs ADD COLUMN failureKind TEXT");
+      const update = this.db.prepare("UPDATE runs SET failureKind=? WHERE id=?");
+      for (const row of this.db.prepare("SELECT id, error FROM runs WHERE status='failed' AND error LIKE '%Provider request failed%'").all() as { id: string; error: string }[])
+        update.run(classifyProviderFailure(row.error.slice(row.error.indexOf("Provider request failed"))), row.id);
+    }
+    // The failed run a fresh-session recovery run replaced. Later runs on the card resume the recovery run's session.
+    if (!runColumns.has("recoveryOf")) this.db.exec("ALTER TABLE runs ADD COLUMN recoveryOf TEXT");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
@@ -599,6 +613,10 @@ export class Board {
   listWaitingHookFixes(): Card[] {
     const ids = (this.db.prepare("SELECT cardId FROM ci_feedback WHERE source='push' ORDER BY createdAt").all() as { cardId: string }[]).map(row => row.cardId);
     return ids.map(id => this.getCard(id)).filter((card): card is Card => card?.status === "review");
+  }
+  /** Puts back feedback a run took but could not act on (its session was rejected), unless newer feedback arrived. */
+  restoreCiFeedback(cardId: string, feedback: { headSha: string; failures: string; source: CiFeedbackSource }): void {
+    this.db.prepare("INSERT OR IGNORE INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, ?)").run(cardId, feedback.headSha, feedback.failures, now(), feedback.source);
   }
   clearCiFeedback(cardId: string): void { this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId); }
   /** Review cards on a github-pr board, which the PR poller links and checks. */
@@ -1442,7 +1460,7 @@ export class Board {
    * `why` says what asked for the run, for the card's history (e.g. the agent reviewer sending it back).
    * `freshSession` gives the run its own Pi session instead of resuming the card's.
    */
-  claim(cardId: string, startedBy: "manual" | "auto" = "manual", why = "", freshSession = false): Run {
+  claim(cardId: string, startedBy: "manual" | "auto" = "manual", why = "", freshSession = false, recoveryOf: string | null = null): Run {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId);
@@ -1464,8 +1482,10 @@ export class Board {
         (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
-      const id = randomUUID(), sessionId = freshSession ? `bakery-${cardId}-${attempt}` : `bakery-${cardId}`;
-      this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy);
+      // After a recovery the card's session is the recovery run's, not the rejected original.
+      const resumed = this.db.prepare("SELECT sessionId FROM runs WHERE cardId=? AND recoveryOf IS NOT NULL ORDER BY attempt DESC LIMIT 1").get(cardId) as { sessionId: string } | undefined;
+      const id = randomUUID(), sessionId = freshSession || recoveryOf ? `bakery-${cardId}-${attempt}` : resumed?.sessionId ?? `bakery-${cardId}`;
+      this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, recoveryOf, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy, recoveryOf);
       this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);
       this.db.exec("COMMIT");
@@ -1525,12 +1545,12 @@ export class Board {
     if (run?.status !== "running") return;
     this.db.prepare("UPDATE runs SET output=? WHERE id=?").run((run.output + chunk).slice(-60000), id);
   }
-  finish(id: string, status: "review" | "failed", error: string | null = null) {
+  finish(id: string, status: "review" | "failed", error: string | null = null, failureKind: ProviderFailureKind | null = null) {
     const run = this.getRun(id);
     if (!run || run.status !== "running") return;
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("UPDATE runs SET status=?, error=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, now(), id);
+      this.db.prepare("UPDATE runs SET status=?, error=?, failureKind=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, status === "failed" && isProviderFailureKind(failureKind) ? failureKind : null, now(), id);
       this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), run.cardId);
       this.explain(run.cardId, status === "review" ? `Attempt ${run.attempt} finished; waiting for review` : `Attempt ${run.attempt} failed: ${error ?? "unknown error"}`);
       if (status === "review") this.clearMergeFailure(run.cardId);
