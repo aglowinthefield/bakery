@@ -397,7 +397,7 @@ export class Board {
     this.db.exec("DELETE FROM queued_starts");
     return ids;
   }
-  close() { this.db.close(); }
+  close() { if (this.db.isOpen) this.db.close(); }
   getSettings(): BakerySettings {
     const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme, density, showCardModels, agentModels, discordWebhookUrl FROM settings WHERE id=1").get() as { discordWebhookUrl: string; confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"]; density: BakerySettings["density"]; showCardModels: number; agentModels: string };
     return { confirmRunStart: row.confirmRunStart === 1, notifyOnReview: row.notifyOnReview === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme, density: row.density, showCardModels: row.showCardModels === 1, agentModels: parseAgentModels(row.agentModels), discordWebhookUrl: row.discordWebhookUrl };

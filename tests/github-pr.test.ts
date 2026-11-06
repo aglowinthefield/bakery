@@ -1469,3 +1469,14 @@ test("github-pr: an /bakery comment on the PR sends the card back once, and its 
   } finally { f.cleanup(); }
 });
 
+
+test("a sync pass still running at shutdown ends quietly once the database is closed", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.ghDir, "auth-fail"), "");
+    const pass = f.sync.syncBoard(f.repoBoard.id);
+    f.sync.shutdown();
+    f.board.close();
+    await pass;
+  } finally { f.cleanup(); }
+});
