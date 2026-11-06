@@ -15,8 +15,9 @@ import {
   type ThinkingLevel,
 } from "../server/agent-models.js";
 import { Button } from "./components/ui/button";
-import { Markdown } from "./markdown-view.js";
-import type { Chat, ChatLive, ChatMessage, ChatPart } from "./model.js";
+import { CardLinks, Markdown } from "./markdown-view.js";
+import { formatRoute } from "./route.js";
+import type { Card, Chat, ChatLive, ChatMessage, ChatPart } from "./model.js";
 import { confirmAction } from "./confirm.js";
 import {
   chatGroupings,
@@ -120,8 +121,13 @@ export function ChatView({
   onError,
   boardUnread,
   onUnreadChange,
+  cards,
+  onOpenCard,
 }: {
   boardId: string;
+  /** This board's cards, so a card id in a reply shows its title and status. */
+  cards?: Pick<Card, "id" | "title" | "status">[];
+  onOpenCard?: (id: string) => void;
   onError: (message: string) => void;
   /** The board's unread total as last polled; when it changes, another chat finished a turn, so the list reloads. */
   boardUnread?: number;
@@ -672,276 +678,284 @@ export function ChatView({
   const busy = !!state.live;
   const empty = state.messages.length === 0 && !state.live;
 
+  const cardLinks = {
+    open: (id: string) => onOpenCard?.(id),
+    card: (id: string) => cards?.find((item) => item.id === id),
+    href: (id: string) => formatRoute({ view: "board", boardId, cardId: id }),
+  };
   return (
-    <div
-      ref={layout}
-      className={`flex h-[calc(100dvh-9rem)] min-h-96 ${collapsed ? "" : "flex-col md:flex-row"}`}
-    >
-      <nav
-        ref={rail}
-        aria-label="Chats"
-        data-collapsed={collapsed ? "true" : undefined}
-        style={
-          { "--chat-sidebar-w": `${sidebarWidth}px` } as React.CSSProperties
-        }
-        className={`flex shrink-0 flex-col gap-1 overflow-y-auto border-border ${collapsed ? "w-12 items-center border-r px-1.5 py-3" : "max-h-48 w-full border-b p-3 md:max-h-none md:w-[var(--chat-sidebar-w)] md:border-b-0 md:border-r"}`}
+    <CardLinks.Provider value={onOpenCard ? cardLinks : null}>
+      <div
+        ref={layout}
+        className={`flex h-[calc(100dvh-9rem)] min-h-96 ${collapsed ? "" : "flex-col md:flex-row"}`}
       >
-        <div className={`flex gap-1 ${collapsed ? "flex-col" : ""}`}>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={collapsed ? "Expand chat list" : "Collapse chat list"}
-            aria-expanded={!collapsed}
-            title={collapsed ? "Expand chat list" : "Collapse chat list"}
-            onClick={() => setCollapsed((value) => !value)}
-          >
-            {collapsed ? (
-              <PanelLeftOpen size={14} aria-hidden="true" />
-            ) : (
-              <PanelLeftClose size={14} aria-hidden="true" />
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label="New chat"
-            title="New chat"
-            className={collapsed ? "" : "flex-1"}
-            onClick={() => void create()}
-          >
-            <MessageSquarePlus size={14} aria-hidden="true" />
-            {!collapsed && " New chat"}
-          </Button>
-        </div>
-        {!collapsed && (
-          <label className="flex items-center gap-1 px-1 text-xs text-muted-foreground">
-            Group by
-            <select
-              aria-label="Group chats by"
-              value={grouping}
-              onChange={(event) =>
-                setGrouping(readGrouping(event.target.value))
-              }
-              className="min-w-0 flex-1 rounded-md border border-border bg-background px-1 py-0.5 text-foreground"
+        <nav
+          ref={rail}
+          aria-label="Chats"
+          data-collapsed={collapsed ? "true" : undefined}
+          style={
+            { "--chat-sidebar-w": `${sidebarWidth}px` } as React.CSSProperties
+          }
+          className={`flex shrink-0 flex-col gap-1 overflow-y-auto border-border ${collapsed ? "w-12 items-center border-r px-1.5 py-3" : "max-h-48 w-full border-b p-3 md:max-h-none md:w-[var(--chat-sidebar-w)] md:border-b-0 md:border-r"}`}
+        >
+          <div className={`flex gap-1 ${collapsed ? "flex-col" : ""}`}>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={collapsed ? "Expand chat list" : "Collapse chat list"}
+              aria-expanded={!collapsed}
+              title={collapsed ? "Expand chat list" : "Collapse chat list"}
+              onClick={() => setCollapsed((value) => !value)}
             >
-              {chatGroupings.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
+              {collapsed ? (
+                <PanelLeftOpen size={14} aria-hidden="true" />
+              ) : (
+                <PanelLeftClose size={14} aria-hidden="true" />
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="New chat"
+              title="New chat"
+              className={collapsed ? "" : "flex-1"}
+              onClick={() => void create()}
+            >
+              <MessageSquarePlus size={14} aria-hidden="true" />
+              {!collapsed && " New chat"}
+            </Button>
+          </div>
+          {!collapsed && (
+            <label className="flex items-center gap-1 px-1 text-xs text-muted-foreground">
+              Group by
+              <select
+                aria-label="Group chats by"
+                value={grouping}
+                onChange={(event) =>
+                  setGrouping(readGrouping(event.target.value))
+                }
+                className="min-w-0 flex-1 rounded-md border border-border bg-background px-1 py-0.5 text-foreground"
+              >
+                {chatGroupings.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {grouping === "date" && !collapsed
+            ? groupByDate(chats ?? []).map((group) => (
+                <section
+                  key={group.key}
+                  aria-label={group.heading}
+                  data-chat-group={group.key}
+                  className="flex flex-col gap-1"
+                >
+                  <h3 className="px-2 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    {group.heading}
+                  </h3>
+                  {group.chats.map((chat) => row(chat))}
+                </section>
+              ))
+            : chats?.map((chat) => row(chat))}
+        </nav>
+        {!collapsed && sideBySide && (
+          <div
+            role="separator"
+            aria-label="Resize chat list"
+            aria-orientation="vertical"
+            aria-valuemin={sidebarLimits.min}
+            aria-valuemax={sidebarLimits.max}
+            aria-valuenow={sidebarWidth}
+            tabIndex={0}
+            onPointerDown={(event) =>
+              event.currentTarget.setPointerCapture(event.pointerId)
+            }
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId))
+                return;
+              const left = rail.current?.getBoundingClientRect().left ?? 0;
+              resizeTo(event.clientX - left);
+            }}
+            onKeyDown={(event) => {
+              const step = event.shiftKey ? sidebarBigStep : sidebarStep;
+              const target =
+                event.key === "ArrowLeft"
+                  ? sidebarWidth - step
+                  : event.key === "ArrowRight"
+                    ? sidebarWidth + step
+                    : event.key === "Home"
+                      ? sidebarLimits.min
+                      : event.key === "End"
+                        ? sidebarLimits.max
+                        : null;
+              if (target === null) return;
+              event.preventDefault();
+              resizeTo(target);
+            }}
+            className="-ml-px w-1.5 shrink-0 cursor-ew-resize touch-none bg-transparent hover:bg-primary/30 focus-visible:bg-primary/40"
+          />
+        )}
+        <section
+          aria-label="Chat"
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+        >
+          <ol
+            aria-live="polite"
+            className="flex-1 space-y-3 overflow-y-auto p-4 text-sm lg:px-8"
+          >
+            {empty && (
+              <li className="text-muted-foreground">
+                Ask about this board's cards and tickets, or ask the agent to
+                change them. It can also read the repository.
+              </li>
+            )}
+            {state.messages.map((item) => (
+              <li
+                key={item.id}
+                data-role={item.role}
+                className={`${quiet.current.has(item.id) ? "" : "chat-entry "}rounded-md border p-3 ${item.role === "user" ? "ml-8 border-primary/30 bg-primary/10" : item.role === "error" ? "mr-8 border-destructive/30 bg-destructive/10 text-destructive" : "mr-8 border-border bg-accent/10"}`}
+              >
+                <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span>
+                    {item.role === "user"
+                      ? "You"
+                      : item.role === "error"
+                        ? "Agent stopped"
+                        : "Agent"}
+                  </span>
+                  <time
+                    dateTime={item.createdAt}
+                    title={fullTime(item.createdAt)}
+                    data-message-time
+                    className="normal-case tracking-normal"
+                  >
+                    {shortTime(item.createdAt)}
+                  </time>
+                </div>
+                {item.role === "agent" ? (
+                  <Parts
+                    parts={
+                      item.parts.length
+                        ? item.parts
+                        : [{ type: "text", text: item.body }]
+                    }
+                  />
+                ) : (
+                  <p className="whitespace-pre-wrap">{item.body}</p>
+                )}
+              </li>
+            ))}
+            {state.live && (
+              <li
+                data-live="true"
+                className="chat-entry mr-8 rounded-md border border-border bg-accent/10 p-3"
+              >
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Agent
+                </div>
+                {state.live.parts.length ? (
+                  <Parts parts={state.live.parts} />
+                ) : (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    Agent is thinking…
+                  </p>
+                )}
+              </li>
+            )}
+            <div ref={end} />
+          </ol>
+          <div className="flex items-center gap-2 border-t border-border px-3 pt-2 text-xs lg:px-8">
+            <datalist id="chat-models">
+              {models.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <input
+              aria-label="Chat model"
+              list="chat-models"
+              value={modelDraft}
+              disabled={chats === null || (!!chatId && !current)}
+              onFocus={loadModels}
+              onChange={(event) => setModelDraft(event.target.value)}
+              onBlur={() => void choose({ ...choice, model: modelDraft })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void choose({ ...choice, model: modelDraft });
+                }
+              }}
+              placeholder={defaultChatModel.model}
+              className="w-64 min-w-0 rounded-md border border-border bg-background px-2 py-1 font-mono"
+            />
+            <select
+              aria-label="Chat thinking"
+              value={choice.thinking}
+              disabled={chats === null || (!!chatId && !current)}
+              onChange={(event) =>
+                void choose({
+                  model: modelDraft,
+                  thinking: event.target.value as ThinkingLevel | "",
+                })
+              }
+              className="rounded-md border border-border bg-background px-2 py-1"
+            >
+              <option value="">Default ({defaultChatModel.thinking})</option>
+              {thinkingLevels.map((level) => (
+                <option key={level} value={level}>
+                  {level}
                 </option>
               ))}
             </select>
-          </label>
-        )}
-        {grouping === "date" && !collapsed
-          ? groupByDate(chats ?? []).map((group) => (
-              <section
-                key={group.key}
-                aria-label={group.heading}
-                data-chat-group={group.key}
-                className="flex flex-col gap-1"
-              >
-                <h3 className="px-2 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {group.heading}
-                </h3>
-                {group.chats.map((chat) => row(chat))}
-              </section>
-            ))
-          : chats?.map((chat) => row(chat))}
-      </nav>
-      {!collapsed && sideBySide && (
-        <div
-          role="separator"
-          aria-label="Resize chat list"
-          aria-orientation="vertical"
-          aria-valuemin={sidebarLimits.min}
-          aria-valuemax={sidebarLimits.max}
-          aria-valuenow={sidebarWidth}
-          tabIndex={0}
-          onPointerDown={(event) =>
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }
-          onPointerMove={(event) => {
-            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-            const left = rail.current?.getBoundingClientRect().left ?? 0;
-            resizeTo(event.clientX - left);
-          }}
-          onKeyDown={(event) => {
-            const step = event.shiftKey ? sidebarBigStep : sidebarStep;
-            const target =
-              event.key === "ArrowLeft"
-                ? sidebarWidth - step
-                : event.key === "ArrowRight"
-                  ? sidebarWidth + step
-                  : event.key === "Home"
-                    ? sidebarLimits.min
-                    : event.key === "End"
-                      ? sidebarLimits.max
-                      : null;
-            if (target === null) return;
-            event.preventDefault();
-            resizeTo(target);
-          }}
-          className="-ml-px w-1.5 shrink-0 cursor-ew-resize touch-none bg-transparent hover:bg-primary/30 focus-visible:bg-primary/40"
-        />
-      )}
-      <section
-        aria-label="Chat"
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
-      >
-        <ol
-          aria-live="polite"
-          className="flex-1 space-y-3 overflow-y-auto p-4 text-sm lg:px-8"
-        >
-          {empty && (
-            <li className="text-muted-foreground">
-              Ask about this board's cards and tickets, or ask the agent to
-              change them. It can also read the repository.
-            </li>
-          )}
-          {state.messages.map((item) => (
-            <li
-              key={item.id}
-              data-role={item.role}
-              className={`${quiet.current.has(item.id) ? "" : "chat-entry "}rounded-md border p-3 ${item.role === "user" ? "ml-8 border-primary/30 bg-primary/10" : item.role === "error" ? "mr-8 border-destructive/30 bg-destructive/10 text-destructive" : "mr-8 border-border bg-accent/10"}`}
-            >
-              <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                <span>
-                  {item.role === "user"
-                    ? "You"
-                    : item.role === "error"
-                      ? "Agent stopped"
-                      : "Agent"}
-                </span>
-                <time
-                  dateTime={item.createdAt}
-                  title={fullTime(item.createdAt)}
-                  data-message-time
-                  className="normal-case tracking-normal"
-                >
-                  {shortTime(item.createdAt)}
-                </time>
-              </div>
-              {item.role === "agent" ? (
-                <Parts
-                  parts={
-                    item.parts.length
-                      ? item.parts
-                      : [{ type: "text", text: item.body }]
-                  }
-                />
-              ) : (
-                <p className="whitespace-pre-wrap">{item.body}</p>
-              )}
-            </li>
-          ))}
-          {state.live && (
-            <li
-              data-live="true"
-              className="chat-entry mr-8 rounded-md border border-border bg-accent/10 p-3"
-            >
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                Agent
-              </div>
-              {state.live.parts.length ? (
-                <Parts parts={state.live.parts} />
-              ) : (
-                <p role="status" className="text-xs text-muted-foreground">
-                  Agent is thinking…
-                </p>
-              )}
-            </li>
-          )}
-          <div ref={end} />
-        </ol>
-        <div className="flex items-center gap-2 border-t border-border px-3 pt-2 text-xs lg:px-8">
-          <datalist id="chat-models">
-            {models.map((model) => (
-              <option key={model} value={model} />
-            ))}
-          </datalist>
-          <input
-            aria-label="Chat model"
-            list="chat-models"
-            value={modelDraft}
-            disabled={chats === null || (!!chatId && !current)}
-            onFocus={loadModels}
-            onChange={(event) => setModelDraft(event.target.value)}
-            onBlur={() => void choose({ ...choice, model: modelDraft })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void choose({ ...choice, model: modelDraft });
-              }
+            <span className="text-muted-foreground">
+              {current ? "Used from this chat's next message" : "For new chats"}
+            </span>
+          </div>
+          <form
+            className="flex items-end gap-2 p-3 pt-2 lg:px-8"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void send();
             }}
-            placeholder={defaultChatModel.model}
-            className="w-64 min-w-0 rounded-md border border-border bg-background px-2 py-1 font-mono"
-          />
-          <select
-            aria-label="Chat thinking"
-            value={choice.thinking}
-            disabled={chats === null || (!!chatId && !current)}
-            onChange={(event) =>
-              void choose({
-                model: modelDraft,
-                thinking: event.target.value as ThinkingLevel | "",
-              })
-            }
-            className="rounded-md border border-border bg-background px-2 py-1"
           >
-            <option value="">Default ({defaultChatModel.thinking})</option>
-            {thinkingLevels.map((level) => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
-          </select>
-          <span className="text-muted-foreground">
-            {current ? "Used from this chat's next message" : "For new chats"}
-          </span>
-        </div>
-        <form
-          className="flex items-end gap-2 p-3 pt-2 lg:px-8"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void send();
-          }}
-        >
-          <textarea
-            ref={input}
-            aria-label="Message the agent"
-            value={draft}
-            rows={3}
-            maxLength={16000}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-            placeholder="Message the agent (⌘/Ctrl+Enter to send)"
-            className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
-          />
-          {busy ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() =>
-                void api(`${base}/${chatId}/stop`, {
-                  method: "POST",
-                  body: "{}",
-                }).catch(fail)
-              }
-            >
-              <Square size={13} aria-hidden="true" /> Stop
-            </Button>
-          ) : (
-            <Button type="submit" disabled={!draft.trim() || sending}>
-              Send
-            </Button>
-          )}
-        </form>
-      </section>
-    </div>
+            <textarea
+              ref={input}
+              aria-label="Message the agent"
+              value={draft}
+              rows={3}
+              maxLength={16000}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void send();
+                }
+              }}
+              placeholder="Message the agent (⌘/Ctrl+Enter to send)"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+            />
+            {busy ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  void api(`${base}/${chatId}/stop`, {
+                    method: "POST",
+                    body: "{}",
+                  }).catch(fail)
+                }
+              >
+                <Square size={13} aria-hidden="true" /> Stop
+              </Button>
+            ) : (
+              <Button type="submit" disabled={!draft.trim() || sending}>
+                Send
+              </Button>
+            )}
+          </form>
+        </section>
+      </div>
+    </CardLinks.Provider>
   );
 }
