@@ -433,3 +433,13 @@ Tests use a fake offline `pi` and temporary Git repositories. They don't call a 
 - Read-only Linear import into local cards, keyed by issue ID. Bakery won't write to Linear.
 - Better process identity checks for interrupted runs, beyond PID liveness.
 - External CI before approval and automatic card creation.
+
+## Colleagues prototype (fixture data)
+
+A clickable, fixture-backed prototype of persistent colleagues and group rooms, built from the draft spec in PR #13 for operator review. It is not the feature. It calls no Bakery API, starts no agent, creates no card, writes no memory, and keeps all state in the browser tab (the Reset button restores the fixtures). It is a separate page that is not part of the production build or the board.
+
+```sh
+npm run prototype:colleagues
+```
+
+Open http://127.0.0.1:5180/prototype-colleagues.html. The code lives in `src/prototype/colleagues/`. Simulated rounds advance only when you click Advance fixture round. The Prototype assumptions page in the app lists the spec choices the prototype made to stay clickable.
