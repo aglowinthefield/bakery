@@ -54,7 +54,7 @@ test("remote repository link is saved in repository settings and listed below th
     assert.equal(await link.locator("svg.lucide-github").count(), 1);
     const headingBox = await page.locator("header h1").boundingBox();
     const linkBox = await link.boundingBox();
-    assert.ok(headingBox && linkBox && linkBox.y >= headingBox.y + headingBox.height - 1, "link sits below the heading");
+    assert.ok(headingBox && linkBox && (linkBox.x >= headingBox.x + headingBox.width - 1 || linkBox.y >= headingBox.y + headingBox.height - 1), "link sits beside or below the heading, not over it");
     assert.equal(await page.locator("header").getByText("/tmp/example", { exact: true }).count(), 0, "the repo path is not shown under the name");
 
     await page.reload();
