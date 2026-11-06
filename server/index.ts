@@ -7,7 +7,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
-import { Board, parsePriority, type Card } from "./board.js";
+import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
 import { Worker } from "./worker.js";
 import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
@@ -131,7 +131,7 @@ const runLocks = new RunLocks(board, prLocks, sentinelStore, process.env.BAKERY_
 // Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or BAKERY_DISCORD_WEBHOOK_URL when Settings has none.
 new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.BAKERY_DISCORD_WEBHOOK_URL);
 const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000, 60_000,
-  card => worker.start(card, "manual", "by Bakery's sentinel"));
+  card => worker.start(card, "manual", "by Bakery's sentinel"), 15_000, process.env.BAKERY_SENTINEL !== "0");
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
@@ -302,9 +302,9 @@ const server = createServer(async (req, res) => {
     }
     if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(), sentinels = board.sentinelInProgressCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0, sentinelsInProgress: sentinels[item.repo] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
-      // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
+      // Every visible board's cards, for the Today view. Removed boards, archived cards and sentinel jobs stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
-      send(res, 200, worker.withLive(board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived"))); return;
+      send(res, 200, worker.withLive(board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived" && !isSentinelJob(card)))); return;
     }
     if (path === "/api/stats" && req.method === "GET") {
       const params = new URL(req.url ?? "/", "http://localhost").searchParams;
@@ -579,6 +579,33 @@ const server = createServer(async (req, res) => {
         }
       }
     }
+    // Sentinels are monitors, not cards: they have their own list, runs, pause/resume and run-now.
+    const sentinelsRoute = path.match(/^\/api\/boards\/([\w-]+)\/sentinels$/);
+    if (sentinelsRoute && req.method === "GET") {
+      const repoBoard = board.getBoard(sentinelsRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      send(res, 200, sentinel.describe(repoBoard.id)); return;
+    }
+    const sentinelRoute = path.match(/^\/api\/sentinels\/([\w-]+)(?:\/(runs|run))?$/);
+    if (sentinelRoute) {
+      const record = sentinelStore.getSentinel(sentinelRoute[1]), action = sentinelRoute[2];
+      if (!record) { send(res, 404, { error: "Sentinel not found" }); return; }
+      if (req.method === "GET" && action === "runs") { send(res, 200, sentinelStore.listRuns(record.id, 50)); return; }
+      if (req.method === "POST" && action === "run") {
+        if (!sentinel.active) { send(res, 409, { error: "Sentinels are turned off (BAKERY_SENTINEL=0)" }); return; }
+        sentinelStore.runSoon(record.id); void sentinel.dispatchDue(); send(res, 202, sentinelStore.getSentinel(record.id)); return;
+      }
+      if (req.method === "PATCH" && !action) {
+        const input = await body(req);
+        if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new Error("enabled must be true or false");
+        if (input.instructions !== undefined && typeof input.instructions !== "string") throw new Error("instructions must be text");
+        if (input.intervalMs !== undefined && typeof input.intervalMs !== "number") throw new Error("intervalMs must be a number");
+        const updated = sentinelStore.updateSentinel(record.id, { enabled: input.enabled, instructions: input.instructions, intervalMs: input.intervalMs });
+        if (updated.enabled && !record.enabled) void sentinel.dispatchDue();
+        send(res, 200, updated); return;
+      }
+      if (req.method === "GET" && !action) { send(res, 200, record); return; }
+    }
     const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
@@ -595,6 +622,9 @@ const server = createServer(async (req, res) => {
       } else {
         const item = board.getCard(id);
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
+        // A sentinel job is delivered by its sentinel, never reviewed, approved, merged or published through a card flow.
+        if (isSentinelJob(item) && req.method !== "GET" && action && ["approve", "approval", "pr-draft", "publish", "accept-findings", "pull-request", "request-changes", "auto-review", "create-plan", "conflict"].includes(action))
+          throw new Error("This card is a sentinel job. Its sentinel delivers the result; it is not reviewed or merged here");
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
         if (req.method === "GET" && action === "history") { send(res, 200, cardHistory(item, board.listCardEvents(id), board.listRuns(id), board.listAutoReviewJobs(id))); return; }

@@ -66,14 +66,20 @@ export type ReviewWait = "agent_review" | "ci_fix" | "github";
  */
 export type ReviewAction = "pr_ready" | "accept_findings";
 /**
- * Sentinel jobs are the cards the sentinel makes on its own: a fix for a broken PR (idempotency key `sentinel:`) or a
- * `/bakery` comment on a PR (`request:`). The sentinel starts them itself, so they live outside the kanban's workflow:
- * auto-pickup never picks them, its limits and pauses do not hold them, and they take no run slot from other cards.
+ * Sentinel jobs are the cards a sentinel makes for the work it finds: a fix for a broken PR or a `/bakery` comment on
+ * a PR. They carry provenance (`sentinelId`, `sentinelRunId`, `findingKey`) and the sentinel starts them itself, so they
+ * live outside the kanban's workflow: auto-pickup never picks them, its limits and pauses do not hold them, they take
+ * no run slot from other cards, and they are left out of lane counts, review automation and statistics. Cards made
+ * before provenance existed are recognised by their idempotency key (`sentinel:`, `request:`) until `SentinelStore.adoptLegacyJobs` links them.
  */
-export const isSentinelJob = (card: { idempotencyKey: string | null }): boolean => !!card.idempotencyKey && /^(sentinel|request):/.test(card.idempotencyKey);
+export const isSentinelJob = (card: { sentinelId?: string | null; idempotencyKey: string | null }): boolean => !!card.sentinelId || (!!card.idempotencyKey && /^(sentinel|request):/.test(card.idempotencyKey));
 /** SQL for "this `cards` row is not a sentinel job"; keep in step with `isSentinelJob`. */
-const notSentinelJob = "(cards.idempotencyKey IS NULL OR (cards.idempotencyKey NOT LIKE 'sentinel:%' AND cards.idempotencyKey NOT LIKE 'request:%'))";
+const notSentinelJob = "(cards.sentinelId IS NULL AND (cards.idempotencyKey IS NULL OR (cards.idempotencyKey NOT LIKE 'sentinel:%' AND cards.idempotencyKey NOT LIKE 'request:%')))";
+/** Where a job card came from: the sentinel, the run that found it and the finding's stable key. */
+export type CardProvenance = { sentinelId: string; sentinelRunId: string; findingKey: string };
 export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null;
+  /** Set on a job card made by a sentinel: which sentinel, which of its runs, and the finding. Null on every other card. */
+  sentinelId: string | null; sentinelRunId: string | null; findingKey: string | null;
   /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
   createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
   /** Last time the latest run's agent reported anything; null before the first run. */
@@ -209,6 +215,8 @@ export class Board {
       this.db.exec("UPDATE cards SET priority = CASE priority WHEN -1 THEN -10 WHEN 1 THEN 50 WHEN 2 THEN 100 ELSE priority END; PRAGMA user_version = 1");
     }
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
+    for (const column of ["sentinelId TEXT", "sentinelRunId TEXT", "findingKey TEXT"]) if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
+    this.db.exec("CREATE INDEX IF NOT EXISTS cards_sentinel_finding ON cards(sentinelId, findingKey) WHERE sentinelId IS NOT NULL");
     // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
     // Cards that exist before this column are not new, and a card made in the board UI never is.
     if (!cardColumns.has("unseen")) this.db.exec("ALTER TABLE cards ADD COLUMN unseen INTEGER NOT NULL DEFAULT 0");
@@ -826,7 +834,7 @@ export class Board {
   listAutoPullRequestCandidates(): { card: Card; run: Run }[] {
     const result: { card: Card; run: Run }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.integration === "github-pr" && item.autoPullRequestEnabled && !item.autoReviewEnabled)) {
-      const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='review'").all(repoBoard.repo) as { id: string }[];
+      const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='review' AND ${notSentinelJob}`).all(repoBoard.repo) as { id: string }[];
       for (const { id } of ids) {
         const card = this.getCard(id), run = this.listRuns(id)[0];
         if (card && run && this.awaitsAutoPullRequest(repoBoard, card, run)) result.push({ card, run });
@@ -848,7 +856,7 @@ export class Board {
   /** The board's Review cards whose agent review has not started, oldest finished run first: the order they start in. */
   private reviewsAwaiting(repoBoard: RepoBoard): { cardId: string; run: Run }[] {
     if (!repoBoard.autoReviewEnabled) return [];
-    const ids = this.db.prepare("SELECT id FROM cards WHERE repo=? AND status='review'").all(repoBoard.repo) as { id: string }[];
+    const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='review' AND ${notSentinelJob}`).all(repoBoard.repo) as { id: string }[];
     const waiting: { cardId: string; run: Run }[] = [];
     for (const { id } of ids) {
       const run = this.listRuns(id)[0];
@@ -919,9 +927,9 @@ export class Board {
   /** Every run, agent review and card, for the Statistics page to aggregate; see server/stats.ts. */
   statsInput(): StatsInput {
     return {
-      runs: this.db.prepare("SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL").all() as StatsInput["runs"],
-      reviews: this.db.prepare("SELECT cards.repo AS repo, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId").all() as StatsInput["reviews"],
-      cards: this.db.prepare("SELECT repo, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards)").all() as StatsInput["cards"],
+      runs: this.db.prepare(`SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["runs"],
+      reviews: this.db.prepare(`SELECT cards.repo AS repo, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId WHERE ${notSentinelJob}`).all() as StatsInput["reviews"],
+      cards: this.db.prepare(`SELECT repo, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards WHERE ${notSentinelJob})`).all() as StatsInput["cards"],
     };
   }
   listAutoReviewJobs(cardId: string): AutoReviewJob[] {
@@ -984,7 +992,7 @@ export class Board {
   }
   /** Per repo, how many cards created outside the board UI the operator has not seen yet. Archived cards are left out. */
   newCardCounts(): Record<string, number> {
-    const rows = this.db.prepare("SELECT repo, COUNT(*) AS count FROM cards WHERE unseen=1 AND status!='archived' GROUP BY repo").all() as { repo: string; count: number }[];
+    const rows = this.db.prepare(`SELECT repo, COUNT(*) AS count FROM cards WHERE unseen=1 AND status!='archived' AND ${notSentinelJob} GROUP BY repo`).all() as { repo: string; count: number }[];
     return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
   }
   /** Per repo, how many sentinel jobs are in progress: running, or queued to start. Keep in step with `isSentinelLive` in src/sentinels.tsx. */
@@ -1005,9 +1013,9 @@ export class Board {
   /** Cards per board and status. `review` counts only Review cards that need you; `reviewWaiting` counts the rest. */
   cardCounts(): Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> {
     const counts: Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> = {};
-    for (const row of this.db.prepare("SELECT repo, status, COUNT(*) AS count FROM cards WHERE status != 'review' GROUP BY repo, status").all() as { repo: string; status: CardStatus; count: number }[])
+    for (const row of this.db.prepare(`SELECT repo, status, COUNT(*) AS count FROM cards WHERE status != 'review' AND ${notSentinelJob} GROUP BY repo, status`).all() as { repo: string; status: CardStatus; count: number }[])
       (counts[row.repo] ??= {})[row.status] = Number(row.count);
-    const review = this.db.prepare(`${cardQuery} WHERE cards.status='review' GROUP BY cards.id`).all() as CardRow[];
+    const review = this.db.prepare(`${cardQuery} WHERE cards.status='review' AND ${notSentinelJob} GROUP BY cards.id`).all() as CardRow[];
     for (const card of this.toCards(review)) {
       const key = card.reviewWait ? "reviewWaiting" : "review", repo = (counts[card.repo] ??= {});
       repo[key] = (repo[key] ?? 0) + 1;
@@ -1074,7 +1082,9 @@ export class Board {
     return row && this.getCard(row.id);
   }
   /** `dependsOn` lists cards on the same board that must be Done before this one starts. */
-  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin }): Card {
+  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin; provenance?: CardProvenance;
+    /** Makes the card Ready in the same transaction, with this reason in its history. */ ready?: string;
+    /** Runs inside the same transaction, after the card exists. If it throws, no card is made. */ inTransaction?: (card: Card) => void }): Card {
     const key = input.idempotencyKey ?? null;
     if (key !== null && (!key.trim() || key.length > 200)) throw new Error("Idempotency key must be 1 to 200 characters");
     const existing = key === null ? undefined : this.getCardByIdempotencyKey(input.repo, key);
@@ -1083,12 +1093,17 @@ export class Board {
     this.addRepo(input.repo);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?, ?)")
-        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1);
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen, sentinelId, sentinelRunId, findingKey) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1, input.provenance?.sentinelId ?? null, input.provenance?.sentinelRunId ?? null, input.provenance?.findingKey ?? null);
       for (const parent of new Set(input.dependsOn ?? [])) {
         this.checkDependency(this.getCard(id)!, parent);
         this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);
       }
+      if (input.ready !== undefined) {
+        this.db.prepare("UPDATE cards SET status='ready', updatedAt=? WHERE id=?").run(now(), id);
+        this.explain(id, input.ready);
+      }
+      input.inTransaction?.(this.getCard(id)!);
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return this.getCard(id)!;

@@ -149,7 +149,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(56, 104, 74)");
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
-    await page.getByRole("group", { name: "Theme" }).getByRole("radio", { name: "Default" }).check();
+    await page.getByRole("group", { name: "Mode" }).getByRole("radio", { name: "Dark" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
     await page.goBack();
     // Going back reopens the card this screen left; close it so the next click opens it fresh.
