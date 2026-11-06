@@ -356,3 +356,257 @@ test("the sentinel starts its own jobs, from the timer or a /bakery comment, and
     assert.match(started[1], /^Requested on PR/, "the request job starts as soon as it is made");
   } finally { f.cleanup(); }
 });
+
+const sentinelOf = (f: ReturnType<typeof fixture>, kind: "pr-health" | "pr-requests" = "pr-health") => f.store.listSentinels(f.repoBoard.id).find(item => item.kind === kind)!;
+
+test("each run is recorded, and its findings link the job card back to the sentinel and run", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr();
+    await f.sentinel.pass(f.repoBoard.id);
+    const sentinel = sentinelOf(f);
+    const [card] = f.sentinelCards();
+    const [run] = f.store.listRuns(sentinel.id);
+    assert.equal(run.status, "succeeded");
+    assert.ok(run.finishedAt);
+    assert.deepEqual(run.findings, [{ key: `pr:${pr.number}`, cardId: card.id, outcome: "created" }]);
+    assert.deepEqual([card.sentinelId, card.sentinelRunId, card.findingKey], [sentinel.id, run.id, `pr:${pr.number}`]);
+    await f.sentinel.pass(f.repoBoard.id);
+    const runs = f.store.listRuns(sentinel.id);
+    assert.equal(runs.length, 2, "a repeat run is a new record");
+    assert.deepEqual(runs[0].findings, [{ key: `pr:${pr.number}`, cardId: card.id, outcome: "open" }], "the unresolved finding makes no second card");
+    assert.equal(f.sentinelCards().length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("a finding that is fixed and then recurs gets a new card, and finishing a card leaves its sentinel alone", async () => {
+  const f = fixture();
+  try {
+    f.addPr();
+    await f.sentinel.pass(f.repoBoard.id);
+    const [first] = f.sentinelCards();
+    f.board.setStatus(first.id, "done");
+    const sentinel = sentinelOf(f);
+    assert.equal(f.store.getSentinel(sentinel.id)!.enabled, true, "completing a finding card does not pause or complete its sentinel");
+    assert.equal(f.store.openFindingCard(sentinel.id, first.findingKey!), undefined);
+    f.land("m.txt"); f.advance(lockTtlMs + 1);
+    await f.sentinel.pass(f.repoBoard.id);
+    const cards = f.sentinelCards();
+    assert.equal(cards.length, 2);
+    assert.equal(new Set(cards.map(card => card.findingKey)).size, 1, "both cards carry the same finding key");
+    assert.equal(f.store.openFindingCard(sentinel.id, first.findingKey!), cards.find(card => card.id !== first.id)!.id);
+  } finally { f.cleanup(); }
+});
+
+test("a paused sentinel starts no run and holds its unstarted jobs; resuming runs it at once", async () => {
+  const f = fixture();
+  try {
+    const started: string[] = [];
+    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); });
+    f.addPr();
+    await sentinel.pass(f.repoBoard.id);
+    const record = sentinelOf(f);
+    assert.equal(started.length, 1);
+    f.store.updateSentinel(record.id, { enabled: false });
+    f.addPr();
+    assert.equal(await sentinel.runSentinel(record.id), undefined);
+    await sentinel.dispatchDue();
+    assert.equal(f.store.listRuns(record.id).length, 1, "no run while paused");
+    assert.equal(f.sentinelCards().length, 1);
+    assert.throws(() => f.store.runSoon(record.id), /paused/);
+    // A job still waiting to start when the sentinel is paused stays put.
+    started.length = 0;
+    const [job] = f.sentinelCards();
+    sentinel.startReadyJobs();
+    assert.deepEqual(started, [], `${job.id} waits while its sentinel is paused`);
+    f.store.updateSentinel(record.id, { enabled: true });
+    assert.ok(f.store.dueSentinels(new Date().toISOString()).some(item => item.id === record.id), "resuming makes it due now");
+    await sentinel.dispatchDue();
+    assert.equal(f.store.listRuns(record.id).length, 2);
+    assert.equal(f.sentinelCards().length, 2);
+  } finally { f.cleanup(); }
+});
+
+test("a run is not dispatched twice: an unfinished run blocks another, and a restart marks it interrupted", async () => {
+  const f = fixture();
+  try {
+    const record = f.sentinel.describe(f.repoBoard.id)[0].sentinel;
+    const first = f.store.beginRun(record.id);
+    assert.ok(first);
+    assert.equal(f.store.beginRun(record.id), undefined);
+    assert.equal(await f.sentinel.runSentinel(record.id), undefined);
+    assert.ok(Date.parse(f.store.getSentinel(record.id)!.nextRunAt) > Date.now(), "starting a run schedules the next one");
+    const restarted = new SentinelStore(f.board.sqlite);
+    assert.equal(restarted.getRun(first!)!.status, "interrupted");
+    assert.ok(restarted.beginRun(record.id), "the sentinel can run again after a restart");
+  } finally { f.cleanup(); }
+});
+
+test("a failing run is recorded with its error and the next run retries", async () => {
+  const f = fixture();
+  try {
+    f.addPr();
+    const real = f.github.listOpenPullRequests;
+    (f.github as unknown as { listOpenPullRequests: () => Promise<never> }).listOpenPullRequests = async () => { throw new Error("gh is down"); };
+    const run = await f.sentinel.runSentinel(f.sentinel.describe(f.repoBoard.id).find(item => item.sentinel.kind === "pr-health")!.sentinel.id);
+    assert.equal(run?.status, "failed");
+    assert.match(run?.error ?? "", /gh is down/);
+    f.github.listOpenPullRequests = real;
+    await f.sentinel.pass(f.repoBoard.id);
+    assert.equal(f.sentinelCards().length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("the sentinel's instructions are added to its jobs' briefs", async () => {
+  const f = fixture();
+  try {
+    f.addPr();
+    const record = f.sentinel.describe(f.repoBoard.id).find(item => item.sentinel.kind === "pr-health")!.sentinel;
+    f.store.updateSentinel(record.id, { instructions: "Never touch lockfiles." });
+    await f.sentinel.pass(f.repoBoard.id);
+    assert.match(f.sentinelCards()[0].body, /Never touch lockfiles\./);
+  } finally { f.cleanup(); }
+});
+
+test("existing jobs are linked to their sentinels once, keeping ids, status and PR locks, and the migration can re-run", async () => {
+  const f = fixture();
+  try {
+    const health = f.board.createCard({ title: "Fix PR #7: Old", repo: f.repo, idempotencyKey: "sentinel:7:abc:def", priority: 0, body: "brief" });
+    const request = f.board.createCard({ title: "Requested on PR #8: Old", repo: f.repo, idempotencyKey: "request:issues/comments:3", priority: 0, body: "brief" });
+    const plain = f.board.createCard({ title: "Plain", repo: f.repo, priority: 0, body: "" });
+    f.board.setStatus(request.id, "done");
+    await f.locks.acquire("acme/widgets", 7, health.id);
+    const before = f.board.listCards(f.repo).map(card => [card.id, card.status, card.idempotencyKey]);
+    assert.equal(f.store.adoptLegacyJobs(), 2);
+    const after = f.board.listCards(f.repo);
+    assert.deepEqual(after.map(card => [card.id, card.status, card.idempotencyKey]), before, "ids, statuses and keys are unchanged");
+    const [h, r, p] = [health, request, plain].map(card => after.find(item => item.id === card.id)!);
+    assert.equal(h.sentinelId, sentinelOf(f, "pr-health").id);
+    assert.equal(r.sentinelId, sentinelOf(f, "pr-requests").id);
+    assert.equal(h.findingKey, "pr:7");
+    assert.equal(p.sentinelId ?? null, null, "ordinary cards are untouched");
+    assert.equal(h.sentinelRunId, `legacy-${h.sentinelId}`);
+    assert.ok(f.store.getRun(h.sentinelRunId!)!.findings.some(item => item.cardId === health.id));
+    assert.ok(parseLock(f.comments.get(7)![0].body), "the PR lock is still held");
+    assert.equal(f.store.adoptLegacyJobs(), 0, "nothing is adopted twice");
+    assert.equal(f.store.listRuns(h.sentinelId!).length, 1);
+    // A restart with the same data builds a new Sentinel, which neither duplicates records nor starts the job.
+    const started: string[] = [];
+    const restarted = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); });
+    assert.equal(f.store.listSentinels(f.repoBoard.id).length, 2);
+    assert.equal(restarted.describe(f.repoBoard.id).length, 2);
+    assert.equal(f.store.listRuns(h.sentinelId!).length, 1);
+    assert.deepEqual(started, []);
+  } finally { f.cleanup(); }
+});
+
+test("sentinel jobs stay out of the card lanes, counts, stats and review automation", async () => {
+  const f = fixture();
+  try {
+    f.board.createCard({ title: "Plain", repo: f.repo, priority: 0, body: "" });
+    f.addPr();
+    await f.sentinel.pass(f.repoBoard.id);
+    const [job] = f.sentinelCards();
+    f.board.sqlite.prepare("UPDATE cards SET status='review' WHERE id=?").run(job.id);
+    assert.ok(job.sentinelId);
+    const counts = f.board.cardCounts()[f.repo] ?? {};
+    assert.equal(counts.review ?? 0, 0, "a sentinel job in Review is not counted as waiting for a person");
+    assert.equal(Object.values(counts).reduce((sum: number, count) => sum + (count ?? 0), 0), 1, "only the plain card counts");
+    assert.equal(f.board.sentinelInProgressCounts()[f.repo] ?? 0, 0, "Review is not in progress for a sentinel");
+    assert.ok(!f.board.listAutoPullRequestCandidates().some(item => item.card.id === job.id));
+  } finally { f.cleanup(); }
+});
+
+test("a card, its attempt and its Ready status are made together: a failed write leaves no half-made finding", async () => {
+  const f = fixture();
+  try {
+    f.addPr();
+    const record = f.store.recordAttempt.bind(f.store);
+    f.store.recordAttempt = () => { throw new Error("disk full"); };
+    await f.sentinel.pass(f.repoBoard.id);
+    assert.equal(f.sentinelCards().length, 0, "the card was rolled back with the attempt");
+    f.store.recordAttempt = record;
+    await f.sentinel.pass(f.repoBoard.id);
+    const [card] = f.sentinelCards();
+    assert.equal(f.sentinelCards().length, 1);
+    assert.equal(card.status, "ready");
+    assert.ok(f.store.attemptPr(card.id));
+  } finally { f.cleanup(); }
+});
+
+test("a Triage finding card left without an attempt by a crash is recovered, not skipped forever", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr();
+    await f.sentinel.pass(f.repoBoard.id);
+    const [made] = f.sentinelCards();
+    // Rebuild the partial state an older build could leave: card persisted in Triage, no attempt recorded.
+    f.board.sqlite.prepare("UPDATE cards SET status='triage' WHERE id=?").run(made.id);
+    f.board.sqlite.prepare("DELETE FROM sentinel_attempts WHERE cardId=?").run(made.id);
+    await f.sentinel.pass(f.repoBoard.id);
+    const cards = f.sentinelCards();
+    assert.equal(cards.length, 1, "no duplicate card");
+    assert.equal(cards[0].status, "ready");
+    assert.equal(f.store.attemptPr(made.id), pr.number);
+    // If its PR closed in the meantime, the stranded card is withdrawn instead.
+    f.board.sqlite.prepare("UPDATE cards SET status='triage' WHERE id=?").run(made.id);
+    f.board.sqlite.prepare("DELETE FROM sentinel_attempts WHERE cardId=?").run(made.id);
+    pr.state = "MERGED";
+    await f.sentinel.pass(f.repoBoard.id);
+    assert.equal(f.board.getCard(made.id)!.status, "done");
+  } finally { f.cleanup(); }
+});
+
+test("a queued job whose PR was fixed while the sentinel was paused is withdrawn, not started, on resume", async () => {
+  const f = fixture();
+  try {
+    const started: string[] = [];
+    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); });
+    const pr = f.addPr();
+    await sentinel.pass(f.repoBoard.id);
+    const record = sentinelOf(f);
+    const [job] = f.sentinelCards();
+    started.length = 0;
+    f.board.sqlite.prepare("UPDATE cards SET status='ready' WHERE id=?").run(job.id);
+    f.store.updateSentinel(record.id, { enabled: false });
+    pr.mergeable = "MERGEABLE";
+    f.store.updateSentinel(record.id, { enabled: true });
+    // Not yet due again: the queued job is still checked before it starts.
+    f.store.updateSentinel(record.id, { intervalMs: 7 * 24 * 3_600_000 });
+    f.board.sqlite.prepare("UPDATE sentinels SET nextRunAt=? WHERE id=?").run(new Date(Date.now() + 3_600_000).toISOString(), record.id);
+    await sentinel.dispatchDue();
+    assert.deepEqual(started, [], "the obsolete job did not start");
+    assert.equal(f.board.getCard(job.id)!.status, "done");
+  } finally { f.cleanup(); }
+});
+
+test("changing a sentinel's interval moves its next run: shortening advances it, lengthening is honoured", () => {
+  const f = fixture();
+  try {
+    const record = f.store.ensureSentinel(f.repoBoard.id, "pr-health", 7 * 24 * 3_600_000);
+    const runId = f.store.beginRun(record.id)!;
+    f.store.finishRun(runId, { status: "succeeded", findings: [], summary: "" });
+    const afterRun = f.store.getSentinel(record.id)!;
+    assert.ok(Date.parse(afterRun.nextRunAt) > Date.now() + 6 * 24 * 3_600_000, "a week away");
+    const shorter = f.store.updateSentinel(record.id, { intervalMs: 15_000 });
+    assert.ok(Date.parse(shorter.nextRunAt) <= Date.now() + 15_000, "shortening advances the next run");
+    const longer = f.store.updateSentinel(record.id, { intervalMs: 3_600_000 });
+    assert.ok(Date.parse(longer.nextRunAt) > Date.now() + 3_000_000 - 1, "lengthening pushes it out to one interval after the last run");
+  } finally { f.cleanup(); }
+});
+
+test("with sentinels turned off nothing dispatches, even when asked", async () => {
+  const f = fixture();
+  try {
+    const started: string[] = [];
+    const off = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); }, 15_000, false);
+    f.addPr();
+    const record = f.store.ensureSentinel(f.repoBoard.id, "pr-health");
+    assert.equal(await off.runSentinel(record.id), undefined);
+    await off.dispatchDue();
+    off.startReadyJobs();
+    assert.equal(f.store.listRuns(record.id).length, 0);
+    assert.equal(f.sentinelCards().length, 0);
+    assert.deepEqual(started, []);
+  } finally { f.cleanup(); }
+});

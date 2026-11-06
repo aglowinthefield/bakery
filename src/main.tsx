@@ -2050,11 +2050,7 @@ export function App() {
                 {currentBoard.repo}
               </p>
             </header>
-            <Sentinels
-              cards={cards}
-              loaded={loadedBoard === boardId}
-              onOpenCard={setSelected}
-            />
+            <Sentinels boardId={boardId} onOpenCard={setSelected} />
           </main>
         )}
       {view === "chat" && boardId && currentBoard && (

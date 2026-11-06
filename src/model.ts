@@ -195,6 +195,10 @@ export type Card = {
   repo: string;
   source: "manual";
   idempotencyKey?: string | null;
+  /** Set on a job card made by a sentinel: the sentinel, its run, and the finding's stable key. */
+  sentinelId?: string | null;
+  sentinelRunId?: string | null;
+  findingKey?: string | null;
   /** Ids of the cards made from this card's plan; null until the plan is used. */
   createdCardIds?: string[] | null;
   status: Status;
@@ -465,3 +469,39 @@ export function moveId(
   ids.splice(at === -1 ? ids.length : at, 0, from);
   return ids;
 }
+
+export type SentinelKind = "pr-health" | "pr-requests";
+/** A persistent monitor. Not a card: it has no lane and no Review or Done. `enabled` false is paused. */
+export type Sentinel = {
+  id: string;
+  boardId: string;
+  kind: SentinelKind;
+  instructions: string;
+  scope: string;
+  intervalMs: number;
+  enabled: boolean;
+  nextRunAt: string;
+  lastRunAt: string | null;
+};
+export type SentinelFinding = {
+  key: string;
+  cardId: string;
+  outcome: "created" | "open" | "withdrawn";
+};
+export type SentinelRun = {
+  id: string;
+  sentinelId: string;
+  status: "running" | "succeeded" | "failed" | "interrupted";
+  startedAt: string;
+  finishedAt: string | null;
+  findings: SentinelFinding[];
+  summary: string;
+  error: string | null;
+};
+export type SentinelOverview = {
+  sentinel: Sentinel;
+  name: string;
+  running: boolean;
+  runs: SentinelRun[];
+  jobs: Card[];
+};

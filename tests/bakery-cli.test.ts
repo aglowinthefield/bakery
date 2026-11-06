@@ -63,6 +63,8 @@ async function fixture(boards: object[] = [board]) {
       data = { ...cards[0], dependsOn: [other], blocked: true };
     }
     else if (/^\/api\/boards\/board-one\/cards\/card-one\/dependencies\/[\w-]+$/.test(path) && req.method === "DELETE") data = { ...cards[0], dependsOn: [], blocked: false };
+    else if (path === `/api/boards/${board.id}/sentinels`) data = [{ sentinel: { id: "sen-one", kind: "pr-health", enabled: true, intervalMs: 300000, nextRunAt: "2026-01-01T00:05:00Z" }, runs: [{ status: "succeeded", startedAt: "2026-01-01T00:00:00Z" }], jobs: [] }];
+    else if (path === "/api/sentinels/sen-one" && req.method === "PATCH") data = { id: "sen-one", kind: "pr-health", enabled: (input as { enabled: boolean }).enabled, nextRunAt: "2026-01-01T00:05:00Z" };
     else if (path === `/api/boards/${board.id}/conflicts`) data = [{ cardId: "card-one", details: "merge conflict" }];
     else if (path === `/api/boards/${board.id}/settings` && req.method === "PATCH") data = { ...board, ...(input as object) };
     else if (path === `/api/boards/${board.id}/auto-pickup/reset-limit` && req.method === "POST") data = { ...board, autoPickupStarts: 0, autoPickupNextAt: null };
@@ -82,6 +84,15 @@ async function fixture(boards: object[] = [board]) {
   const run = (...args: string[]) => runIn(undefined, ...args);
   return { requests, run, runIn, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
+
+test("lists sentinels and pauses and resumes one", async () => {
+  const f = await fixture();
+  try {
+    assert.match((await f.run("sentinels")).stdout, /sen-one\tpr-health\tenabled\tevery:300s.*succeeded/);
+    assert.match((await f.run("sentinel-pause", "sen-one")).stdout, /paused/);
+    assert.match((await f.run("sentinel-resume", "sen-one")).stdout, /enabled/);
+  } finally { await f.close(); }
+});
 
 test("lists boards, cards, runs and conflicts through the HTTP API", async () => {
   const f = await fixture();
