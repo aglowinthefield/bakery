@@ -831,9 +831,15 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
 });
 // Set once the dev supervisor asks for a drain. /api/status reports it so the UI can say a restart is coming.
 const draining = { on: false };
-const shutdown = (signal: "SIGINT" | "SIGTERM") => { server.close(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
+let shuttingDown = false;
+const shutdown = (signal: "SIGINT" | "SIGTERM") => {
+  // A second signal (systemctl restart after an update already began shutdown) must not close the database twice.
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
+  server.close(); server.closeAllConnections(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
-  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); }); };
+  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {
