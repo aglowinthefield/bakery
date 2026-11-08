@@ -18,6 +18,9 @@ struct BoardScreen: View {
     @State private var open: CardRoute?
     @State private var composing = false
     @State private var manual: [String: Bool] = [:]
+    @State private var searching = false
+    @Environment(\.horizontalSizeClass) private var hSize
+    private var compact: Bool { hSize == .compact }
 
     private var board: Board? { store.board(boardId) }
 
@@ -56,9 +59,17 @@ struct BoardScreen: View {
                 RepoBadge(icon: board.icon, color: board.color, size: 36)
                 Text(board.name).font(.ui(26, .semibold)).tracking(-1.2).lineLimit(1)
                 Spacer(minLength: 0)
-                Button { composing = true } label: { Label("New card", systemImage: "plus") }.buttonStyle(.pill)
+                if compact && tab == 0 {
+                    Button { searching.toggle(); if !searching { query = "" } } label: {
+                        Image(systemName: "magnifyingglass").frame(width: 36, height: 36)
+                            .foregroundStyle(searching ? T.primary : T.mutedFg)
+                    }
+                }
+                Button { composing = true } label: {
+                    if compact { Image(systemName: "plus").frame(width: 12) } else { Label("New card", systemImage: "plus") }
+                }.buttonStyle(.pill)
             }
-            HStack(spacing: 10) {
+            if !compact { HStack(spacing: 10) {
                 if let remote = board.remoteUrl, let url = URL(string: remote) {
                     Link(destination: url) {
                         HStack(spacing: 6) {
@@ -72,8 +83,8 @@ struct BoardScreen: View {
                 }
                 Label(board.isGitHubPR ? "GitHub pull requests" : "Local main", systemImage: board.isGitHubPR ? "arrow.triangle.pull" : "arrow.triangle.merge")
                     .font(.ui(12)).foregroundStyle(T.mutedFg).lineLimit(1)
-            }
-            if tab == 0 {
+            } }
+            if tab == 0 && (!compact || searching) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").font(.system(size: 14)).foregroundStyle(T.mutedFg)
                     TextField("Search cards", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled()
