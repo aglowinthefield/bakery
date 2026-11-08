@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Card, Run } from "./board.js";
 import { settledReply } from "./agent.js";
+import { githubMarkdown } from "./github-markdown.js";
 import { defaultSemanticTypes, semanticTitleProblem, type SemanticTitleRules } from "../src/pr-title.js";
 
 /** What a repository requires of a pull request title and body, read from its own files. */
@@ -96,7 +97,8 @@ export const cardTitle = (card: Pick<Card, "id" | "title">) => card.title.replac
 export function pullRequestBody(body: string, card: Pick<Card, "id">, run: Pick<Run, "output">): string {
   const summary = (run.output || "").trim().slice(-3000);
   const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
-  return `${body.trim()}\n\n---\n\nOpened by Bakery for card \`${card.id}\`.${details}`;
+  // Attachment links are relative to the local server and would be broken on GitHub; see githubMarkdown.
+  return githubMarkdown(`${body.trim()}\n\n---\n\nOpened by Bakery for card \`${card.id}\`.${details}`);
 }
 
 /** The drafter has no tools, so it gets the start of the patch and a per-file summary of all of it. */

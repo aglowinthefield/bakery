@@ -86,3 +86,22 @@ export function attachmentsPrompt(dataDir: string, items: Attachment[]): string 
   const lines = items.map(item => `- ${attachmentPath(dataDir, item)} (${item.name}, ${item.type}, ${item.size} bytes)`);
   return `The operator attached these files to the card. Read them from these paths when they matter to the task:\n${lines.join("\n")}`;
 }
+
+/**
+ * One shell word for `path`. Windows shells (cmd, PowerShell) take double quotes, and a path cannot contain one there;
+ * POSIX shells take single quotes, with any single quote inside closed, escaped and reopened.
+ */
+export function quoteArg(path: string, platform: string = process.platform): string {
+  return platform === "win32" ? `"${path}"` : `'${path.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * Tells a work agent how to keep evidence. A /tmp path in a report is gone after cleanup and unreadable from the board,
+ * so screenshots and other generated files go through `bakery-cli attach`, which saves them as this card's attachments
+ * and prints markdown for the report. The server address reaches the CLI through the agent's environment. Empty when
+ * the CLI or the card's board is unknown.
+ */
+export function evidencePrompt(attach: { cli: string } | undefined, boardId: string | undefined, cardId: string, platform: string = process.platform): string {
+  if (!attach || !boardId) return "";
+  return `Screenshots, recordings, logs and any other file you generate as evidence must be saved as attachments of this card before you finish, because files under /tmp or elsewhere on disk are not durable and the reviewer cannot open them. Save them with \`node ${quoteArg(attach.cli, platform)} attach ${cardId} --board ${boardId} FILE...\`; it prints one markdown line per file. Paste those lines into your final report (images appear inline in Bakery; in a GitHub pull request they become text, since screenshots are never published there) instead of reporting local paths. Do not upload files anywhere else. Check that a screenshot shows what you claim before attaching it, and say plainly when a capture could not be verified.`;
+}

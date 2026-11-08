@@ -1,6 +1,9 @@
 #!/usr/bin/env node
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve, sep } from "node:path";
+import { basename, extname, resolve, sep } from "node:path";
+import { Readable } from "node:stream";
 import { doctor, report } from "./doctor.mjs";
 
 const usage = `bakery-cli — local Bakery API client
@@ -18,6 +21,7 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|hi
        bakery-cli undepend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
        bakery-cli edit CARD_ID [--title TITLE] [--body BODY] [--board ID|PATH] [--json]
        bakery-cli archive CARD_ID... [--board ID|PATH] [--json]
+       bakery-cli attach CARD_ID FILE... [--board ID|PATH] [--json]
        bakery-cli purge-attachments CARD_ID... --yes [--board ID|PATH] [--json]
        bakery-cli close CARD_ID [--board ID|PATH] [--json]
        bakery-cli restore CARD_ID [--board ID|PATH] [--json]
@@ -50,6 +54,10 @@ show prints a card with its dependencies, dependents, attempts and latest auto-r
 title and/or description.
 close moves a Review card to Done without merging; its worktree and branch stay.
 archive accepts only Done cards and archives all or none; restore moves one archived card back to Done.
+attach saves local files (screenshots, logs, recordings) as attachments of a card and prints a markdown line for each:
+![name](/api/boards/…/attachments/ID) for images, [name](…) for other files. Paste those lines into a report to show
+images inline, since a /tmp path in a report is not durable. It reads each FILE as you, so it can read what you can;
+the server never reads paths. Nothing is sent to any service outside Bakery.
 purge-attachments permanently deletes the attached files and records of archived cards, all or none. It cannot be
 undone, even if the card is restored, so it needs --yes.
 stats prints card counts per lane and the pickup state.
@@ -158,6 +166,31 @@ async function findCard(origin, path, id) {
 const usageText = item => typeof item.cost !== "number" ? "—"
   : `${money(item.cost)} (${item.inputTokens ?? 0} in, ${item.outputTokens ?? 0} out, ${item.cacheReadTokens ?? 0} cache read, ${item.cacheWriteTokens ?? 0} cache write)`;
 
+const imageTypes = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
+
+/** Streams one local file to the card's attachment route. Fails with the file's path when it is missing or not a regular file. */
+async function uploadAttachment(origin, base, file) {
+  const path = resolve(file);
+  let info;
+  try { info = await stat(path); }
+  catch (error) { throw new Error(`Cannot attach ${file}: ${error.code === "ENOENT" ? "no such file" : error.message}`); }
+  if (!info.isFile()) throw new Error(`Cannot attach ${file}: not a regular file`);
+  if (!info.size) throw new Error(`Cannot attach ${file}: the file is empty`);
+  const type = imageTypes[extname(path).toLowerCase()] ?? "application/octet-stream";
+  let response;
+  try {
+    response = await fetch(new URL(`${base}?name=${encodeURIComponent(basename(path))}`, origin), {
+      method: "POST", headers: { "Content-Type": type, "Content-Length": String(info.size) },
+      body: Readable.toWeb(createReadStream(path)), duplex: "half",
+    });
+  } catch (error) {
+    throw new Error(`Cannot reach Bakery at ${origin.origin}: ${error instanceof Error ? error.message : error}`);
+  }
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`Bakery ${response.status}: ${data?.error ?? response.statusText}`);
+  return data;
+}
+
 function print(data, json, lines) {
   if (json) console.log(JSON.stringify(data, null, 2));
   else for (const line of lines) console.log(line);
@@ -167,10 +200,11 @@ async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.help || !command) { console.log(usage); return; }
-  const variadic = ["start", "recover", "archive", "add", "purge-attachments"];
+  const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
   const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
   if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usage}`);
   if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
@@ -185,6 +219,7 @@ async function main() {
   if (command === "board" && args.length && opts.board) throw new Error("Name the board once, as ID|PATH or with --board");
   if (command === "pr") cardId(args[0]);
   if (["show", "edit", "archive", "purge-attachments", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
+  if (command === "attach") cardId(args[0]);
   if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
   if (opts.on.length && command !== "depend" && command !== "undepend") throw new Error("--on is only valid with depend or undepend");
   if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
@@ -297,6 +332,24 @@ async function main() {
   } else if (command === "archive" || command === "restore") {
     const cards = await request(origin, `${path}/cards/${command === "archive" ? "archive" : "unarchive"}`, "POST", { cardIds: args });
     print(cards, opts.json, cards.map(cardLine));
+  } else if (command === "attach") {
+    const id = args[0];
+    await findCard(origin, path, id);
+    // One at a time, in order. Each saved file's line prints at once; a failure stops there and names the file, files
+    // already saved stay attached, and --json still prints them before the error and nonzero exit.
+    const saved = [];
+    const link = item => `${/^image\/(png|jpeg|gif|webp)$/.test(item.type) ? "!" : ""}[${item.name.replace(/[\[\]]/g, "_")}](${path}/cards/${id}/attachments/${item.id})`;
+    try {
+      for (const file of args.slice(1)) {
+        const item = await uploadAttachment(origin, `${path}/cards/${id}/attachments`, file);
+        saved.push(item);
+        if (!opts.json) console.log(link(item));
+      }
+    } catch (error) {
+      if (opts.json && saved.length) console.log(JSON.stringify(saved, null, 2));
+      throw error;
+    }
+    if (opts.json) console.log(JSON.stringify(saved, null, 2));
   } else if (command === "purge-attachments") {
     const purged = await request(origin, `${path}/cards/purge-attachments`, "POST", { cardIds: args });
     print(purged, opts.json, purged.map(item => `${item.cardId}\tpurged ${item.files} file${item.files === 1 ? "" : "s"}, ${item.bytes} bytes`));

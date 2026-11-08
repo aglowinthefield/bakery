@@ -87,3 +87,25 @@ test("parses GFM tables with alignment, escaped pipes and code spans", () => {
   // A lone pipe line without a delimiter row stays a paragraph.
   assert.equal(parseMarkdown("a | b\nc | d")[0].type, "paragraph");
 });
+
+test("images render only from Bakery's stored files, never from local paths or other URLs", () => {
+  const attachment = "/api/boards/b-1/cards/c-1/attachments/a-1";
+  assert.deepEqual(parseMarkdown(`![Before](${attachment})`), [
+    { type: "paragraph", children: [{ type: "image", src: attachment, alt: "Before" }] },
+  ]);
+  for (const src of ["/tmp/b05cap/before.png", "file:///etc/passwd", "https://example.com/a.png", "/api/boards/b/cards/c/attachments/a/../../x", "/api/boards/b/cards/c/review"]) {
+    const [paragraph] = parseMarkdown(`![shot](${src})`);
+    assert.ok(paragraph.type === "paragraph" && paragraph.children.every(node => node.type !== "image"), src);
+  }
+});
+
+test("non-image evidence links keep their durable attachment URL, and local paths in links stay text", () => {
+  const log = "/api/boards/b-1/cards/c-1/attachments/a-2";
+  assert.deepEqual(parseMarkdown(`[run.log](${log})`), [
+    { type: "paragraph", children: [{ type: "link", href: log, children: [{ type: "text", text: "run.log" }] }] },
+  ]);
+  for (const href of ["/tmp/run.log", "file:///etc/passwd", "/api/boards/b/cards/c/attachments/a/../../x", "/api/boards/b/cards/c/review", "/api/boards/b/cards/c/attachments/a?x=1"]) {
+    const [paragraph] = parseMarkdown(`[log](${href})`);
+    assert.ok(paragraph.type === "paragraph" && paragraph.children.every(node => node.type !== "link"), href);
+  }
+});

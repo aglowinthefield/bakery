@@ -1,4 +1,10 @@
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { parseMarkdown, type Block, type Inline } from "./markdown.js";
 import { highlightDiffCode, languageForPath } from "./review-diff.js";
 import { cn } from "./lib/utils";
@@ -110,6 +116,29 @@ function withCardChips(text: string, key: number): ReactNode {
   return parts;
 }
 
+/** A stored image shown inline and linked to its full size. If the file cannot load, a plain link to it takes its place. */
+function MarkdownImage({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  const name = alt || "image";
+  if (failed)
+    return (
+      <a href={src} target="_blank" rel="noreferrer">
+        {name} (image unavailable)
+      </a>
+    );
+  return (
+    <a href={src} target="_blank" rel="noreferrer">
+      <img
+        src={src}
+        alt={name}
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="my-3 max-h-[36rem] max-w-full rounded border border-border object-contain"
+      />
+    </a>
+  );
+}
+
 function renderInline(nodes: Inline[]): ReactNode[] {
   return nodes.map((node, index) => {
     switch (node.type) {
@@ -126,16 +155,7 @@ function renderInline(nodes: Inline[]): ReactNode[] {
       case "del":
         return <del key={index}>{renderInline(node.children)}</del>;
       case "image":
-        return (
-          <a key={index} href={node.src} target="_blank" rel="noreferrer">
-            <img
-              src={node.src}
-              alt={node.alt}
-              loading="lazy"
-              className="my-3 max-h-[36rem] max-w-full rounded border border-border object-contain"
-            />
-          </a>
-        );
+        return <MarkdownImage key={index} src={node.src} alt={node.alt} />;
       case "link":
         return (
           <a key={index} href={node.href} target="_blank" rel="noreferrer">
