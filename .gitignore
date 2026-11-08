@@ -9,3 +9,6 @@ dist-next.partial/
 .worktrees/
 src-tauri/target/
 src-tauri/gen/
+
+ios/build/
+ios/Bakery.xcodeproj/

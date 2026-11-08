@@ -1,0 +1,24 @@
+# Bakery for iOS
+
+A native SwiftUI client for a running Bakery server. It uses the same `/api` endpoints as the web board and follows the web UI: Today, board lanes, card tiles, card detail (Overview, Review, Attempts, Discuss, Details), chat, settings.
+
+## Run it
+
+The project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen) from `project.yml`.
+
+```sh
+cd ios
+xcodegen generate
+open Bakery.xcodeproj
+```
+
+On first launch enter the server address, for example `mochi:4317`. The server only accepts Host names listed in `BAKERY_ALLOWED_HOSTS`, so add that name there.
+
+`scripts/sim.sh` builds on a remote Mac over ssh and launches the simulator (`MAC_HOST`, default `visitingstar`). Launch arguments such as `-serverURL`, `-startRoute today|settings|board:<id>` and `-startCard <id>` open a screen directly.
+
+## Layout
+
+- `Bakery/Networking` API client.
+- `Bakery/Models` Codable types mirroring `src/model.ts`.
+- `Bakery/Theme` colours from `src/style.css`, light and dark.
+- `Bakery/Views` screens.
