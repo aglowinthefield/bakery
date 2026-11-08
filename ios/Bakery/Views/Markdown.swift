@@ -114,7 +114,12 @@ struct MarkdownView: View {
     static func inline(_ text: String) -> AttributedString {
         var options = AttributedString.MarkdownParsingOptions()
         options.interpretedSyntax = .inlineOnlyPreservingWhitespace
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        var result = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        for run in result.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            result[run.range].font = .mono(13)
+            result[run.range].backgroundColor = T.code
+        }
+        return result
     }
 
     @ViewBuilder private func render(_ block: MDBlock) -> some View {
