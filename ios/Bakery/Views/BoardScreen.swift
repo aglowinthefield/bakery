@@ -64,10 +64,11 @@ struct BoardScreen: View {
                         Image(systemName: "magnifyingglass").frame(width: 36, height: 36)
                             .foregroundStyle(searching ? T.primary : T.mutedFg)
                     }
+                    .accessibilityLabel("Search")
                 }
                 Button { composing = true } label: {
                     if compact { Image(systemName: "plus").frame(width: 12) } else { Label("New card", systemImage: "plus") }
-                }.buttonStyle(.pill)
+                }.buttonStyle(.pill).accessibilityLabel("New card")
             }
             if !compact { HStack(spacing: 10) {
                 if let remote = board.remoteUrl, let url = URL(string: remote) {

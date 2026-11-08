@@ -39,3 +39,21 @@ targets:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: Bakery connects to your Bakery server on your network.
         UILaunchScreen: {}
+  BakeryUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [BakeryUITests]
+    dependencies:
+      - target: Bakery
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.bakery.ios.uitests
+        TEST_TARGET_NAME: Bakery
+schemes:
+  Bakery:
+    build:
+      targets:
+        Bakery: all
+    test:
+      targets: [BakeryUITests]
