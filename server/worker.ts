@@ -54,6 +54,9 @@ export type LiveActivity = { tool: string; turn: number; since: string };
 // Screenshots read back into a session make single events several MB; the cap only guards against a runaway line.
 const MAX_PI_EVENT_BYTES = 500_000_000;
 
+/** Hard limit on one agent run. The separate Worktrunk hook timeout is unaffected. */
+const runTimeoutMinutes = 60;
+
 export class Worker {
   private active = new Map<string, ChildProcess>();
   /** In memory only, keyed by run id; cleared when the run ends. */
@@ -361,7 +364,7 @@ export class Worker {
       pendingBytes = data.length - start;
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
-    const timer = setTimeout(() => this.terminate(run.id, child, "30-minute run timeout"), 30 * 60 * 1000);
+    const timer = setTimeout(() => this.terminate(run.id, child, `${runTimeoutMinutes}-minute run timeout`), runTimeoutMinutes * 60 * 1000);
     child.on("error", (error) => { this.live.delete(run.id); this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
       clearTimeout(timer); this.active.delete(run.id); this.live.delete(run.id);
