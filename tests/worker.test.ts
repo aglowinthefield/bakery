@@ -333,6 +333,38 @@ test("Pi termination distinguishes Bakery stop and shutdown from an unexplained 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("an agent run is terminated after 60 minutes, not earlier", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(fakePi, "#!/bin/sh\nexec sleep 30\n");
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Timeout", body: "", repo });
+    board.setStatus(card.id, "ready");
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const run = worker.start(board.getCard(card.id)!);
+    t.mock.timers.tick(60 * 60 * 1000 - 1);
+    t.mock.timers.reset();
+    assert.equal(board.getRun(run.id)?.status, "running");
+    const other = board.createCard({ title: "Timeout 2", body: "", repo });
+    board.setStatus(other.id, "ready");
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const second = worker.start(board.getCard(other.id)!);
+    t.mock.timers.tick(60 * 60 * 1000);
+    t.mock.timers.reset();
+    await waitFor(() => board.getRun(second.id)?.status === "failed");
+    assert.match(board.getRun(second.id)!.error!, /Bakery sent SIGTERM: 60-minute run timeout/);
+    worker.stop(run.id);
+    await waitFor(() => board.getRun(run.id)?.status === "failed");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 async function waitFor(predicate: () => boolean) {
   const end = Date.now() + 5000;
   while (!predicate()) {
