@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Board, Card, RepoBoard } from "./board.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
+import { githubMarkdown } from "./github-markdown.js";
 
 // GitHub pull request integration. On a `github-pr` board a card is Done once its PR has merged on GitHub
 // and the merge commit is on origin/main. Local main is only ever fast-forwarded to origin/main.
@@ -308,7 +309,7 @@ const bakeryIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/b
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${body}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
+  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 

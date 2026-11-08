@@ -306,6 +306,15 @@ function parseBlocks(lines: string[], depth: number): Block[] {
 }
 
 const SAFE_URL = /^(?:https?:\/\/|mailto:)/i;
+/**
+ * Images render only from Bakery's own stored files: chat images and card attachments. Any other source, a local path
+ * such as /tmp/shot.png or a remote URL, stays text, so markdown never makes the browser fetch outside these routes.
+ */
+const IMAGE_URL =
+  /^\/api\/boards\/[\w-]+\/(?:chats\/[\w-]+\/images\/[a-f0-9]{64}|cards\/[\w-]+\/attachments\/[\w-]+)$/;
+/** A card attachment, linked as `[run.log](…)` for files that are not images. Same narrow shape as the image URLs. */
+const ATTACHMENT_URL =
+  /^\/api\/boards\/[\w-]+\/cards\/[\w-]+\/attachments\/[\w-]+$/;
 const PUNCTUATION = /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/;
 
 function isSpace(character: string | undefined) {
@@ -400,12 +409,7 @@ function parseInline(source: string, depth: number): Inline[] {
 
     if (character === "!" && source[index + 1] === "[") {
       const image = parseLink(source, index + 1);
-      if (
-        image &&
-        /^\/api\/boards\/[\w-]+\/chats\/[\w-]+\/images\/[a-f0-9]{64}$/.test(
-          image.href,
-        )
-      ) {
+      if (image && IMAGE_URL.test(image.href)) {
         push({ type: "image", src: image.href, alt: image.label });
         index = image.end;
         continue;
@@ -416,7 +420,7 @@ function parseInline(source: string, depth: number): Inline[] {
       const link = parseLink(source, index);
       if (link) {
         const children = parseInline(link.label, depth + 1);
-        if (SAFE_URL.test(link.href))
+        if (SAFE_URL.test(link.href) || ATTACHMENT_URL.test(link.href))
           push({ type: "link", href: link.href, children });
         else {
           flush();

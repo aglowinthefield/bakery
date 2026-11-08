@@ -64,7 +64,11 @@ const chats = new Chats(board, {
   env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
   topic: (repoBoard, message) => writeTopic(piBin, repoBoard.repo, piModelArgs(board.agentModelFor(repoBoard.repo, "draft")), message),
 });
-const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt");
+// Work agents save screenshots and other evidence as card attachments through the CLI, which finds this server through its environment.
+const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt", {
+  cli: join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs"),
+  env: { BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
+});
 const integration = new Integration(board, dataDir);
 board.onRun((event, run) => {
   const card = event === "finished" && run.status === "review" ? board.getCard(run.cardId) : undefined;
