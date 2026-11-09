@@ -1,0 +1,29 @@
+name: iOS build
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ios.yml
+      - ios/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - name: Generate project
+        run: cd ios && xcodegen
+      - name: Build for simulator
+        run: |
+          cd ios
+          xcodebuild -project Bakery.xcodeproj -scheme Bakery -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build-for-testing
