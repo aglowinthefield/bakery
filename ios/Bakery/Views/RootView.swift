@@ -72,15 +72,12 @@ struct ConnectView: View {
         }
         .padding(24).frame(maxWidth: 520).frame(maxWidth: .infinity)
         .screenBackground()
-        .onAppear { address = store.serverURL }
+        .onAppear { if address.isEmpty { address = store.serverURL } }
     }
 
     private func test() async {
         testing = true; error = nil
-        store.serverURL = address
-        store.connect()
-        await store.refresh()
-        if let e = store.connectionError { error = e; store.serverURL = ""; store.connect() }
+        error = await store.tryConnect(address)
         testing = false
     }
 }
