@@ -57,7 +57,7 @@ struct ConnectView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 12) { BrandIcon(size: 44); Wordmark(size: 26) }
             Text("Connect to your Bakery server").font(.ui(22, .semibold))
-            Text("Enter the address the server is reachable at, for example mochi:4317. The server must list that hostname in BAKERY_ALLOWED_HOSTS.")
+            Text("Enter the address the server is reachable at, for example mochi (port 4317 is assumed unless you add one). The server must list that hostname in BAKERY_ALLOWED_HOSTS.")
                 .font(.ui(14)).foregroundStyle(T.mutedFg)
             TextField("host:4317", text: $address)
                 .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
