@@ -358,6 +358,15 @@ export function Statistics({ boards }: { boards: Board[] }) {
                 hint={`${summary.ciReworks} sent back for CI`}
               />
               <Tile
+                label="Build cache hits"
+                value={percent(stats.buildCache.hitRate)}
+                hint={
+                  stats.buildCache.tasks
+                    ? `${stats.buildCache.hits} of ${stats.buildCache.tasks} turbo tasks, ${minutes(stats.buildCache.savedMinutes)} saved`
+                    : "No turbo runs recorded"
+                }
+              />
+              <Tile
                 label="Agent reviews"
                 value={String(summary.agentReviews)}
                 hint={`${summary.agentReviewsMerged} merged`}

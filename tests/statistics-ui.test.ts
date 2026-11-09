@@ -19,7 +19,7 @@ after(async () => { await browser?.close(); await server?.close(); });
 const board = { autoCollapseEmptySwimlanes: false, autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
 const boards = [{ ...board, id: "board-a", repo: "/code/alpha" }, { ...board, id: "board-b", repo: "/code/beta" }];
 const now = Date.now();
-const run = (over: object) => ({ repo: "/code/alpha", cardId: "c", status: "review", startedBy: "manual", agent: "pi · sonnet", ciFix: 0, startedAt: new Date(now - 3_600_000).toISOString(), finishedAt: new Date(now - 3_000_000).toISOString(), cost: 1.5, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 100, ...over });
+const run = (over: object) => ({ repo: "/code/alpha", cardId: "c", status: "review", startedBy: "manual", agent: "pi · sonnet", ciFix: 0, startedAt: new Date(now - 3_600_000).toISOString(), finishedAt: new Date(now - 3_000_000).toISOString(), cost: 1.5, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 100, cacheTasks: 0, cacheHits: 0, cacheSavedMs: 0, ...over });
 const data = { runs: [run({}), run({ status: "failed", cost: 0.5 }), run({ repo: "/code/beta", agent: "pi · opus", startedBy: "auto" })], reviews: [], cards: [] };
 
 test("Statistics charts the aggregated stats and refetches when the range or repository changes", async () => {

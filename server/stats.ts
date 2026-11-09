@@ -1,5 +1,5 @@
 // Aggregates what Bakery already records per card (runs, agent reviews, usage) for the Statistics page.
-export type StatsRun = { repo: string; cardId: string; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null };
+export type StatsRun = { repo: string; cardId: string; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; cacheTasks: number; cacheHits: number; cacheSavedMs: number };
 export type StatsReview = { repo: string; state: string; agent: string; startedAt: string; finishedAt: string | null; cost: number | null };
 export type StatsCard = { repo: string; status: string; createdAt: string; updatedAt: string; attempts: number; reviewRounds: number; ciReworks: number };
 export type StatsInput = { runs: StatsRun[]; reviews: StatsReview[]; cards: StatsCard[] };
@@ -10,6 +10,8 @@ export type GroupRow = { name: string; runs: number; failed: number; cost: numbe
 export type Stats = {
   days: number | null;
   summary: { cardsCreated: number; cardsDone: number; runs: number; successRate: number | null; cost: number; tokens: number; avgRunMinutes: number | null; avgLeadHours: number | null; autoShare: number | null; reviewRounds: number; ciReworks: number; agentReviews: number; agentReviewsMerged: number };
+  /** Turbo cache across runs in range; hitRate is null when no run used turbo. */
+  buildCache: { tasks: number; hits: number; hitRate: number | null; savedMinutes: number };
   daily: DayPoint[];
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
   byAgent: GroupRow[];
@@ -93,6 +95,10 @@ export function buildStats(input: StatsInput, options: StatsOptions): Stats {
       reviewRounds: sum(created.map(card => card.reviewRounds)), ciReworks: sum(created.map(card => card.ciReworks)),
       agentReviews: reviews.length, agentReviewsMerged: reviews.filter(review => review.state === "merged").length,
     },
+    buildCache: (() => {
+      const tasks = sum(runs.map(run => run.cacheTasks)), hits = sum(runs.map(run => run.cacheHits));
+      return { tasks, hits, hitRate: tasks ? hits / tasks : null, savedMinutes: sum(runs.map(run => run.cacheSavedMs)) / 60_000 };
+    })(),
     daily: [...daily.values()],
     tokens: { input: sum(runs.map(run => run.inputTokens)), output: sum(runs.map(run => run.outputTokens)), cacheRead: sum(runs.map(run => run.cacheReadTokens)), cacheWrite: sum(runs.map(run => run.cacheWriteTokens)) },
     byAgent: group(runs, run => run.agent || "Unknown"),

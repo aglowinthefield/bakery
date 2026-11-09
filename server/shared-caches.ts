@@ -6,8 +6,9 @@
  * Adding a tool is one row: its environment variable and its cache directory relative to the repository root.
  */
 export const sharedCaches = {
-  turbo: { label: "Turborepo", env: "TURBO_CACHE_DIR", dir: ".turbo/cache" },
-} as const satisfies Record<string, { label: string; env: string; dir: string }>;
+  // TURBO_RUN_SUMMARY makes every turbo run leave a JSON summary of its cache hits; server/turbo-summary.ts reads them for Statistics.
+  turbo: { label: "Turborepo", env: "TURBO_CACHE_DIR", dir: ".turbo/cache", extraEnv: { TURBO_RUN_SUMMARY: "true" } },
+} as const satisfies Record<string, { label: string; env: string; dir: string; extraEnv: Record<string, string> }>;
 export type SharedCache = keyof typeof sharedCaches;
 
 /** The known caches in `value`, deduplicated and in table order. Anything else is an error, so a typo is not silently ignored. */

@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
+import { turboCacheUsage } from "./turbo-summary.js";
 import { PoisonedSessionError, Worker } from "./worker.js";
 import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
@@ -71,6 +72,10 @@ const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "w
 });
 const integration = new Integration(board, dataDir);
 board.onRun((event, run) => {
+  if (event === "finished" && run.worktree && board.boardForRepo(board.getCard(run.cardId)?.repo ?? "")?.sharedCaches.includes("turbo")) {
+    const usage = turboCacheUsage(run.worktree, Date.parse(run.startedAt));
+    if (usage) board.recordCacheUsage(run.id, usage);
+  }
   const card = event === "finished" && run.status === "review" ? board.getCard(run.cardId) : undefined;
   if (card) integration.recordChangedFiles(card);
 });
