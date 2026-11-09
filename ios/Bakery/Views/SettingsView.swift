@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @State private var address = ""
+    @State private var reconnectError: String?
+    @State private var reconnecting = false
 
     var body: some View {
         ScrollView {
@@ -14,11 +16,11 @@ struct SettingsView: View {
                         TextField("host:4317", text: $address).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                             .padding(10).overlay(RoundedRectangle(cornerRadius: 7.5).stroke(T.border))
                         HStack {
-                            Button("Reconnect") { store.serverURL = address; store.connect() }.buttonStyle(.pill)
-                                .disabled(address == store.serverURL)
+                            Button("Reconnect") { Task { await reconnect() } }.buttonStyle(.pill)
+                                .disabled(address == store.serverURL || reconnecting)
                             Button("Disconnect") { store.serverURL = ""; store.connect() }.buttonStyle(.pill(.outline))
                         }
-                        if let e = store.connectionError { Text(e).font(.ui(12)).foregroundStyle(T.destructive) }
+                        if let e = reconnectError ?? store.connectionError { Text(e).font(.ui(12)).foregroundStyle(T.destructive) }
                     }
                 }
                 Bordered {
@@ -34,6 +36,12 @@ struct SettingsView: View {
         }
         .screenBackground()
         .onAppear { address = store.serverURL; store.watchedBoard = nil; store.watchingToday = false }
+    }
+
+    private func reconnect() async {
+        reconnecting = true; reconnectError = nil
+        reconnectError = await store.tryConnect(address)
+        reconnecting = false
     }
 
     private func binding(_ key: WritableKeyPath<AppSettings, Bool?>) -> Binding<Bool> {

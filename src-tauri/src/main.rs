@@ -70,8 +70,7 @@ async fn connect(
         .serial
         .try_lock()
         .map_err(|_| "A connection is already in progress.".to_string())?;
-    let url = server::server_url(&address, allow_http)?;
-    server::probe(&url).await?;
+    let url = server::probe_first(server::server_candidates(&address, allow_http)?).await?;
     server::save(&settings_path(&app)?, &url)?;
     open_remote(&app, &state, url)?;
     // The remote window is up, so the connection window has done its job.

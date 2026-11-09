@@ -38,7 +38,7 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|hi
 
 doctor checks Node, git, pi, gh, worktrunk, the data directory, the server and each board, printing PASS, WARN or FAIL
 per check; it exits 1 if any check fails. Against a remote BAKERY_URL it checks only the server and boards.
-Set BAKERY_URL (or BAKERY_PORT) to use a different server (non-loopback needs BAKERY_ALLOW_REMOTE=1). --json prints full API data.
+Set BAKERY_URL (or BAKERY_PORT) to use a different server; it may omit the scheme and port 4317 (non-loopback needs BAKERY_ALLOW_REMOTE=1). --json prints full API data.
 Without --board, commands use the board whose repository contains the current directory, or the only board.
 add is quick capture: the words after it become the title of a new Triage card.
 runs lists each attempt's tokens and cost ("—" when an older attempt has no record) and the card total,
@@ -97,12 +97,28 @@ function options(argv) {
   return result;
 }
 
-function serverUrl() {
-  const url = new URL(process.env.BAKERY_URL ?? `http://127.0.0.1:${process.env.BAKERY_PORT ?? "4317"}`);
-  if (url.protocol !== "http:" || (process.env.BAKERY_ALLOW_REMOTE !== "1" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) || url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
-    throw new Error("BAKERY_URL must be a loopback HTTP origin (for example http://127.0.0.1:4317); set BAKERY_ALLOW_REMOTE=1 to allow another host");
-  }
-  return url;
+// BAKERY_URL may omit the scheme (HTTPS is tried first, then HTTP) and the port (4317).
+async function serverUrl() {
+  const raw = (process.env.BAKERY_URL ?? `http://127.0.0.1:${process.env.BAKERY_PORT ?? "4317"}`).trim();
+  const invalid = new Error("BAKERY_URL must be a loopback server origin (for example 127.0.0.1:4317); set BAKERY_ALLOW_REMOTE=1 to allow another host");
+  const parse = text => {
+    let url;
+    try { url = new URL(text); } catch { throw invalid; }
+    if (!["http:", "https:"].includes(url.protocol) || (process.env.BAKERY_ALLOW_REMOTE !== "1" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) || url.pathname !== "/" || url.search || url.hash || url.username || url.password) throw invalid;
+    return url;
+  };
+  if (raw.includes("://")) return parse(raw);
+  // A non-special scheme keeps the port exactly as typed, so ":443" is not mistaken for no port.
+  let typedPort = "";
+  try { typedPort = new URL(`bakery://${raw}`).port; } catch { throw invalid; }
+  const candidates = ["https", "http"].map(scheme => {
+    const url = parse(`${scheme}://${raw}`);
+    if (!typedPort) url.port = "4317";
+    return url;
+  });
+  const answers = await Promise.all(candidates.map(url => fetch(new URL("/api/status", url), { signal: AbortSignal.timeout(10_000) }).then(() => true, () => false)));
+  // Any HTTP answer, even a 403, means the scheme is right; request() reports the real error.
+  return candidates[answers.indexOf(true)] ?? candidates[1];
 }
 
 async function request(origin, path, method = "GET", input) {
@@ -232,7 +248,7 @@ async function main() {
     args.forEach(cardId);
     if (!opts.yes) throw new Error(`Starting ${args.length === 1 ? "a run" : `${args.length} runs`} uses paid Pi. Repeat with --yes to confirm.`);
   }
-  const origin = serverUrl();
+  const origin = await serverUrl();
   if (command === "doctor") {
     if (opts.board) throw new Error("--board is not valid with doctor");
     const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards") });

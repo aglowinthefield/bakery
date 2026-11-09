@@ -7,8 +7,8 @@ The client targets macOS, Windows, and Linux. The Linux native build and smoke t
 ## Connect
 
 1. Join the server's Tailnet or trusted private network.
-2. Open Bakery and enter the server origin, such as `https://bakery.example.ts.net` or `http://100.64.0.10:4317`. Do not include a board path.
-3. For HTTP outside loopback, explicitly allow unencrypted HTTP. Use HTTPS if traffic is not already protected by your private network.
+2. Open Bakery and enter the server address, such as `bakery.example.ts.net` or `100.64.0.10`. Without a port it uses 4317. Without a scheme it tries HTTPS first, then HTTP where HTTP is allowed. Do not include a board path.
+3. For HTTP outside loopback, explicitly allow unencrypted HTTP. Use HTTPS if traffic is not already protected by your private network. On a Tailnet, `tailscale serve --bg --https=4318 http://<tailnet-ip>:4317` puts HTTPS in front of Bakery; then enter `bakery.example.ts.net:4318`.
 4. Click **Connect**. The client checks `/api/status` and confirms that the root serves HTML before opening the server.
 
 The client remembers the last validated address and reconnects to it on launch. The connection window stays hidden unless there is no saved address or the server is unreachable, and it hides again once you connect. Press `Cmd/Ctrl+,` to open Settings, where **Server > Change server…** (or **Bakery > Connect to another server…**) switches servers, **Reload Bakery** (`Cmd/Ctrl+R`) to recover after a server restart, or **Open in browser** to leave the webview. External links, popup links, and HTTP(S) downloads open in your system browser. Custom URL schemes and blob downloads are not supported.

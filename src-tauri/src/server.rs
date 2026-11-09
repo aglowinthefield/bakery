@@ -24,6 +24,36 @@ pub fn server_url(value: &str, allow_http: bool) -> Result<Url, String> {
     Ok(url)
 }
 
+/// Addresses typed without a scheme try HTTPS and, where HTTP is allowed, HTTP, in that order of preference.
+/// Without a port they use Bakery's default, 4317.
+pub fn server_candidates(value: &str, allow_http: bool) -> Result<Vec<Url>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("Enter your server address, such as bakery.example.ts.net.".into());
+    }
+    if value.contains("://") {
+        return Ok(vec![server_url(value, allow_http)?]);
+    }
+    // A non-special scheme keeps the port exactly as typed, so ":443" is not mistaken for no port.
+    let typed_port = Url::parse(&format!("bakery://{value}"))
+        .ok()
+        .and_then(|url| url.port());
+    let mut candidates = Vec::new();
+    for scheme in ["https", "http"] {
+        let mut url = match server_url(&format!("{scheme}://{value}"), allow_http) {
+            Ok(url) => url,
+            Err(error) if scheme == "https" => return Err(error),
+            Err(_) => continue,
+        };
+        if typed_port.is_none() {
+            url.set_port(Some(4317))
+                .map_err(|_| "Enter a valid server address.".to_string())?;
+        }
+        candidates.push(url);
+    }
+    Ok(candidates)
+}
+
 pub fn same_origin(server: &Url, target: &Url) -> bool {
     matches!(target.scheme(), "http" | "https") && target.origin() == server.origin()
 }
@@ -86,6 +116,36 @@ struct Status {
     _draining: bool,
     #[serde(rename = "activeRuns")]
     _active_runs: u64,
+}
+
+/// Probes every candidate at once and returns the first one, in order, that answers.
+/// When none do, the error from a server that answered beats a connection failure.
+pub async fn probe_first(candidates: Vec<Url>) -> Result<Url, String> {
+    let tasks: Vec<_> = candidates
+        .iter()
+        .cloned()
+        .map(|url| tauri::async_runtime::spawn(async move { probe(&url).await }))
+        .collect();
+    let mut errors = Vec::new();
+    let mut winner = None;
+    for (url, task) in candidates.into_iter().zip(tasks) {
+        match task
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result)
+        {
+            Ok(()) if winner.is_none() => winner = Some(url),
+            Ok(()) => {}
+            Err(error) => errors.push(error),
+        }
+    }
+    if let Some(url) = winner {
+        return Ok(url);
+    }
+    let answered = errors
+        .iter()
+        .position(|error| !error.starts_with("Cannot reach Bakery"));
+    Err(errors.swap_remove(answered.unwrap_or(errors.len() - 1)))
 }
 
 pub async fn probe(url: &Url) -> Result<(), String> {
@@ -156,6 +216,43 @@ mod tests {
             "bakery.example",
         ] {
             assert!(server_url(value, false).is_err(), "accepted {value}");
+        }
+    }
+
+    #[test]
+    fn addresses_without_a_scheme_try_https_then_http_on_port_4317() {
+        let urls = |value, allow_http| -> Vec<String> {
+            server_candidates(value, allow_http)
+                .unwrap()
+                .iter()
+                .map(|url| url.to_string())
+                .collect()
+        };
+        assert_eq!(
+            urls(" mochi.example.ts.net ", true),
+            [
+                "https://mochi.example.ts.net:4317/",
+                "http://mochi.example.ts.net:4317/"
+            ]
+        );
+        assert_eq!(
+            urls("mochi.example.ts.net:4318", false),
+            ["https://mochi.example.ts.net:4318/"]
+        );
+        assert_eq!(
+            urls("bakery.example:443", false),
+            ["https://bakery.example/"]
+        );
+        assert_eq!(
+            urls("127.0.0.1", false),
+            ["https://127.0.0.1:4317/", "http://127.0.0.1:4317/"]
+        );
+        assert_eq!(
+            urls("https://bakery.example", false),
+            ["https://bakery.example/"]
+        );
+        for value in ["", "bakery.example/board/1", "user:secret@bakery.example"] {
+            assert!(server_candidates(value, true).is_err(), "accepted {value}");
         }
     }
 

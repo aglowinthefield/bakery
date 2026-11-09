@@ -38,7 +38,6 @@ targets:
       properties:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-          NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: Bakery connects to your Bakery server on your network.
         UILaunchScreen: {}
   BakeryUITests:
