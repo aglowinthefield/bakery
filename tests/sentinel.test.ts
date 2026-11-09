@@ -46,7 +46,9 @@ function fixture() {
   const comments = new Map<number, { id: string; body: string; author: string }[]>();
   let nextComment = 1;
   const asked: RepoComment[] = [];
+  const reacted: string[] = [];
   const github = {
+    reactToRepoComment: async (_repo: string, id: string) => { reacted.push(id); },
     repoComments: async (_repo: string, since: string) => asked.filter(item => item.at > since),
     requestTarget: async (_repo: string, number: number) => { const pr = prs.find(item => item.number === number); if (!pr) throw new Error("not a pull request"); return { ...pr, isCrossRepository: !!pr.fork }; },
     viewer: async () => "aglowinthefield",
@@ -66,7 +68,7 @@ function fixture() {
   const addPr = (over: Partial<Pr> = {}): Pr => { const number = n++; const pr = { number, title: `Change ${number}`, url: `https://github.com/acme/widgets/pull/${number}`, author: { login: "aglowinthefield" }, isDraft: false, mergeable: "CONFLICTING", state: "OPEN", headRefOid: `head${number}`.padEnd(40, "0"), headRefName: `feature-${number}`, ...over }; prs.push(pr); return pr; };
   const sentinelCards = () => board.listCards(repo).filter(card => card.title.startsWith("Fix PR #"));
   const land = (name: string) => { git(upstream, "pull", "-q", "--ff-only", "origin", "main"); writeFileSync(join(upstream, name), name); git(upstream, "add", name); git(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", name); git(upstream, "push", "-q", "origin", "main"); };
-  return { dir, origin, upstream, github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, asked, sentinelCards, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, origin, upstream, github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, asked, sentinelCards, reacted, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("a conflicting PR by the owner gets a Ready card whose brief rebases onto main first, and a lock", async () => {
@@ -315,8 +317,25 @@ test("a /bakery comment from a trusted author on any PR makes a Ready request ca
     assert.doesNotMatch(cards[0].body, /delete everything/);
     assert.match(cards[0].body, new RegExp(`git switch -C feature-${pr.number}`));
     assert.ok(f.store.isRequestCard(cards[0].id));
+    assert.deepEqual(f.reacted, ["issues/comments:1"], "the trusted request is acknowledged, the stranger's and the chatter are not");
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     assert.equal(f.board.listCards(f.repo).filter(card => card.title.startsWith("Requested on PR")).length, 1, "a comment is acted on once");
+  } finally { f.cleanup(); }
+});
+
+test("a /bakery comment that waits behind an open request card says so on the PR, once", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr({ mergeable: "MERGEABLE", author: { login: "someone" } });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const at = (seconds: number) => new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + seconds * 1000).toISOString();
+    f.asked.push({ id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/bakery first", prNumber: pr.number });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    f.asked.push({ id: "issues/comments:2", at: at(10), author: "a", association: "OWNER", body: "/bakery second", prNumber: pr.number });
+    for (let i = 0; i < 3; i++) await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.deepEqual(f.reacted, ["issues/comments:1", "issues/comments:2"]);
+    const waiting = f.comments.get(pr.number)!.filter(item => /earlier request on this pull request is still being worked on/.test(item.body));
+    assert.equal(waiting.length, 1);
   } finally { f.cleanup(); }
 });
 

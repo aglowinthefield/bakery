@@ -208,6 +208,7 @@ export class Board {
       INSERT OR IGNORE INTO settings(id, confirmRunStart) VALUES (1, 0);
       CREATE TABLE IF NOT EXISTS card_events (id INTEGER PRIMARY KEY AUTOINCREMENT, cardId TEXT NOT NULL, at TEXT NOT NULL, fromStatus TEXT, toStatus TEXT, reason TEXT NOT NULL DEFAULT '');
       CREATE INDEX IF NOT EXISTS card_events_card ON card_events(cardId, id);
+      CREATE TABLE IF NOT EXISTS pr_request_acks (commentId TEXT PRIMARY KEY, at TEXT NOT NULL);
       -- Every status change lands here, whichever code path made it. The method that made it then fills in the reason (see explain).
       CREATE TRIGGER IF NOT EXISTS card_status_events AFTER UPDATE OF status ON cards WHEN OLD.status IS NOT NEW.status BEGIN
         INSERT INTO card_events(cardId, at, fromStatus, toStatus) VALUES (NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), OLD.status, NEW.status);
@@ -586,6 +587,14 @@ export class Board {
         .run(cardId, headSha, requests.slice(0, 20_000), now());
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /**
+   * Records `keys` as done and returns the ones not done before: how Bakery's GitHub acknowledgements (a reaction on a
+   * `/bakery` comment, a note that a request is waiting) happen once however many passes see the same comment.
+   */
+  firstTime(keys: string[]): string[] {
+    const insert = this.db.prepare("INSERT OR IGNORE INTO pr_request_acks(commentId, at) VALUES (?, ?)");
+    return keys.filter(key => insert.run(key, now()).changes > 0);
   }
   /** Comments up to `seen` need no action (or the first look at a PR): later ones are new. */
   markCommentsSeen(cardId: string, seen: string): void {

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { isSentinelJob, reportFromOutput, type Board, type Card, type RepoBoard, type Run } from "./board.js";
-import { boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub, type RepoComment, trustedBakeryComments } from "./github.js";
+import { acknowledge, boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub, type RepoComment, trustedBakeryComments } from "./github.js";
 import type { PrLocks } from "./pr-locks.js";
 import { prFindingKey, sentinelKinds, sentinelNames, type SentinelFinding, type SentinelKind, type SentinelRecord, type SentinelRun, type SentinelStore } from "./sentinel-store.js";
 
@@ -217,12 +217,19 @@ export class Sentinel {
     if (!since) { this.store.setRequestCursor(repo, new Date().toISOString()); return; }
     const asked = trustedBakeryComments((await this.github.repoComments(repo, since)).filter(item => item.at > since));
     if (!asked.length) return;
+    // Everyone who asked is told Bakery read it, whether it acts now or the request waits.
+    const fresh = new Set(this.board.firstTime(asked.map(item => `react:${item.id}`)));
+    for (const item of asked) if (fresh.has(`react:${item.id}`)) await acknowledge(() => this.github.reactToRepoComment(repo, item.id), `${repo}#${item.prNumber} comment ${item.id}`);
     const cards = this.board.listCards(repoBoard.repo).filter(isOpen);
     const requestCards = new Set(this.store.listRequestCards(repo).filter(item => cards.some(card => card.id === item.cardId)).map(item => item.prNumber));
     const groups = new Map<number, RepoComment[]>();
     let stopAt: string | undefined;
     for (const item of asked) {
-      if (requestCards.has(item.prNumber)) { stopAt = item.at; console.log(`${tag} #${item.prNumber}: a request card is still open; the request waits`); break; }
+      if (requestCards.has(item.prNumber)) {
+        stopAt = item.at; console.log(`${tag} #${item.prNumber}: a request card is still open; the request waits`);
+        if (this.board.firstTime([`wait:${item.id}`]).length) await commentOnPullRequest(this.github, repo, item.prNumber, "Bakery read this request, but an earlier request on this pull request is still being worked on. It will pick this one up when that card is finished.");
+        break;
+      }
       groups.set(item.prNumber, [...groups.get(item.prNumber) ?? [], item]);
     }
     const handled = asked.filter(item => !stopAt || item.at < stopAt);
