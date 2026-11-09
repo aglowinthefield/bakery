@@ -70,6 +70,33 @@ test("card transcript groups tool activity by turn without storing tool argument
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a board's shared caches point the agent at the main checkout's cache, and only when enabled", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$TURBO_CACHE_DIR" > "${dir}/seen-$(basename "$PWD")"\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const repoBoard = board.addRepo(repo);
+    const runCard = async (title: string) => {
+      const card = board.createCard({ title, body: "", repo });
+      board.setStatus(card.id, "ready");
+      const run = worker.start(board.getCard(card.id)!);
+      await waitFor(() => board.getRun(run.id)?.status === "review");
+      return readFileSync(join(dir, `seen-${card.id}`), "utf8");
+    };
+    assert.equal(await runCard("Off"), "");
+    board.setSharedCaches(repoBoard.id, ["turbo"]);
+    assert.equal(await runCard("On"), join(repo, ".turbo/cache"));
+    assert.throws(() => board.setSharedCaches(repoBoard.id, ["turb0"]), /Unknown shared cache "turb0"; known caches are turbo/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a multi-megabyte Pi event line (a screenshot read back) does not kill the run", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), big = join(dir, "big.json");
