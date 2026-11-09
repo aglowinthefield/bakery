@@ -26,3 +26,7 @@ On first launch enter the server address, for example `mochi:4317`. The server o
 ## UI tests
 
 `BAKERY_BOARD=<scratch board id> scripts/sim.sh test` runs `BakeryUITests` on the simulator against a live server and copies screenshots to `/tmp/bakery-ios-shots`. Use a scratch board: the tests create and move cards.
+
+## TestFlight
+
+`ASC_KEY_ID=... ASC_ISSUER_ID=... scripts/testflight.sh` archives on the Mac and uploads to TestFlight. The key must have the Admin role (App Manager cannot create cloud-managed distribution certificates) and live at `~/.appstoreconnect/private_keys/AuthKey_<id>.p8` on the Mac.
