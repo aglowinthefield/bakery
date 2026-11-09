@@ -41,6 +41,18 @@ for (const integration of ["github-pr", "local"]) {
         assert.deepEqual(await inLane("Review"), ["mine"]);
         assert.deepEqual((await inLane("Agent reviewing")).sort(), ["agent", "fixing"]);
         assert.deepEqual(await inLane("Waiting on GitHub"), ["github"]);
+        // The three lanes share the review status but fold one at a time.
+        const expandable = (name: string) => page.getByRole("button", { name: `Expand ${name} lane` }).count();
+        await page.getByRole("button", { name: "Collapse Agent reviewing lane" }).click();
+        assert.equal(await expandable("Agent reviewing"), 1);
+        assert.equal(await expandable("Review"), 0);
+        assert.equal(await expandable("Waiting on GitHub"), 0);
+        await page.getByRole("button", { name: "Collapse Waiting on GitHub lane" }).click();
+        assert.equal(await expandable("Review"), 0);
+        await page.getByRole("button", { name: "Expand Agent reviewing lane" }).click();
+        assert.equal(await expandable("Agent reviewing"), 0);
+        assert.equal(await expandable("Waiting on GitHub"), 1);
+        assert.deepEqual(await inLane("Review"), ["mine"]);
       } else {
         assert.equal(await page.getByRole("region", { name: "Agent reviewing lane" }).count(), 0);
         assert.equal((await inLane("Review")).length, 4);

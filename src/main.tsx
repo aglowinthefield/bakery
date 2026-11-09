@@ -953,7 +953,7 @@ export function App() {
   };
   useEffect(stopSelecting, [boardId]);
   const [manualCollapse, setManualCollapse] = useState<
-    Record<string, Partial<Record<Status, boolean>>>
+    Record<string, Partial<Record<Lane["id"], boolean>>>
   >({});
   useEffect(() => {
     void api<Board[]>("/boards")
@@ -1621,11 +1621,11 @@ export function App() {
     setDragging(null);
     setDropLane(null);
   };
-  const toggleLane = (status: Status, collapsed: boolean) => {
+  const toggleLane = (lane: Lane["id"], collapsed: boolean) => {
     if (!boardId) return;
     setManualCollapse((previous) => ({
       ...previous,
-      [boardId]: { ...previous[boardId], [status]: !collapsed },
+      [boardId]: { ...previous[boardId], [lane]: !collapsed },
     }));
   };
   if (!settings && !error) return null;
@@ -2518,7 +2518,7 @@ export function App() {
                 .filter((c) => laneOf(c, splitReview) === column.id)
                 .every((c) => c.status === "done" || c.status === "archived");
               const override = boardId
-                ? manualCollapse[boardId]?.[column.status]
+                ? manualCollapse[boardId]?.[column.id]
                 : undefined;
               // Any lane can be collapsed by hand; only idle lanes
               // collapse automatically.
@@ -2582,7 +2582,7 @@ export function App() {
                       type="button"
                       aria-label={`Expand ${column.label} lane`}
                       aria-expanded={false}
-                      onClick={() => toggleLane(column.status, true)}
+                      onClick={() => toggleLane(column.id, true)}
                       className="flex min-h-48 w-full flex-col items-center gap-3 rounded-xl border border-dashed border-border/60 px-2 py-3 text-sm hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <ChevronRight size={16} />
@@ -2606,7 +2606,7 @@ export function App() {
                             idle &&
                             !(event.target as HTMLElement).closest("button")
                           )
-                            toggleLane(column.status, false);
+                            toggleLane(column.id, false);
                         }}
                       >
                         <span
@@ -2637,7 +2637,7 @@ export function App() {
                           type="button"
                           aria-label={`Collapse ${column.label} lane`}
                           aria-expanded={true}
-                          onClick={() => toggleLane(column.status, false)}
+                          onClick={() => toggleLane(column.id, false)}
                           className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <ChevronDown size={16} />
@@ -3348,7 +3348,10 @@ export function App() {
                 </label>
               )}
               {Object.entries(sharedCaches).map(([name, cache]) => (
-                <label key={name} className="mt-4 flex items-start gap-2 text-xs">
+                <label
+                  key={name}
+                  className="mt-4 flex items-start gap-2 text-xs"
+                >
                   <input
                     type="checkbox"
                     aria-label={`Share the ${cache.label} cache`}
@@ -3381,8 +3384,8 @@ export function App() {
                     Share the {cache.label} cache
                     <span className="block text-muted-foreground">
                       Card runs, reviews and verification use the main
-                      checkout&apos;s {cache.dir} instead of starting empty
-                      ({cache.env}).
+                      checkout&apos;s {cache.dir} instead of starting empty (
+                      {cache.env}).
                     </span>
                   </span>
                 </label>
