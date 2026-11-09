@@ -202,7 +202,7 @@ struct AutoReviewJob: Codable, Hashable {
 }
 
 struct ReviewFile: Codable, Hashable { let path: String; let patch: String }
-struct ReviewDiff: Codable, Hashable { let cardId: String; let fingerprint: String; let files: [ReviewFile] }
+struct ReviewDiff: Codable, Hashable { let fingerprint: String; let files: [ReviewFile] }
 struct Fingerprint: Codable { let fingerprint: String }
 
 struct ReviewComment: Codable, Identifiable, Hashable {

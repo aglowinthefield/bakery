@@ -14,6 +14,7 @@ final class FlowTests: XCTestCase {
         let board = env["BAKERY_BOARD"] ?? env["SIMCTL_CHILD_BAKERY_BOARD"] ?? ""
         let url = env["BAKERY_URL"] ?? "http://mochi:4317"
         app.launchArguments = ["-serverURL", url, "-startRoute", "board:\(board)"]
+        if name.contains("Review"), let card = env["BAKERY_CARD"], !card.isEmpty { app.launchArguments += ["-startCard", card] }
         app.launch()
     }
 
@@ -67,5 +68,28 @@ final class FlowTests: XCTestCase {
         sleep(1)
         shot("6-search")
         XCTAssertTrue(app.staticTexts["Write onboarding copy"].exists)
+    }
+
+    /// Needs BAKERY_CARD: a card in Review whose diff adds a line containing "Hello from Bakery iOS".
+    func testReviewCommentAndApprove() throws {
+        try XCTSkipIf((ProcessInfo.processInfo.environment["BAKERY_CARD"] ?? "").isEmpty, "BAKERY_CARD not set")
+        let reviewTab = app.buttons["Review"]
+        XCTAssertTrue(reviewTab.waitForExistence(timeout: 15))
+        reviewTab.tap()
+        let line = app.staticTexts["Hello from Bakery iOS"]
+        _ = line.waitForExistence(timeout: 10)
+        shot("7-review-diff")
+        XCTAssertTrue(line.exists, "diff shows the added line")
+        line.tap()
+        let box = app.textFields.matching(NSPredicate(format: "placeholderValue BEGINSWITH %@", "Comment on line")).firstMatch
+        XCTAssertTrue(box.waitForExistence(timeout: 5))
+        box.tap(); box.typeText("Looks good")
+        app.buttons["Add comment"].tap()
+        XCTAssertTrue(app.staticTexts["Looks good"].waitForExistence(timeout: 10), "comment appears")
+        shot("8-review-comment")
+        app.buttons["Approve and merge"].tap()
+        app.alerts.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Done"].waitForExistence(timeout: 30), "card is merged and Done")
+        shot("9-merged")
     }
 }

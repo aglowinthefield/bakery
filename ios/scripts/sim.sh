@@ -7,7 +7,7 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 REMOTE=code/bakery-ios
 mode=${1:-run}; shift || true
 rsync -az --delete --exclude build --exclude '*.xcodeproj' "$HERE/" "$HOST:$REMOTE/"
-ssh -o BatchMode=yes "$HOST" env BAKERY_BOARD="${BAKERY_BOARD:-}" BAKERY_URL="${BAKERY_URL:-}" bash -s -- "$mode" "$@" <<'REMOTE'
+ssh -o BatchMode=yes "$HOST" env BAKERY_BOARD="${BAKERY_BOARD:-}" BAKERY_CARD="${BAKERY_CARD:-}" BAKERY_URL="${BAKERY_URL:-}" bash -s -- "$mode" "$@" <<'REMOTE'
 set -euo pipefail
 export PATH=/opt/homebrew/bin:$PATH
 cd ~/code/bakery-ios
@@ -17,10 +17,10 @@ DEV=$(xcrun simctl list devices booted | grep -m1 -oE '[0-9A-F-]{36}')
 if [ "$mode" = test ]; then
   # TEST_RUNNER_ vars reach the test process; BAKERY_BOARD names the board the flows use.
   rm -f /tmp/bakery-uitest-*.png
-  TEST_RUNNER_BAKERY_BOARD=${BAKERY_BOARD:?set BAKERY_BOARD} TEST_RUNNER_BAKERY_URL=${BAKERY_URL:-http://mochi:4317} \
+  TEST_RUNNER_BAKERY_CARD=${BAKERY_CARD:-} TEST_RUNNER_BAKERY_BOARD=${BAKERY_BOARD:?set BAKERY_BOARD} TEST_RUNNER_BAKERY_URL=${BAKERY_URL:-http://mochi:4317} \
   xcodebuild -project Bakery.xcodeproj -scheme Bakery -sdk iphonesimulator -destination "id=$DEV" \
     -derivedDataPath build CODE_SIGNING_ALLOWED=NO test 2>&1 \
-    | grep -E 'error:|Test Case.*(passed|failed)|XCTAssert|TEST (SUCCEEDED|FAILED)' | head -60
+    | grep -E 'error:|Test Case.*(passed|failed|skipped)|skipped|XCTAssert|TEST (SUCCEEDED|FAILED)' | head -60
   exit 0
 fi
 xcodebuild -project Bakery.xcodeproj -scheme Bakery -configuration Debug -sdk iphonesimulator \

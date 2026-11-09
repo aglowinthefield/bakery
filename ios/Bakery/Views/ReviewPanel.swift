@@ -2,33 +2,38 @@ import SwiftUI
 
 struct DiffLine: Identifiable {
     enum Kind { case add, remove, context, hunk, meta }
-    let id = UUID()
+    /// 1-based position in the raw patch lines: the server addresses comments by this number.
+    let id: Int
     let kind: Kind
     let text: String
-    let fileLine: Int?   // line number in the new file, for comments
+    let number: Int?   // new-file line (old-file line for removals), shown in the gutter
+    var commentable: Bool { kind == .add || kind == .remove || kind == .context }
+    var visible: Bool { kind != .meta }
 }
 
+/// Mirrors src/diff-lines.ts parseDiff, one entry per raw patch line.
 enum DiffParser {
     static func parse(_ patch: String) -> [DiffLine] {
-        var out: [DiffLine] = []
-        var newLine = 0
-        for raw in patch.components(separatedBy: "\n") {
+        guard !patch.isEmpty else { return [] }
+        var inHunk = false, oldLine = 0, newLine = 0
+        return patch.components(separatedBy: "\n").enumerated().map { index, raw in
+            let id = index + 1
+            if raw.hasPrefix("diff --git ") { inHunk = false }
             if raw.hasPrefix("@@") {
-                if let r = raw.range(of: #"\+(\d+)"#, options: .regularExpression) { newLine = Int(raw[r].dropFirst()) ?? 0 }
-                out.append(DiffLine(kind: .hunk, text: raw, fileLine: nil))
-            } else if raw.hasPrefix("+++") || raw.hasPrefix("---") || raw.hasPrefix("diff ") || raw.hasPrefix("index ") {
-                continue
-            } else if raw.hasPrefix("+") {
-                out.append(DiffLine(kind: .add, text: String(raw.dropFirst()), fileLine: newLine)); newLine += 1
-            } else if raw.hasPrefix("-") {
-                out.append(DiffLine(kind: .remove, text: String(raw.dropFirst()), fileLine: nil))
-            } else if raw.hasPrefix("\\") {
-                out.append(DiffLine(kind: .meta, text: raw, fileLine: nil))
-            } else if !raw.isEmpty || newLine > 0 {
-                out.append(DiffLine(kind: .context, text: raw.isEmpty ? "" : String(raw.dropFirst()), fileLine: newLine)); newLine += 1
+                let nums = raw.matches(of: /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/).first
+                inHunk = true
+                oldLine = nums.flatMap { Int($0.output.1) } ?? 0
+                newLine = nums.flatMap { Int($0.output.2) } ?? 0
+                return DiffLine(id: id, kind: .hunk, text: raw, number: nil)
+            }
+            if !inHunk || raw.hasPrefix("\\ No newline") { return DiffLine(id: id, kind: .meta, text: raw, number: nil) }
+            switch raw.first {
+            case "+": newLine += 1; return DiffLine(id: id, kind: .add, text: String(raw.dropFirst()), number: newLine - 1)
+            case "-": oldLine += 1; return DiffLine(id: id, kind: .remove, text: String(raw.dropFirst()), number: oldLine - 1)
+            case " ": oldLine += 1; newLine += 1; return DiffLine(id: id, kind: .context, text: String(raw.dropFirst()), number: newLine - 1)
+            default: return DiffLine(id: id, kind: .meta, text: raw, number: nil)
             }
         }
-        return out
     }
 }
 
@@ -72,7 +77,7 @@ struct ReviewPanel: View {
     }
 
     private func comments(_ path: String, _ line: Int) -> [ReviewComment] {
-        model.comments.filter { $0.path == path && ($0.fileLine ?? $0.line) == line && $0.state != "resolved" }
+        model.comments.filter { $0.path == path && $0.line == line && $0.state != "resolved" }
     }
 
     private func fileView(_ file: ReviewFile, _ fingerprint: String) -> some View {
@@ -93,11 +98,11 @@ struct ReviewPanel: View {
             if open {
                 ScrollView(.horizontal, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(lines) { l in
+                        ForEach(lines.filter(\.visible)) { l in
                             lineView(l, file.path)
-                            if let n = l.fileLine {
-                                ForEach(comments(file.path, n)) { commentView($0).padding(8) }
-                                if let c = composeFor, c.path == file.path, c.line == n { composer(file.path, n, fingerprint) }
+                            if l.commentable {
+                                ForEach(comments(file.path, l.id)) { commentView($0).padding(8) }
+                                if let c = composeFor, c.path == file.path, c.line == l.id { composer(file.path, l.id, l.number ?? l.id, fingerprint) }
                             }
                         }
                     }
@@ -118,19 +123,19 @@ struct ReviewPanel: View {
         default: (.clear, T.foreground.opacity(0.85))
         }
         return HStack(spacing: 8) {
-            Text(l.fileLine.map(String.init) ?? "").font(.mono(10)).foregroundStyle(T.mutedFg).frame(width: 32, alignment: .trailing)
+            Text(l.number.map(String.init) ?? "").font(.mono(10)).foregroundStyle(T.mutedFg).frame(width: 32, alignment: .trailing)
             Text(l.text.isEmpty ? " " : l.text).font(.mono(11)).foregroundStyle(fg).fixedSize()
             Spacer(minLength: 0)
         }
         .padding(.vertical, 1).padding(.trailing, 8).frame(minWidth: UIScreen.main.bounds.width - 32, alignment: .leading)
         .background(bg)
         .contentShape(Rectangle())
-        .onTapGesture { if let n = l.fileLine, l.kind != .hunk { composeFor = (path, n); draft = "" } }
+        .onTapGesture { if l.commentable { composeFor = (path, l.id); draft = "" } }
     }
 
-    private func composer(_ path: String, _ line: Int, _ fingerprint: String) -> some View {
+    private func composer(_ path: String, _ line: Int, _ shown: Int, _ fingerprint: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Comment on line \(line)", text: $draft, axis: .vertical).lineLimit(2...5).font(.ui(13))
+            TextField("Comment on line \(shown)", text: $draft, axis: .vertical).lineLimit(2...5).font(.ui(13))
                 .padding(8).overlay(RoundedRectangle(cornerRadius: 6).stroke(T.border))
             HStack {
                 Button("Add comment") { Task { await submit(path, line, fingerprint) } }
@@ -151,7 +156,7 @@ struct ReviewPanel: View {
 
     private func commentView(_ c: ReviewComment) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("\(c.path):\(c.fileLine ?? c.line)").font(.mono(11)).foregroundStyle(T.mutedFg)
+            Text(c.fileLine.map { "\(c.path):\($0)" } ?? c.path).font(.mono(11)).foregroundStyle(T.mutedFg)
             Text(c.body).font(.ui(13))
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(10)
