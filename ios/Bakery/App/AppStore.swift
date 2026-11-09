@@ -28,8 +28,9 @@ final class AppStore: ObservableObject {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         if !text.contains("://") { text = "http://" + text }
-        guard let url = URL(string: text), url.host != nil else { return nil }
-        return url
+        guard var parts = URLComponents(string: text), parts.host != nil else { return nil }
+        if parts.port == nil { parts.port = 4317 }
+        return parts.url
     }
 
     /// Probes the address without touching the saved connection; saves it only if the server answers.

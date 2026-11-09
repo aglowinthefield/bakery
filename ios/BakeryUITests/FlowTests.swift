@@ -144,7 +144,7 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Can't connect"].waitForExistence(timeout: 40), "error shown")
         XCTAssertEqual(field.value as? String, "nowhere.invalid:4317", "input kept")
         shot("13-connect-error")
-        field.clearAndType(ProcessInfo.processInfo.environment["BAKERY_URL"] ?? "mochi:4317")
+        field.clearAndType("mochi")  // no port: defaults to 4317
         app.buttons["Connect"].tap()
         XCTAssertTrue(app.staticTexts["Today"].waitForExistence(timeout: 20), "connected")
     }
