@@ -24,11 +24,29 @@ final class AppStore: ObservableObject {
 
     var isConnected: Bool { api != nil }
 
-    func connect() {
-        var text = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { api = nil; return }
+    static func normalizedURL(_ raw: String) -> URL? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
         if !text.contains("://") { text = "http://" + text }
-        if let url = URL(string: text), url.host != nil {
+        guard let url = URL(string: text), url.host != nil else { return nil }
+        return url
+    }
+
+    /// Probes the address without touching the saved connection; saves it only if the server answers.
+    /// Returns an error message, or nil on success.
+    func tryConnect(_ address: String) async -> String? {
+        guard let url = Self.normalizedURL(address) else { return "That doesn't look like an address. Try host:4317." }
+        do {
+            let _: ServerStatus = try await APIClient(baseURL: url).get("/status")
+        } catch { return Self.friendly(error) }
+        serverURL = address
+        connect()
+        await refresh()
+        return nil
+    }
+
+    func connect() {
+        if let url = Self.normalizedURL(serverURL) {
             api = APIClient(baseURL: url)
             loaded = false
             restartPolling()

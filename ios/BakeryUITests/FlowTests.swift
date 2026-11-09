@@ -130,4 +130,30 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(pong.waitForExistence(timeout: 90), "assistant replies")
         shot("12-chat-reply")
     }
+
+    /// A bad address must keep the typed text and show an error; a good one must connect.
+    func testConnectScreen() {
+        app.terminate()
+        app = XCUIApplication()
+        app.launchArguments = ["-serverURL", ""]
+        app.launch()
+        let field = app.textFields["host:4317"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        sleep(1); field.tap(); sleep(1); field.typeText("nowhere.invalid:4317")
+        app.buttons["Connect"].tap()
+        XCTAssertTrue(app.staticTexts["Can't connect"].waitForExistence(timeout: 40), "error shown")
+        XCTAssertEqual(field.value as? String, "nowhere.invalid:4317", "input kept")
+        shot("13-connect-error")
+        field.clearAndType(ProcessInfo.processInfo.environment["BAKERY_URL"] ?? "mochi:4317")
+        app.buttons["Connect"].tap()
+        XCTAssertTrue(app.staticTexts["Today"].waitForExistence(timeout: 20), "connected")
+    }
+}
+
+extension XCUIElement {
+    func clearAndType(_ text: String) {
+        tap()
+        if let current = value as? String { typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count)) }
+        typeText(text)
+    }
 }
