@@ -24,30 +24,51 @@ final class AppStore: ObservableObject {
 
     var isConnected: Bool { api != nil }
 
-    static func normalizedURL(_ raw: String) -> URL? {
+    /// Scheme that answered for a saved address typed without one. Older saves predate the probe and used HTTP.
+    @AppStorage("serverScheme") var serverScheme = "http"
+
+    /// Builds the base URL. An address without a scheme gets `scheme`; one without a port gets 4317.
+    static func normalizedURL(_ raw: String, scheme: String = "http") -> URL? {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        if !text.contains("://") { text = "http://" + text }
+        if !text.contains("://") { text = scheme + "://" + text }
         guard var parts = URLComponents(string: text), parts.host != nil else { return nil }
         if parts.port == nil { parts.port = 4317 }
         return parts.url
     }
 
     /// Probes the address without touching the saved connection; saves it only if the server answers.
+    /// Without a scheme it tries HTTPS (Tailscale Serve, a reverse proxy) and HTTP together and prefers HTTPS.
     /// Returns an error message, or nil on success.
     func tryConnect(_ address: String) async -> String? {
-        guard let url = Self.normalizedURL(address) else { return "That doesn't look like an address. Try host:4317." }
-        do {
-            let _: ServerStatus = try await APIClient(baseURL: url).get("/status")
-        } catch { return Self.friendly(error) }
-        serverURL = address
+        let text = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let schemes = text.contains("://") ? ["http"] : ["https", "http"]
+        let urls = schemes.compactMap { Self.normalizedURL(text, scheme: $0) }
+        guard urls.count == schemes.count else { return "That doesn't look like an address. Try host:4317." }
+        let results = await withTaskGroup(of: (Int, Error?).self) { group in
+            for (i, url) in urls.enumerated() {
+                group.addTask {
+                    do { let _: ServerStatus = try await APIClient(baseURL: url).get("/status"); return (i, nil) } catch { return (i, error) }
+                }
+            }
+            var out = [Error?](repeating: nil, count: urls.count)
+            for await (i, error) in group { out[i] = error }
+            return out
+        }
+        guard let winner = results.firstIndex(where: { $0 == nil }) else {
+            // Report the attempt that got furthest: a server's own refusal beats a failed handshake or connection.
+            let errors = results.compactMap { $0 }
+            return Self.friendly(errors.first { $0 is APIError } ?? errors.last!)
+        }
+        serverScheme = schemes[winner]
+        serverURL = text
         connect()
         await refresh()
         return nil
     }
 
     func connect() {
-        if let url = Self.normalizedURL(serverURL) {
+        if let url = Self.normalizedURL(serverURL, scheme: serverScheme) {
             api = APIClient(baseURL: url)
             loaded = false
             restartPolling()

@@ -148,6 +148,19 @@ final class FlowTests: XCTestCase {
         app.buttons["Connect"].tap()
         XCTAssertTrue(app.staticTexts["Today"].waitForExistence(timeout: 20), "connected")
     }
+
+    /// An address without a scheme must reach an HTTPS-only server (Tailscale Serve on mochi:4318).
+    func testConnectHTTPSWithoutScheme() {
+        app.terminate()
+        app = XCUIApplication()
+        app.launchArguments = ["-serverURL", ""]
+        app.launch()
+        let field = app.textFields["host:4317"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        sleep(1); field.tap(); sleep(1); field.typeText("mochi.tail72fb46.ts.net:4318")
+        app.buttons["Connect"].tap()
+        XCTAssertTrue(app.staticTexts["Today"].waitForExistence(timeout: 20), "connected over HTTPS")
+    }
 }
 
 extension XCUIElement {
