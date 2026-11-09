@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Paperclip, X } from "lucide-react";
 import { api } from "./api.js";
+import { confirmAction } from "./confirm.js";
 import type { Attachment } from "./model.js";
 
 const attachmentsUrl = (boardId: string, cardId: string) =>
@@ -38,6 +39,14 @@ export function formatSize(bytes: number): string {
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
 }
 
+/** Asks before an attachment is deleted; resolves true only when the user picks Delete. */
+export function confirmDeleteAttachment(item: Attachment): Promise<boolean> {
+  return confirmAction(
+    `"${item.name}" will be permanently deleted. This cannot be undone.`,
+    { title: "Delete attachment?", confirmLabel: "Delete", destructive: true },
+  );
+}
+
 const isImage = (item: Attachment) =>
   /^image\/(png|jpeg|gif|webp)$/.test(item.type);
 
@@ -49,6 +58,7 @@ export function AttachmentGrid({
 }: {
   boardId: string;
   items: Attachment[];
+  /** Called after the user confirms deleting the item. */
   onRemove?: (item: Attachment) => void;
 }) {
   if (!items.length) return null;
@@ -86,8 +96,11 @@ export function AttachmentGrid({
             {onRemove && (
               <button
                 type="button"
-                aria-label={`Remove ${item.name}`}
-                onClick={() => onRemove(item)}
+                aria-label={`Delete ${item.name}`}
+                title={`Delete ${item.name}`}
+                onClick={async () => {
+                  if (await confirmDeleteAttachment(item)) onRemove(item);
+                }}
                 className="absolute -right-1.5 -top-1.5 rounded-full border border-border bg-background p-0.5"
               >
                 <X size={11} />

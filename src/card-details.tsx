@@ -1414,7 +1414,12 @@ export function CardDetails({
                 onClick={async () => {
                   if (
                     await confirmAction(
-                      "Permanently delete all attachments of this card from disk? This cannot be undone, even if you restore the card.",
+                      `${card.attachmentCount === 1 ? "The attachment" : `All ${card.attachmentCount} attachments`} of "${card.title}" will be permanently deleted from disk. This cannot be undone, even if you restore the card.`,
+                      {
+                        title: "Delete attachments?",
+                        confirmLabel: "Delete",
+                        destructive: true,
+                      },
                     )
                   )
                     void action(() =>
