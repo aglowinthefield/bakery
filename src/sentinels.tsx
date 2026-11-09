@@ -113,6 +113,7 @@ function SentinelPanel({
 }) {
   const { sentinel, runs, jobs } = overview;
   const [showDone, setShowDone] = useState(false);
+  const [showDoneRuns, setShowDoneRuns] = useState(false);
   const [error, setError] = useState("");
   const act = async (path: string, init: RequestInit) => {
     setError("");
@@ -123,6 +124,11 @@ function SentinelPanel({
       setError(failure instanceof Error ? failure.message : String(failure));
     }
   };
+  // Succeeded runs are routine; running and failed ones are what needs a look.
+  const doneRunCount = runs.filter((run) => run.status === "succeeded").length;
+  const shownRuns = runs.filter(
+    (run) => showDoneRuns || run.status !== "succeeded",
+  );
   const doneCount = jobs.filter((card) => card.status === "done").length;
   const shown = jobs
     .filter(
@@ -188,14 +194,26 @@ function SentinelPanel({
       {runs.length > 0 && (
         <>
           <h3 className="mb-1 mt-4 text-sm font-medium">Runs</h3>
-          <ul
-            aria-label={`${overview.name} runs`}
-            className="divide-y divide-border"
-          >
-            {runs.map((run) => (
-              <RunRow key={run.id} run={run} />
-            ))}
-          </ul>
+          {doneRunCount > 0 && (
+            <label className="mb-2 flex w-fit items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showDoneRuns}
+                onChange={(event) => setShowDoneRuns(event.target.checked)}
+              />
+              Show completed runs ({doneRunCount})
+            </label>
+          )}
+          {shownRuns.length > 0 && (
+            <ul
+              aria-label={`${overview.name} runs`}
+              className="divide-y divide-border"
+            >
+              {shownRuns.map((run) => (
+                <RunRow key={run.id} run={run} />
+              ))}
+            </ul>
+          )}
         </>
       )}
       {doneCount > 0 && (

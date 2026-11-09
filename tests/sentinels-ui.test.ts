@@ -46,6 +46,8 @@ test("Sentinels lists timer and PR-comment jobs apart from the kanban", async ()
     const recent = page.getByRole("list", { name: "Recent sentinel jobs" });
     await recent.getByText("PR comment").waitFor();
     assert.equal(await page.getByText("Plain kanban card").isVisible(), false);
+    assert.equal(await page.getByText("1 new job card").count(), 0, "succeeded runs are hidden by default");
+    await page.getByLabel(/Show completed runs/).check();
     await page.getByRole("list", { name: "Broken pull requests runs" }).getByText("1 new job card").waitFor();
   } finally {
     await browser.close();
@@ -84,15 +86,54 @@ test("Sentinels hides done jobs until revealed and the sidebar badge follows in-
     await page.getByText("Running job").waitFor();
     await page.getByText("Review job").waitFor();
     assert.equal(await page.getByText("Done job").count(), 0, "done jobs are hidden by default");
-    await page.getByLabel(/Show completed/).check();
+    await page.getByLabel(/Show completed \(/).check();
     await page.getByText("Done job").waitFor();
-    await page.getByLabel(/Show completed/).uncheck();
+    await page.getByLabel(/Show completed \(/).uncheck();
     assert.equal(await page.getByText("Done job").count(), 0);
     // A job enters in-progress: the badge goes up. Finishing jobs brings it down and hides it at zero.
     jobs = jobs.map(job => (job.id === "s3" ? { ...job, status: "running" } : job));
     await page.waitForFunction(() => document.querySelector("[data-sentinels-in-progress]")?.textContent === "2");
     jobs = jobs.map(job => (job.id === "s1" || job.id === "s3" ? { ...job, status: "done" } : job));
     await page.waitForFunction(() => !document.querySelector("[data-sentinels-in-progress]"), undefined, { timeout: 10000 });
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("Sentinels hides only succeeded runs until revealed", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext()).newPage();
+    const run = (id: string, status: string, summary: string, error: string | null = null) =>
+      ({ id, sentinelId: "sen-pr-health", status, startedAt: "2025-01-01T00:00:00Z", finishedAt: null, findings: [], summary, error });
+    const runs = [run("r1", "succeeded", "Succeeded summary"), run("r2", "running", "Running summary"), run("r3", "failed", "Failed summary", "Failure detail"), run("r4", "interrupted", "Interrupted summary")];
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/boards") return route.fulfill({ json: boards });
+      if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
+      if (path === "/api/boards/gh/sentinels") return route.fulfill({ json: [{ ...overview([])[0], runs }] });
+      await route.fulfill({ json: [] });
+    });
+    await page.goto(server.resolvedUrls!.local[0]);
+    const repo = page.getByRole("button", { name: "gh", exact: true });
+    await repo.waitFor();
+    if ((await repo.getAttribute("aria-expanded")) !== "true") await repo.click();
+    await page.getByRole("button", { name: /^Sentinels/ }).click();
+    const list = page.getByRole("list", { name: "Broken pull requests runs" });
+    const others = ["Running summary", "Failed summary", "Interrupted summary"];
+    await list.getByText("Running summary").waitFor();
+    for (const text of others) await list.getByText(text).waitFor();
+    assert.equal(await page.getByText("Succeeded summary").count(), 0, "succeeded runs are hidden by default");
+    const toggle = page.getByLabel(/Show completed runs \(1\)/);
+    await toggle.check();
+    await list.getByText("Succeeded summary").waitFor();
+    for (const text of others) await list.getByText(text).waitFor();
+    await toggle.uncheck();
+    assert.equal(await page.getByText("Succeeded summary").count(), 0);
+    for (const text of others) await list.getByText(text).waitFor();
   } finally {
     await browser.close();
     await server.close();
