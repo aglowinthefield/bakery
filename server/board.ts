@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { addAgent, type Usage } from "./agent.js";
+import type { CacheUsage } from "./turbo-summary.js";
 import { sharedCacheEnv } from "./shared-cache-env.js";
 import { validateSharedCaches, type SharedCache } from "./shared-caches.js";
 import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
@@ -334,6 +335,11 @@ export class Board {
     if (!runColumns.has("agent")) this.db.exec("ALTER TABLE runs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     if (!runColumns.has("lastActivityAt")) this.db.exec("ALTER TABLE runs ADD COLUMN lastActivityAt TEXT");
     // 1 when the run was handed a PR's CI failures; its result is pushed to the PR without a manual Approve.
+    if (!runColumns.has("cacheTasks")) {
+      this.db.exec("ALTER TABLE runs ADD COLUMN cacheTasks INTEGER NOT NULL DEFAULT 0");
+      this.db.exec("ALTER TABLE runs ADD COLUMN cacheHits INTEGER NOT NULL DEFAULT 0");
+      this.db.exec("ALTER TABLE runs ADD COLUMN cacheSavedMs INTEGER NOT NULL DEFAULT 0");
+    }
     if (!runColumns.has("ciFix")) this.db.exec("ALTER TABLE runs ADD COLUMN ciFix INTEGER NOT NULL DEFAULT 0");
     // Lets a Review tile say whether the next step is Approve or Accept findings without loading the diff.
     if (!runColumns.has("changedFiles")) this.db.exec("ALTER TABLE runs ADD COLUMN changedFiles INTEGER");
@@ -710,6 +716,10 @@ export class Board {
     this.db.prepare("UPDATE boards SET sharedCaches=? WHERE id=?").run(JSON.stringify(validateSharedCaches(sharedCaches)), id);
     return this.getBoard(id)!;
   }
+  /** Turbo tasks a run's turbo commands executed and how many the cache answered; see server/turbo-summary.ts. */
+  recordCacheUsage(runId: string, usage: CacheUsage): void {
+    this.db.prepare("UPDATE runs SET cacheTasks=?, cacheHits=?, cacheSavedMs=? WHERE id=?").run(usage.tasks, usage.hits, Math.round(usage.savedMs), runId);
+  }
   /** Environment that points commands Bakery runs for `repo` at its shared caches; empty when none are enabled. */
   sharedCacheEnvFor(repo: string): Record<string, string> {
     return sharedCacheEnv(repo, this.boardForRepo(repo)?.sharedCaches ?? []);
@@ -967,7 +977,7 @@ export class Board {
   /** Every run, agent review and card, for the Statistics page to aggregate; see server/stats.ts. */
   statsInput(): StatsInput {
     return {
-      runs: this.db.prepare(`SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["runs"],
+      runs: this.db.prepare(`SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens, runs.cacheTasks, runs.cacheHits, runs.cacheSavedMs FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["runs"],
       reviews: this.db.prepare(`SELECT cards.repo AS repo, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId WHERE ${notSentinelJob}`).all() as StatsInput["reviews"],
       cards: this.db.prepare(`SELECT repo, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards WHERE ${notSentinelJob})`).all() as StatsInput["cards"],
     };

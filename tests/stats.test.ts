@@ -6,13 +6,13 @@ const now = Date.parse("2026-03-10T12:00:00.000Z");
 const run = (over: Partial<StatsInput["runs"][number]>): StatsInput["runs"][number] => ({
   repo: "/code/alpha", cardId: "c1", status: "review", startedBy: "manual", agent: "pi · sonnet", ciFix: 0,
   startedAt: "2026-03-10T10:00:00.000Z", finishedAt: "2026-03-10T10:10:00.000Z",
-  cost: 1, inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5, ...over,
+  cost: 1, inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5, cacheTasks: 0, cacheHits: 0, cacheSavedMs: 0, ...over,
 });
 const input: StatsInput = {
   runs: [
     run({}),
     run({ status: "failed", startedBy: "auto", cost: 0.5, finishedAt: "2026-03-10T10:20:00.000Z" }),
-    run({ repo: "/code/beta", agent: "pi · opus", startedAt: "2026-03-09 08:00:00", finishedAt: "2026-03-09 09:00:00", cost: null, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null }),
+    run({ repo: "/code/beta", agent: "pi · opus", startedAt: "2026-03-09 08:00:00", finishedAt: "2026-03-09 09:00:00", cost: null, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, cacheTasks: 10, cacheHits: 6, cacheSavedMs: 120_000 }),
     run({ startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:05:00.000Z", cost: 10 }),
     run({ status: "running", cost: 99 }),
   ],
@@ -70,4 +70,10 @@ test("an empty range reports unknowns instead of zeros", () => {
   assert.equal(stats.summary.successRate, null);
   assert.equal(stats.summary.avgRunMinutes, null);
   assert.equal(stats.daily.length, 30);
+});
+
+test("build cache totals count only runs in range, and are unknown when no run used turbo", () => {
+  const all = buildStats(input, { days: 7, repo: null, now });
+  assert.deepEqual(all.buildCache, { tasks: 10, hits: 6, hitRate: 0.6, savedMinutes: 2 });
+  assert.equal(buildStats(input, { days: 7, repo: "/code/alpha", now }).buildCache.hitRate, null);
 });
