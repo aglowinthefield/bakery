@@ -73,16 +73,17 @@ async function fixture(boards: object[] = [board]) {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
-  const runIn = async (cwd: string | undefined, ...args: string[]) => {
-    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
+  const runAt = async (url: string, cwd: string | undefined, ...args: string[]) => {
+    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BAKERY_URL: url } });
     let stdout = "", stderr = "";
     for await (const chunk of child.stdout) stdout += chunk;
     for await (const chunk of child.stderr) stderr += chunk;
     const code = await new Promise<number | null>(resolve => child.once("close", resolve));
     return { code, stdout, stderr };
   };
+  const runIn = (cwd: string | undefined, ...args: string[]) => runAt(`http://127.0.0.1:${port}`, cwd, ...args);
   const run = (...args: string[]) => runIn(undefined, ...args);
-  return { requests, run, runIn, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
+  return { requests, run, runIn, runAt, port, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
 
 test("lists sentinels and pauses and resumes one", async () => {
@@ -91,6 +92,15 @@ test("lists sentinels and pauses and resumes one", async () => {
     assert.match((await f.run("sentinels")).stdout, /sen-one\tpr-health\tenabled\tevery:300s.*succeeded/);
     assert.match((await f.run("sentinel-pause", "sen-one")).stdout, /paused/);
     assert.match((await f.run("sentinel-resume", "sen-one")).stdout, /enabled/);
+  } finally { await f.close(); }
+});
+
+test("BAKERY_URL without a scheme falls back to HTTP when HTTPS does not answer", async () => {
+  const f = await fixture();
+  try {
+    const result = await f.runAt(`127.0.0.1:${f.port}`, undefined, "boards");
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /bakery-project/);
   } finally { await f.close(); }
 });
 

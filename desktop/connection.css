@@ -50,7 +50,7 @@ label {
   font-weight: 600;
   margin-bottom: 8px;
 }
-input[type="url"] {
+#address {
   width: 100%;
   border: 1px solid #999;
   border-radius: 6px;
@@ -118,7 +118,7 @@ footer {
     color: #ececec;
     background: #202124;
   }
-  input[type="url"] {
+  #address {
     background: #303134;
     border-color: #858585;
   }

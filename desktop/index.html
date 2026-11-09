@@ -23,8 +23,9 @@
         <input
           id="address"
           name="address"
-          type="url"
-          placeholder="https://bakery.example.ts.net"
+          type="text"
+          inputmode="url"
+          placeholder="bakery.example.ts.net"
           required
           autocomplete="url"
           spellcheck="false"
@@ -33,8 +34,8 @@
           disabled
         />
         <p id="address-help" class="help">
-          Use the full address, without a board path. Connect to your Tailnet
-          first if your server is private.
+          Enter the server's hostname, with a port if it isn't 4317. HTTPS is
+          tried first. Connect to your Tailnet first if your server is private.
         </p>
         <label class="http-option"
           ><input id="allow-http" type="checkbox" />Allow unencrypted HTTP on a
