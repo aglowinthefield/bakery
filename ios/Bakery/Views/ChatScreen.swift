@@ -6,24 +6,27 @@ final class ChatModel: ObservableObject {
     @Published var current: ChatDetail?
     private var stream: Task<Void, Never>?
     private let viewer = UUID().uuidString
+    var boardId = ""
+    func path(_ id: String, _ rest: String = "") -> String { "/boards/\(boardId)/chats/\(id)\(rest)" }
 
     func loadList(api: APIClient, boardId: String) async {
+        self.boardId = boardId
         if let v: [Chat] = try? await api.get("/boards/\(boardId)/chats") { chats = v }
     }
 
     func open(api: APIClient, id: String) async {
         stream?.cancel()
-        current = try? await api.get("/chats/\(id)")
+        current = try? await api.get(path(id))
         stream = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
                 // SSE: the server pushes live/message/chat events; refetch on any of them.
-                var request = URLRequest(url: api.url("/chats/\(id)/events?viewer=\(viewer)&looking=1"))
+                var request = URLRequest(url: api.url(path(id, "/events?viewer=\(viewer)&looking=1")))
                 request.timeoutInterval = 3600
                 if let (bytes, _) = try? await URLSession.shared.bytes(for: request) {
                     do {
                         for try await line in bytes.lines where line.hasPrefix("data:") {
-                            if let d: ChatDetail = try? await api.get("/chats/\(id)") { current = d }
+                            if let d: ChatDetail = try? await api.get(path(id)) { current = d }
                         }
                     } catch {}
                 }
@@ -60,7 +63,7 @@ struct ChatScreen: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
-                            ForEach(detail.messages) { m in bubble(m.role, m.parts ?? [.text(m.body)]) }
+                            ForEach(detail.messages) { m in bubble(m.role, (m.parts ?? []).isEmpty ? [.text(m.body)] : m.parts!) }
                             if let live = detail.live { bubble("assistant", live.parts.isEmpty ? [.text("Thinking…")] : live.parts) }
                             Color.clear.frame(height: 1).id("end")
                         }
@@ -128,7 +131,7 @@ struct ChatScreen: View {
             TextField("Message", text: $text, axis: .vertical).lineLimit(1...6)
                 .padding(10).overlay(RoundedRectangle(cornerRadius: 7.5).stroke(T.foreground.opacity(0.85), lineWidth: 1.5))
             if detail.live != nil {
-                Button("Stop") { Task { _ = await store.act { _ = try await store.api!.post("/chats/\(detail.chat.id)/stop") } } }.buttonStyle(.pill(.outline))
+                Button("Stop") { Task { _ = await store.act { _ = try await store.api!.post(model.path(detail.chat.id, "/stop")) } } }.buttonStyle(.pill(.outline))
             } else {
                 Button("Send") { Task { await send(detail.chat.id) } }.buttonStyle(.pill).disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -142,8 +145,8 @@ struct ChatScreen: View {
         struct Body: Encodable { let message: String }
         let message = text
         text = ""
-        if await store.act({ let _: JSONValue = try await api.post("/chats/\(id)/messages", Body(message: message)) }) {
-            if let d: ChatDetail = try? await api.get("/chats/\(id)") { model.current = d }
+        if await store.act({ let _: JSONValue = try await api.post(model.path(id, "/messages"), Body(message: message)) }) {
+            if let d: ChatDetail = try? await api.get(model.path(id)) { model.current = d }
         } else { text = message }
     }
 

@@ -76,7 +76,7 @@ final class FlowTests: XCTestCase {
         let reviewTab = app.buttons["Review"]
         XCTAssertTrue(reviewTab.waitForExistence(timeout: 15))
         reviewTab.tap()
-        let line = app.staticTexts["Hello from Bakery iOS"]
+        let line = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "Hello from", "Goodbye")).firstMatch
         _ = line.waitForExistence(timeout: 10)
         shot("7-review-diff")
         XCTAssertTrue(line.exists, "diff shows the added line")
@@ -91,5 +91,43 @@ final class FlowTests: XCTestCase {
         app.alerts.buttons["Continue"].tap()
         XCTAssertTrue(app.staticTexts["Done"].waitForExistence(timeout: 30), "card is merged and Done")
         shot("9-merged")
+    }
+
+    /// Needs BAKERY_CARD: a card in Review. Requests changes with a comment; the card goes back to Running.
+    func testReviewRequestChanges() throws {
+        try XCTSkipIf((ProcessInfo.processInfo.environment["BAKERY_CARD"] ?? "").isEmpty, "BAKERY_CARD not set")
+        XCTAssertTrue(app.buttons["Review"].waitForExistence(timeout: 15))
+        app.buttons["Review"].tap()
+        let line = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Goodbye")).firstMatch
+        XCTAssertTrue(line.waitForExistence(timeout: 10))
+        line.tap()
+        let box = app.textFields.matching(NSPredicate(format: "placeholderValue BEGINSWITH %@", "Comment on line")).firstMatch
+        XCTAssertTrue(box.waitForExistence(timeout: 5))
+        box.tap(); box.typeText("Make it shout: uppercase please")
+        app.buttons["Add comment"].tap()
+        let request = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Request changes")).firstMatch
+        XCTAssertTrue(request.waitForExistence(timeout: 10))
+        request.tap()
+        XCTAssertTrue(app.staticTexts["Running"].waitForExistence(timeout: 15), "card runs again")
+        shot("10-request-changes")
+    }
+
+    func testChatSend() {
+        XCTAssertTrue(app.buttons["Chat"].waitForExistence(timeout: 15))
+        app.buttons["Chat"].tap()
+        XCTAssertTrue(app.buttons.matching(identifier: "New chat").firstMatch.waitForExistence(timeout: 5))
+        app.buttons.matching(identifier: "New chat").allElementsBoundByIndex.last!.tap()
+        let field = app.descendants(matching: .any).matching(identifier: "Message").firstMatch
+        _ = field.waitForExistence(timeout: 10)
+        XCTAssertTrue(field.exists)
+        sleep(2); field.tap(); sleep(1); field.typeText("Reply with exactly the word pong")
+        app.buttons["Send"].tap()
+        let sent = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "exactly the word pong")).firstMatch
+        _ = sent.waitForExistence(timeout: 10)
+        shot("11-chat-sent")
+        XCTAssertTrue(sent.exists, "message shown")
+        let pong = app.descendants(matching: .any).matching(NSPredicate(format: "label ==[c] %@", "pong")).firstMatch
+        XCTAssertTrue(pong.waitForExistence(timeout: 90), "assistant replies")
+        shot("12-chat-reply")
     }
 }
