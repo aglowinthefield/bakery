@@ -9,9 +9,10 @@ BUILD=${1:-$(date +%y%m%d%H%M)}
 rsync -az --delete --exclude build --exclude '*.xcodeproj' "$HERE/" "$HOST:code/bakery-ios/"
 ssh -o BatchMode=yes "$HOST" env KEY="${ASC_KEY_ID:?}" ISSUER="${ASC_ISSUER_ID:?}" BUILD="$BUILD" bash -s <<'REMOTE'
 set -euo pipefail
-export PATH=/opt/homebrew/bin:$PATH
+PATH=/opt/homebrew/bin:$PATH xcodegen -s ~/code/bakery-ios/project.yml --project ~/code/bakery-ios >/dev/null
+# Homebrew rsync on PATH breaks the IPA step ("--extended-attributes: unknown option"): use system tools only.
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin:/Applications/Xcode.app/Contents/Developer/usr/bin
 cd ~/code/bakery-ios
-xcodegen >/dev/null
 AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_$KEY.p8" -authenticationKeyID "$KEY" -authenticationKeyIssuerID "$ISSUER")
 rm -rf build/archive build/export
 xcodebuild -project Bakery.xcodeproj -scheme Bakery -configuration Release -destination 'generic/platform=iOS' \
@@ -26,5 +27,5 @@ cat > build/ExportOptions.plist <<PLIST
 </dict></plist>
 PLIST
 xcodebuild -exportArchive -archivePath build/archive/Bakery.xcarchive -exportOptionsPlist build/ExportOptions.plist \
-  -exportPath build/export "${AUTH[@]}" 2>&1 | grep -E 'error:|EXPORT (SUCCEEDED|FAILED)|Upload|upload' 
+  -exportPath build/export "${AUTH[@]}" 2>&1 | grep -E 'error:|EXPORT (SUCCEEDED|FAILED)|Upload succeeded|Upload (failed|error)|ERROR'
 REMOTE
