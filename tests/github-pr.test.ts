@@ -1416,7 +1416,7 @@ test("bakeryRequests: reads /bakery comments from trusted authors, and whole rev
   const at = (n: number) => `2026-01-01T00:00:${String(n).padStart(2, "0")}Z`;
   const c = (id: string, n: number, body: string, association = "MEMBER", extra = {}) => ({ id, at: at(n), author: "sam", association, body, ...extra });
   const none = bakeryRequests([c("a", 5, "looks good"), c("b", 6, "/bakery fix it", "NONE"), c("c", 7, "cc /bakery", "OWNER"), c("d", 1, "/bakery old")], at(2));
-  assert.deepEqual(none, { requests: [], latest: null }, "untrusted authors, mid-sentence mentions and old comments are ignored");
+  assert.deepEqual(none, { requests: [], latest: null, asked: [] }, "untrusted authors, mid-sentence mentions and old comments are ignored");
   const one = bakeryRequests([c("a", 5, "  /bakery please rename x to y "), c("b", 6, "/bakery-bot hi"), c("e", 7, "@bakery hi")], at(2));
   assert.deepEqual(one.requests.map(item => item.comment), ["/bakery please rename x to y"]);
   assert.equal(one.latest, at(5));
@@ -1461,6 +1461,8 @@ test("github-pr: an /bakery comment on the PR sends the card back once, and its 
     assert.doesNotMatch(prompt, /delete everything/);
     assert.equal(f.board.getCiFeedback(card.id), undefined, "the request went to that run");
     assert.match(f.comments().at(-1)!.body, /^Bakery sent this back to its coding agent with the request above/);
+    const reactions = f.calls().filter(call => call.some(arg => arg.includes("addReaction")));
+    assert.deepEqual(reactions.map(call => call.find(arg => arg.startsWith("id="))), ["id=3"], "only the trusted request got a reaction, once");
     assert.equal(f.board.listRuns(card.id)[0].ciFix, 0, "not an automatic CI push");
     assert.equal(f.board.getCard(card.id)!.reviewWait, null, "the result waits for Approve");
     // The same comment is not sent again.
@@ -1469,6 +1471,32 @@ test("github-pr: an /bakery comment on the PR sends the card back once, and its 
   } finally { f.cleanup(); }
 });
 
+
+test("a /bakery request the card can't take yet is acknowledged and explained on the PR, once", async () => {
+  const f = fixture();
+  const started: string[] = [];
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => { started.push(card.id); });
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    f.setPrs([{ ...pr, headRefOid: pushed, statusCheckRollup: [] }]);
+    const thread = (nodes: unknown[]) => writeFileSync(join(f.ghDir, "pr-comments.json"), JSON.stringify({ data: { repository: { pullRequest: { comments: { nodes }, reviews: { nodes: [] } } } } }));
+    thread([]);
+    await sync.syncBoard(f.repoBoard.id);
+    // The card's worktree holds unpushed work, so it is not at the PR head.
+    const worktree = join(f.data, "worktrees", card.id);
+    writeFileSync(join(worktree, "extra.txt"), "x\n"); git(worktree, "add", "extra.txt"); git(worktree, ...commitArgs, "unpushed");
+    thread([{ id: "9", createdAt: new Date(Date.now() + 60_000).toISOString(), authorAssociation: "MEMBER", author: { login: "sam" }, body: "/bakery fix conflicts" }]);
+    for (let i = 0; i < 3; i++) await sync.syncBoard(f.repoBoard.id);
+    assert.deepEqual(started, []);
+    assert.equal(f.calls().filter(call => call.includes("id=9")).length, 1, "reacted once");
+    const notes = f.comments().filter(item => /can't hand it to the card's coding agent yet/.test(item.body));
+    assert.equal(notes.length, 1, "explained once");
+    assert.match(notes[0].body, /holds work that has not been pushed/);
+  } finally { f.cleanup(); }
+});
 
 test("a sync pass still running at shutdown ends quietly once the database is closed", async () => {
   const f = fixture();

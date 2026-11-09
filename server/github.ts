@@ -163,13 +163,14 @@ const mentionsBakery = (body: string) => /^\s*\/bakery(?![\w-])/i.test(body);
  * (not `@bakery`, which would notify an unrelated GitHub account). A review whose summary starts that way brings all of its inline comments along, so "Request changes"
  * with `/bakery` in the summary sends the whole review. `latest` is the newest request's time, the next `since`.
  */
-export function bakeryRequests(comments: PrComment[], since: string): { requests: PrRequest[]; latest: string | null } {
+export function bakeryRequests(comments: PrComment[], since: string): { requests: PrRequest[]; latest: string | null; asked: PrComment[] } {
   const asked = comments.filter(item => item.at > since && trustedAssociations.includes(item.association) && mentionsBakery(item.body));
   const reviews = new Set(asked.filter(item => !item.path).map(item => item.id));
   const picked = comments.filter(item => asked.includes(item) || (item.reviewId && reviews.has(item.reviewId) && item.body.trim()));
   return {
     requests: picked.map(item => ({ author: item.author, comment: item.body.trim().slice(0, 4000), ...(item.path ? { path: item.path, line: item.line } : {}) })),
     latest: asked.reduce<string | null>((max, item) => !max || item.at > max ? item.at : max, null),
+    asked,
   };
 }
 
@@ -177,6 +178,9 @@ const prCommentsQuery = `query($owner: String!, $name: String!, $number: Int!) {
   comments(last: 100) { nodes { id createdAt authorAssociation author { login } body } }
   reviews(last: 50) { nodes { id submittedAt authorAssociation author { login } body comments(first: 100) { nodes { id createdAt authorAssociation author { login } body path line originalLine } } } }
 } } }`;
+
+/** The reaction Bakery leaves on a `/bakery` comment it has read. GitHub's set has no pie; eyes says "seen". */
+export const acknowledgedReaction = "eyes";
 
 /** A `/bakery` request found by scanning a repository's comments, before the PR it is on is looked up. */
 export type RepoComment = { id: string; at: string; author: string; association: string; body: string; prNumber: number; path?: string; line?: number | null };
@@ -277,6 +281,15 @@ export class GitHub {
       ]),
     ];
   }
+  /** Reacts to a comment found by `repoComments` (its id is `issues/comments:N` or `pulls/comments:N`). GitHub ignores a repeat. */
+  async reactToRepoComment(repo: string, id: string): Promise<void> {
+    const [endpoint, number] = id.split(":");
+    await this.gh(["api", "-X", "POST", `repos/${repo}/${endpoint}/${number}/reactions`, "-f", `content=${acknowledgedReaction}`]);
+  }
+  /** Reacts to a comment or review found by `prComments`, by its GraphQL node id. */
+  async reactToNode(nodeId: string): Promise<void> {
+    await this.gh(["api", "graphql", "-f", "query=mutation($id: ID!, $content: ReactionContent!) { addReaction(input: {subjectId: $id, content: $content}) { reaction { content } } }", "-f", `id=${nodeId}`, "-f", `content=${acknowledgedReaction.toUpperCase()}`]);
+  }
   /** The signed-in GitHub user. */
   async viewer(): Promise<string> { return (await this.gh(["api", "user", "--jq", ".login"])).trim(); }
   /** Every comment on a PR, oldest first. */
@@ -311,6 +324,12 @@ export async function commentOnPullRequest(github: GitHub, repo: string, number:
   if (!number) return;
   try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+/** Runs a reaction; one that fails is logged, never blocking the work it acknowledges. */
+export async function acknowledge(react: () => Promise<void>, what: string): Promise<void> {
+  try { await react(); }
+  catch (error) { console.error(`Could not react to ${what}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
 /** The repository `gh` should query for a github-pr board. */
@@ -504,15 +523,23 @@ export class GitHubSync {
     try { comments = await this.github.prComments(repo, pr.number); }
     catch (error) { console.error(`[sync ${repo}] could not read comments on PR #${pr.number}: ${error instanceof Error ? error.message : String(error)}`); return undefined; }
     if (!card.prCommentsSeen) { this.board.markCommentsSeen(card.id, comments.reduce((max, item) => item.at > max ? item.at : max, new Date().toISOString())); return undefined; }
-    const { requests, latest } = bakeryRequests(comments, card.prCommentsSeen);
+    const { requests, latest, asked } = bakeryRequests(comments, card.prCommentsSeen);
     if (!latest) return undefined;
+    // The person is told Bakery read the request at once, even when the card can't take it yet.
+    const fresh = new Set(this.board.firstTime(asked.map(item => `react:${item.id}`)));
+    for (const item of asked) if (fresh.has(`react:${item.id}`)) await acknowledge(() => this.github.reactToNode(item.id), `${repo}#${pr.number} comment ${item.id}`);
     const worktree = join(this.dataDir, "worktrees", card.id);
+    let blocked: string | undefined;
     try {
-      if (!existsSync(worktree) || await git(worktree, "rev-parse", "HEAD") !== head || await git(worktree, "status", "--porcelain")) {
-        console.debug(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number}: a request is waiting for a clean card worktree at ${head.slice(0, 12)}`);
-        return undefined;
-      }
-    } catch { return undefined; }
+      if (!existsSync(worktree)) blocked = "the card has no worktree";
+      else if (await git(worktree, "rev-parse", "HEAD") !== head) blocked = `the card's worktree is at ${(await git(worktree, "rev-parse", "HEAD")).slice(0, 12)}, not the pull request head ${head.slice(0, 12)}. It holds work that has not been pushed, which waits for Approve in Bakery`;
+      else if (await git(worktree, "status", "--porcelain")) blocked = "the card's worktree has uncommitted changes";
+    } catch (error) { blocked = `the card's worktree could not be read (${error instanceof Error ? error.message : String(error)})`; }
+    if (blocked) {
+      console.debug(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number}: a request is waiting: ${blocked}`);
+      if (this.board.firstTime([`wait:${card.id}:${latest}`]).length) await commentOnPullRequest(this.github, repo, pr.number, `Bakery read the request above but can't hand it to the card's coding agent yet: ${blocked}. It will be sent on a later sync once the card is clean at the pull request head.`);
+      return undefined;
+    }
     console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} has ${requests.length} requested change(s) from ${[...new Set(requests.map(item => item.author))].join(", ")}`);
     this.board.recordCommentRequests(card.id, head, JSON.stringify(requests, null, 1), latest);
     await commentOnPullRequest(this.github, repo, pr.number, `Bakery sent this back to its coding agent with ${requests.length === 1 ? "the request" : `the ${requests.length} requested changes`} above. Its changes will wait for the operator's approval before they are pushed here.`);
