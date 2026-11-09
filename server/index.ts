@@ -411,6 +411,10 @@ const server = createServer(async (req, res) => {
           "pickupDailyLimit" in input ? Number(input.pickupDailyLimit) : undefined,
           "pickupCostBudget" in input ? input.pickupCostBudget as number | null : undefined)); return;
       }
+      if ("sharedCaches" in input) {
+        if (Object.keys(input).length !== 1) throw new Error("Update sharedCaches separately from other board settings");
+        send(res, 200, board.setSharedCaches(repoBoard.id, input.sharedCaches)); return;
+      }
       if ("pushMainAfterMerge" in input) {
         if (Object.keys(input).length !== 1 || typeof input.pushMainAfterMerge !== "boolean") throw new Error("Update pushMainAfterMerge as a boolean, separately from other board settings");
         send(res, 200, board.setPushMainAfterMerge(repoBoard.id, input.pushMainAfterMerge)); return;

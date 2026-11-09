@@ -35,6 +35,8 @@ export type Board = {
   integrationNote?: string;
   autoCollapseEmptySwimlanes: boolean;
   pushMainAfterMerge?: boolean;
+  /** Build caches card worktrees share with the main checkout (server/shared-caches.ts). */
+  sharedCaches?: string[];
   autoPullRequestEnabled?: boolean;
   autoReviewEnabled: boolean;
   verificationCommand: string;

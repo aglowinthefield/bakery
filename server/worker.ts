@@ -142,7 +142,7 @@ export class Worker {
     const phase = conflict ? "conflict" : "work";
     const handedOff = ciPrompt || pushPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict") ? ciFeedback : undefined;
     const launch = () => this.launchPi(card, run, worktree, prompt, phase, handedOff);
-    if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
+    if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
   }
   /**
@@ -238,9 +238,9 @@ export class Worker {
    * nobody is at a terminal; Pi runs arbitrary commands in the same worktree anyway. If pre-start
    * fails, the fresh worktree and branch are removed so a retry runs the hooks again.
    */
-  private runWorktrunkHooks(run: Run, root: string, worktree: string, branch: string, launch: () => Run) {
+  private runWorktrunkHooks(run: Run, repo: string, root: string, worktree: string, branch: string, launch: () => Run) {
     this.board.append(run.id, "Running Worktrunk pre-start hooks…\n");
-    const child = spawn(...command(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(...command(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo) } });
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
     let output = "", done = false;
@@ -274,7 +274,7 @@ export class Worker {
     let child: ChildProcess;
     try {
       const models = piModelArgs(this.board.agentModelFor(card.repo, phase));
-      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.attach?.env } });
+      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);

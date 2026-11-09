@@ -1,4 +1,5 @@
 import { BrandIcon } from "./brand-icon";
+import { sharedCaches } from "../server/shared-caches.js";
 import {
   Fragment,
   useEffect,
@@ -3346,6 +3347,46 @@ export function App() {
                   </span>
                 </label>
               )}
+              {Object.entries(sharedCaches).map(([name, cache]) => (
+                <label key={name} className="mt-4 flex items-start gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label={`Share the ${cache.label} cache`}
+                    checked={editingBoard.sharedCaches?.includes(name) ?? false}
+                    disabled={busy}
+                    onChange={(event) => {
+                      const current = editingBoard.sharedCaches ?? [];
+                      const next = event.target.checked
+                        ? [...current, name]
+                        : current.filter((item) => item !== name);
+                      void action(async () => {
+                        const updated = await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({ sharedCaches: next }),
+                          },
+                        );
+                        setBoards((previous) =>
+                          previous.map((item) =>
+                            item.id === updated.id ? updated : item,
+                          ),
+                        );
+                        setEditingBoard(updated);
+                      });
+                    }}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span>
+                    Share the {cache.label} cache
+                    <span className="block text-muted-foreground">
+                      Card runs, reviews and verification use the main
+                      checkout&apos;s {cache.dir} instead of starting empty
+                      ({cache.env}).
+                    </span>
+                  </span>
+                </label>
+              ))}
               {(editingBoard.integration ?? "local") === "github-pr" && (
                 <label className="mt-4 flex items-start gap-2 text-xs">
                   <input
