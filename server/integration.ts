@@ -65,14 +65,50 @@ function isAncestor(repo: string, ancestor: string, descendant: string) {
  * request, for example merging main into it, and Bakery has nothing new). When both sides hold commits the other
  * lacks, throws instead of letting Git reject the push, naming what origin has so nobody's work is overwritten.
  */
-function remoteBranchState(repo: string, branch: string, candidate: string, resolve: string): "push" | "on-origin" {
+function remoteBranchState(repo: string, branch: string, candidate: string, resolve: string | null): "push" | "on-origin" | "diverged" {
   const remote = `refs/remotes/origin/${branch}`;
   if (!hasCommit(repo, remote) || isAncestor(repo, remote, candidate)) return "push";
   if (isAncestor(repo, candidate, remote)) return "on-origin";
+  if (resolve === null) return "diverged";
   const theirs = Number(git(repo, "rev-list", "--count", `${candidate}..${remote}`));
   const ours = Number(git(repo, "rev-list", "--count", `${remote}..${candidate}`));
   const latest = git(repo, "log", "-1", "--format=%h %s (%an)", remote);
   throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks (latest: ${latest}), and the card has ${ours} that origin lacks. Someone pushed to the pull request; Bakery will not overwrite it. ${resolve}`);
+}
+
+/** Why the card worktree cannot take an automatic merge of `origin/<branch>`, or "" when it is safe to try. */
+function mergeBlocker(worktree: string, branch: string): string {
+  const gitPath = (name: string) => resolve(worktree, git(worktree, "rev-parse", "--git-path", name));
+  for (const [name, what] of [["MERGE_HEAD", "a merge"], ["rebase-merge", "a rebase"], ["rebase-apply", "a rebase"], ["CHERRY_PICK_HEAD", "a cherry-pick"], ["REVERT_HEAD", "a revert"]] as const)
+    if (existsSync(gitPath(name))) return `the card worktree is in the middle of ${what}`;
+  let head = "";
+  try { head = git(worktree, "symbolic-ref", "--quiet", "--short", "HEAD"); } catch { /* Detached HEAD. */ }
+  if (head !== branch) return `the card worktree is ${head ? `on branch ${head}` : "in detached HEAD"}, not ${branch}`;
+  if (!clean(worktree)) return "the card worktree has uncommitted changes";
+  return "";
+}
+
+/**
+ * Merges `origin/<branch>` into the card worktree when both sides hold commits the other lacks, keeping every
+ * commit on both sides; nothing is pushed or rewritten. A conflict is aborted so the worktree is exactly as it was,
+ * and an unsafe worktree is left alone. Either throws with what to do. The merged tree was never reviewed, so the
+ * caller stops after this: approval, verification and review run again on the result.
+ */
+function mergeRemoteBranch(worktree: string, branch: string, scratch = false): { merged: number; head: string } {
+  const remote = `refs/remotes/origin/${branch}`;
+  const theirs = Number(git(worktree, "rev-list", "--count", `HEAD..${remote}`)), ours = Number(git(worktree, "rev-list", "--count", `${remote}..HEAD`));
+  const blocker = scratch ? "" : mergeBlocker(worktree, branch);
+  if (blocker) throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks, but Bakery could not merge them: ${blocker}. Nothing was changed or pushed. Fix that in ${worktree}, then approve again`);
+  try {
+    git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-edit", "--no-ff", "-m", `Merge origin/${branch} into ${branch}`, remote);
+  } catch (error) {
+    let files = "";
+    try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean).join(", "); } catch { /* Not mid-merge. */ }
+    try { git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
+    const detail = error instanceof Error ? error.message.slice(0, 500) : String(error);
+    throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks. Merging them ${files ? `conflicts in ${files}` : `failed (${detail})`}. Bakery aborted the merge and changed nothing; nothing was pushed. ${scratch ? `Reconcile origin/${branch} with the approved commit yourself, then publish again` : `Merge origin/${branch} into ${worktree} yourself and resolve the conflict, then approve again`}`);
+  }
+  return { merged: theirs, head: git(worktree, "rev-parse", "HEAD") };
 }
 
 // The title is user text. It reaches Git only as an argv entry, never through a shell.
@@ -350,7 +386,12 @@ export class Integration {
       step("Fetching origin");
       await fetchOrigin(repo);
       if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
-      const state = remoteBranchState(repo, branch, candidate, `Merge origin/${branch} into the card worktree (${worktree}), then approve again`);
+      const state = remoteBranchState(repo, branch, candidate, null);
+      if (state === "diverged") {
+        step(`Merging origin/${branch} into the card worktree`);
+        const { merged, head } = mergeRemoteBranch(worktree, branch);
+        throw new Error(`Merged ${merged} commit${merged === 1 ? "" : "s"} from origin/${branch} into the card worktree (now ${head.slice(0, 12)}), keeping the card's own commits. Nothing was pushed. The merged result is new work, so refresh the diff: verification and review run on it again before it is pushed`);
+      }
       if (state === "on-origin") {
         // Origin is ahead with nothing of ours missing: catch the worktree up so the next attempt builds on it.
         step(`Fast-forwarding the card worktree to origin/${branch}`);
@@ -359,7 +400,13 @@ export class Integration {
         step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
         // A plain push: if the branch on GitHub moved after the fetch, Git still refuses instead of overwriting it.
         try { await push(worktree, `${candidate}:refs/heads/${branch}`); }
-        catch (error) { throw error instanceof PushError && error.hookFailed ? new PushHookError(error, candidate) : error; }
+        catch (error) {
+          if (error instanceof PushError && error.hookFailed) throw new PushHookError(error, candidate);
+          // Origin's branch moved between the fetch and the push. Git refused rather than overwrite it; do not retry.
+          if (error instanceof PushError && /! \[(remote )?rejected\]|non-fast-forward|fetch first/.test(error.output))
+            throw new Error(`${branch} on origin changed while Bakery was pushing, so Git refused the push and nothing was overwritten. Approve again to merge the new commits into the card worktree\n\n${error.message}`);
+          throw error;
+        }
       }
       step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
       const why = { "operator": "changes the operator reviewed and approved in Bakery", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Bakery's agent reviewer approved, pushed automatically without human review", "auto-pull-request": "changes pushed automatically when the run reached Review, without human review" }[pushedBy];
@@ -424,14 +471,34 @@ export class Integration {
       const blocker = publishBlocker(repo, card, candidate);
       if (blocker) throw new Error(blocker);
       if (isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
-      const state = remoteBranchState(repo, `bakery/${card.id}`, candidate, `Reconcile origin/bakery/${card.id} with the approved commit ${candidate.slice(0, 12)} yourself, then publish`);
-      if (state === "push") {
-        step(`Pushing bakery/${card.id} (the repository's pre-push hooks run first)`);
+      const branch = `bakery/${card.id}`;
+      const state = remoteBranchState(repo, branch, candidate, null);
+      let toPush = candidate;
+      let merged = 0;
+      if (state === "diverged") {
+        // No card worktree to merge into: merge in a scratch worktree, then push the result as a plain fast-forward.
+        step(`Merging origin/${branch} into the approved commit`);
+        const scratch = mkdtempSync(join(tmpdir(), "bakery-publish-merge-"));
+        try {
+          git(repo, "worktree", "add", "--detach", scratch, candidate);
+          ({ merged, head: toPush } = mergeRemoteBranch(scratch, branch, true));
+          step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
+          try { await push(scratch, `${toPush}:refs/heads/${branch}`); }
+          catch (error) {
+            if (error instanceof PushError && !error.hookFailed && /! \[(remote )?rejected\]|non-fast-forward|fetch first/.test(error.output))
+              throw new Error(`${branch} on origin changed while Bakery was pushing, so Git refused the push and nothing was overwritten. Publish again to merge the new commits`);
+            throw error;
+          }
+        } finally {
+          try { git(repo, "worktree", "remove", "--force", scratch); } catch { rmSync(scratch, { recursive: true, force: true }); }
+        }
+      } else if (state === "push") {
+        step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
         // A plain push: if bakery/<id> on GitHub moved after the fetch, Git still refuses instead of overwriting it.
-        await push(repo, `${candidate}:refs/heads/bakery/${card.id}`);
+        await push(repo, `${candidate}:refs/heads/${branch}`);
       }
       step("Opening the pull request");
-      const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, state === "push" ? { sha: candidate, why: "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" } : null);
+      const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, state === "on-origin" ? null : { sha: toPush, why: merged ? `work the operator approved in Bakery and merged into local main earlier, merged with ${merged} commit${merged === 1 ? "" : "s"} already on the branch, now published as a pull request` : "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" });
       return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: this.mainRecovery(repo) };
     });
   }

@@ -234,11 +234,16 @@ test("github-pr: Approve catches up with commits someone pushed to the PR branch
     assert.equal(git(worktree, "rev-parse", "HEAD"), theirs, "the card worktree caught up with origin");
     assert.equal(f.comments().length, commentsAfterFirstPush, "nothing pushed, nothing announced");
 
-    // Both sides moved: a clear refusal that names origin's commit, and origin keeps it.
+    // Both sides moved: origin's commit is merged in, nothing is pushed, and the merged result needs a new approval.
     const again = pushToPr("again.txt");
     writeFileSync(join(worktree, "ours.txt"), "ours\n");
-    await assert.rejects(approve(f, card.id), new RegExp(`${branch} on origin has 1 commit this card lacks \\(latest: [0-9a-f]+ someone else's again\\.txt .*Someone pushed to the pull request`));
-    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), again);
+    await assert.rejects(approve(f, card.id), new RegExp(`Merged 1 commit from origin/${branch} into the card worktree.*Nothing was pushed`));
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), again, "origin keeps its commit");
+    assert.equal(git(worktree, "rev-list", "--count", "--merges", `${again}..HEAD`), "1");
+    git(worktree, "merge-base", "--is-ancestor", again, "HEAD");
+    assert.equal(git(worktree, "status", "--porcelain"), "");
+    await approve(f, card.id);
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), git(worktree, "rev-parse", "HEAD"), "the merged result fast-forwards origin on the next approval");
   } finally { f.cleanup(); }
 });
 
@@ -1506,5 +1511,133 @@ test("a sync pass still running at shutdown ends quietly once the database is cl
     f.sync.shutdown();
     f.board.close();
     await pass;
+  } finally { f.cleanup(); }
+});
+
+/** Two clones' worth of divergence on bakery/<id>: pushes a commit from another clone onto the PR branch. */
+function pushToBranch(f: Fixture, branch: string, name: string, content = `${name}\n`) {
+  git(f.upstream, "fetch", "-q", "origin", branch);
+  git(f.upstream, "checkout", "-q", "-B", branch, "FETCH_HEAD");
+  writeFileSync(join(f.upstream, name), content); git(f.upstream, "add", name); git(f.upstream, ...commitArgs, `someone else's ${name}`);
+  git(f.upstream, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+  git(f.upstream, "checkout", "-q", "main");
+  return git(f.upstream, "rev-parse", branch);
+}
+
+/** A card approved and pushed once, then given an origin-only commit and a local-only commit. */
+async function divergedCard(f: Fixture, remoteFile = "remote.txt", remoteContent = "remote\n", localFile = "local.txt", localContent = "local\n") {
+  const card = await reviewedCard(f);
+  const worktree = join(f.data, "worktrees", card.id), branch = `bakery/${card.id}`;
+  await approve(f, card.id);
+  const theirs = pushToBranch(f, branch, remoteFile, remoteContent);
+  writeFileSync(join(worktree, localFile), localContent);
+  return { card, worktree, branch, theirs };
+}
+
+test("github-pr: Approve merges a diverged PR branch into the worktree, keeps both sides, and then needs a fresh approval", async () => {
+  const f = fixture();
+  try {
+    const { card, worktree, branch, theirs } = await divergedCard(f);
+    const pushesBefore = f.comments().length;
+    await assert.rejects(approve(f, card.id), new RegExp(`Merged 1 commit from origin/${branch}.*Nothing was pushed.*verification and review run on it again`));
+    assert.equal(git(worktree, "rev-parse", "HEAD^2"), theirs, "origin's tip is the merge's second parent");
+    assert.equal(git(worktree, "show", "HEAD:local.txt"), "local");
+    assert.equal(git(worktree, "show", "HEAD:remote.txt"), "remote");
+    assert.equal(git(worktree, "status", "--porcelain"), "");
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), theirs, "the merge pushed nothing");
+    assert.equal(f.comments().length, pushesBefore);
+    // The old fingerprint no longer matches the merged tree, so the earlier approval cannot push it.
+    await approve(f, card.id);
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), git(worktree, "rev-parse", "HEAD"), "the fresh approval fast-forwards origin");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a conflicting merge of the PR branch is aborted and leaves everything as it was", async () => {
+  const f = fixture();
+  try {
+    const { card, worktree, branch, theirs } = await divergedCard(f, "shared.txt", "remote\n", "shared.txt", "local\n");
+    await assert.rejects(approve(f, card.id), /Merging them conflicts in shared\.txt\. Bakery aborted the merge and changed nothing; nothing was pushed/);
+    assert.equal(git(worktree, "status", "--porcelain"), "", "no conflict markers or staged merge left behind");
+    assert.equal(git(worktree, "rev-list", "--count", "--merges", "HEAD"), "0");
+    assert.equal(git(worktree, "show", "HEAD:shared.txt"), "local", "the card's own commit is intact");
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), theirs, "origin is untouched");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: an unsafe worktree (rebase in progress, detached HEAD) is not merged into and keeps its work", async () => {
+  const f = fixture();
+  try {
+    const { card, worktree, branch, theirs } = await divergedCard(f);
+    // A rebase left half-done in the card worktree: Bakery must not merge on top of it.
+    mkdirSync(join(git(worktree, "rev-parse", "--absolute-git-dir"), "rebase-merge"));
+    await assert.rejects(approve(f, card.id), /could not merge them: the card worktree is in the middle of a rebase\. Nothing was changed or pushed/);
+    assert.equal(git(worktree, "rev-list", "--count", "--merges", "HEAD"), "0", "no merge was made");
+    assert.equal(git(worktree, "show", "HEAD:local.txt"), "local", "the card's work was committed, not lost");
+    // A detached HEAD is refused before any merge is tried.
+    rmSync(join(git(worktree, "rev-parse", "--absolute-git-dir"), "rebase-merge"), { recursive: true });
+    git(worktree, "checkout", "-q", "--detach");
+    await assert.rejects(approve(f, card.id));
+    assert.equal(git(worktree, "rev-list", "--count", "--merges", "HEAD"), "0");
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), theirs);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: Git refusing a push because origin moved during it overwrites nothing and is not retried", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const worktree = join(f.data, "worktrees", card.id), branch = `bakery/${card.id}`;
+    // A pre-push hook that, once, lands another commit on the PR branch after Bakery's fetch and before its push.
+    const hooks = join(f.repo, ".git", "hooks"), marker = join(f.dir, "raced");
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, "pre-push"), `#!/bin/sh\n[ -e "${marker}" ] && exit 0\ntouch "${marker}"\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd "${f.upstream}" || exit 1\ngit checkout -q -B race main && echo race > race.txt && git add race.txt && git -c user.name=t -c user.email=t@t commit -q -m "raced" && git push -q origin "HEAD:refs/heads/${branch}"\n`);
+    chmodSync(join(hooks, "pre-push"), 0o755);
+    await assert.rejects(approve(f, card.id), new RegExp(`${branch} on origin changed while Bakery was pushing.*nothing was overwritten`, "s"));
+    const raced = git(f.upstream, "rev-parse", "race");
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), raced, "the concurrent commit survives");
+    assert.equal(git(worktree, "status", "--porcelain"), "");
+    assert.equal(f.prs().length, 0, "no PR opened for a push that did not happen");
+  } finally { f.cleanup(); }
+});
+
+/** A Done card merged into local main (board since switched to github-pr), whose bakery/<id> on origin then moved. */
+async function locallyMergedCard(f: Fixture, remoteFile: string, remoteContent: string) {
+  f.board.setIntegration(f.repoBoard.id, "local");
+  const card = await reviewedCard(f);
+  const integration = new Integration(f.board, f.data);
+  integration.approve(card, integration.review(card).fingerprint);
+  const candidate = git(join(f.data, "worktrees", card.id), "rev-parse", "HEAD");
+  f.board.setIntegration(f.repoBoard.id, "github-pr");
+  const branch = `bakery/${card.id}`;
+  git(f.upstream, "fetch", "-q", "origin", "main");
+  git(f.upstream, "checkout", "-q", "-B", branch, "origin/main");
+  writeFileSync(join(f.upstream, remoteFile), remoteContent); git(f.upstream, "add", remoteFile); git(f.upstream, ...commitArgs, "someone else's work");
+  git(f.upstream, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+  const theirs = git(f.upstream, "rev-parse", "HEAD");
+  git(f.upstream, "checkout", "-q", "main");
+  return { card, candidate, branch, theirs, integration };
+}
+
+test("publish as PR: a diverged bakery/<id> on origin is merged with the approved commit, both kept, and pushed as a fast-forward", async () => {
+  const f = fixture();
+  try {
+    const { card, candidate, branch, theirs, integration } = await locallyMergedCard(f, "remote.txt", "remote\n");
+    const published = await integration.publishLocalMerge(f.board.getCard(card.id)!, f.github);
+    assert.equal(published.card.status, "review");
+    const pushed = git(f.origin, "rev-parse", `refs/heads/${branch}`);
+    assert.equal(git(f.origin, "rev-parse", `${pushed}^1`), candidate);
+    assert.equal(git(f.origin, "rev-parse", `${pushed}^2`), theirs, "origin's commit is kept");
+    assert.equal(git(f.repo, "worktree", "list", "--porcelain").includes("bakery-publish-merge"), false, "the scratch worktree is gone");
+  } finally { f.cleanup(); }
+});
+
+test("publish as PR: a conflicting diverged bakery/<id> stops with nothing pushed or changed", async () => {
+  const f = fixture();
+  try {
+    const { card, branch, theirs, integration } = await locallyMergedCard(f, "feature.txt", "conflicting\n");
+    await assert.rejects(integration.publishLocalMerge(f.board.getCard(card.id)!, f.github), /conflicts in feature\.txt\. Bakery aborted the merge and changed nothing; nothing was pushed/);
+    assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), theirs);
+    assert.equal(f.board.getCard(card.id)?.locallyMerged, true, "the card is still offered for publishing");
+    assert.equal(git(f.repo, "worktree", "list", "--porcelain").includes("bakery-publish-merge"), false);
   } finally { f.cleanup(); }
 });
