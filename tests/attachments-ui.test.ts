@@ -162,8 +162,9 @@ test("deleting an attachment asks first: Cancel or Escape keeps it, Delete remov
     await confirm.waitFor();
     // Cancel has focus, so a stray Enter cannot delete.
     assert.equal(await confirm.getByRole("button", { name: "Cancel" }).evaluate(el => el === document.activeElement), true);
-    // Radix attaches its Escape listener a tick after the dialog shows, so retry on a loaded machine.
-    for (let i = 0; i < 20 && await confirm.isVisible(); i++) { await page.keyboard.press("Escape"); await page.waitForTimeout(100); }
+    // Radix attaches its Escape listener a tick after the dialog shows, so retry on a loaded machine. Retry only while
+    // the dialog is still open: during its closing animation it stays visible, and a second Escape would close the card.
+    for (let i = 0; i < 20 && await confirm.getAttribute("data-state", { timeout: 1_000 }).catch(() => null) === "open"; i++) { await page.keyboard.press("Escape"); await page.waitForTimeout(100); }
     await confirm.waitFor({ state: "hidden" });
     await page.waitForTimeout(200);
     assert.deepEqual(deleted, [], "Cancel and Escape send no delete request");
@@ -229,8 +230,9 @@ test("purging an archived card's attachments asks first: Cancel or Escape sends 
     await purge.click();
     await confirm.waitFor();
     assert.equal(await confirm.getByRole("button", { name: "Cancel" }).evaluate(el => el === document.activeElement), true);
-    // Radix attaches its Escape listener a tick after the dialog shows, so retry on a loaded machine.
-    for (let i = 0; i < 20 && await confirm.isVisible(); i++) { await page.keyboard.press("Escape"); await page.waitForTimeout(100); }
+    // Radix attaches its Escape listener a tick after the dialog shows, so retry on a loaded machine. Retry only while
+    // the dialog is still open: during its closing animation it stays visible, and a second Escape would close the card.
+    for (let i = 0; i < 20 && await confirm.getAttribute("data-state", { timeout: 1_000 }).catch(() => null) === "open"; i++) { await page.keyboard.press("Escape"); await page.waitForTimeout(100); }
     await confirm.waitFor({ state: "hidden" });
     await page.waitForTimeout(200);
     assert.deepEqual(purges, [], "Cancel and Escape send no purge request");
