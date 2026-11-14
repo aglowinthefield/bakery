@@ -876,6 +876,13 @@ const fadeSpy = () => {
   }, true);
 };
 const entryFades = (page: Page) => page.evaluate(() => (window as unknown as { __entryFades: string[] }).__entryFades.slice());
+// An entry's fade starts a frame or more after its text appears, later still on a loaded runner. Once the entry
+// has no animation pending or running, any `chat-entry-in` it was going to play has started and been logged.
+const entryFadesAfter = async (entry: Locator) => {
+  await waitUntil(() => entry.evaluate(el => el.getAnimations().length === 0));
+  return entryFades(entry.page());
+};
+const entry = (page: Page, text: string) => page.locator("li[data-role]", { hasText: text });
 
 async function fadeHarness(reducedMotion: "reduce" | "no-preference") {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
@@ -919,8 +926,7 @@ test("chat entries fade in once, a streamed reply does not fade again when saved
     try {
       await page.goto(`${url}board/b1/chat`);
       await page.locator("[data-role='agent']").getByText("Card B waits on A.").waitFor();
-      await page.waitForTimeout(300);
-      const initial = await entryFades(page);
+      const initial = await entryFadesAfter(entry(page, "What is blocked?"));
       if (motion === "reduce") {
         assert.deepEqual(initial, [], "reduced motion starts no entry animation");
         assert.equal(await page.locator("[data-role='agent']").evaluate(el => getComputedStyle(el).animationName), "none");
@@ -932,22 +938,19 @@ test("chat entries fade in once, a streamed reply does not fade again when saved
       // A new saved message fades in.
       await page.evaluate(() => (window as unknown as { __emit: (d: unknown) => void }).__emit({ type: "message", message: { id: "m3", chatId: "c1", role: "user", body: "Fresh question", parts: [], createdAt: "2025-01-01T00:00:03Z" } }));
       await page.getByText("Fresh question").waitFor();
-      await page.waitForTimeout(100);
-      assert.equal((await entryFades(page)).filter(text => text.includes("Fresh question")).length, motion === "reduce" ? 0 : 1);
+      assert.equal((await entryFadesAfter(entry(page, "Fresh question"))).filter(text => text.includes("Fresh question")).length, motion === "reduce" ? 0 : 1);
 
       // A reply streams in, then is saved: the live bubble fades in, the saved copy does not.
       await page.evaluate(() => (window as unknown as { __emit: (d: unknown) => void }).__emit({ type: "live", live: { startedAt: "2025-01-01T00:00:04Z", parts: [{ type: "text", text: "Streamed answer" }] } }));
       await page.locator("[data-live='true']").getByText("Streamed answer").waitFor();
-      await page.waitForTimeout(300);
-      const mid = await entryFades(page);
+      const mid = await entryFadesAfter(page.locator("[data-live='true']"));
       await page.evaluate(() => {
         const emit = (window as unknown as { __emit: (d: unknown) => void }).__emit;
         emit({ type: "message", message: { id: "m4", chatId: "c1", role: "agent", body: "Streamed answer", parts: [{ type: "text", text: "Streamed answer" }], createdAt: "2025-01-01T00:00:05Z" } });
         emit({ type: "live", live: null });
       });
       await page.locator("[data-role='agent']").getByText("Streamed answer").waitFor();
-      await page.waitForTimeout(100);
-      const after = await entryFades(page);
+      const after = await entryFadesAfter(entry(page, "Streamed answer"));
       assert.equal(after.length, mid.length, "saving the streamed reply starts no new fade");
       assert.ok(after.length >= before);
     } finally {
@@ -965,8 +968,7 @@ test("discussion entries fade in, and not under reduced motion", async () => {
       await page.goto(`${url}board/b1/card/k1`);
       await page.getByRole("tab", { name: "Discuss" }).or(page.getByRole("button", { name: "Discuss", exact: true })).first().click();
       await page.getByText("Why this approach?").waitFor();
-      await page.waitForTimeout(300);
-      const fades = (await entryFades(page)).filter(text => text.includes("Why this approach?")).length;
+      const fades = (await entryFadesAfter(entry(page, "Why this approach?"))).filter(text => text.includes("Why this approach?")).length;
       assert.equal(fades, motion === "reduce" ? 0 : 1);
     } finally {
       await browser.close();
@@ -982,15 +984,13 @@ test("a streamed reply that finishes while the stream is down does not fade agai
     await page.locator("[data-role='agent']").getByText("Card B waits on A.").waitFor();
     await page.evaluate(() => (window as unknown as { __emit: (d: unknown) => void }).__emit({ type: "live", live: { startedAt: "2025-01-01T00:00:04Z", parts: [{ type: "text", text: "Streamed answer" }] } }));
     await page.locator("[data-live='true']").getByText("Streamed answer").waitFor();
-    await page.waitForTimeout(300);
-    const mid = (await entryFades(page)).length;
+    const mid = (await entryFadesAfter(page.locator("[data-live='true']"))).length;
     // The stream drops, the reply finishes unseen, and the reconnect's load() returns it saved with no live turn.
     transcript.messages = [...messages, { id: "m4", chatId: "c1", role: "agent", body: "Streamed answer", parts: [{ type: "text", text: "Streamed answer" }], createdAt: "2025-01-01T00:00:05Z" }];
     await page.evaluate(() => (window as unknown as { __drop: () => void }).__drop());
     await page.evaluate(() => (window as unknown as { __emit: (d: unknown) => void }).__emit({ type: "live", live: null }));
     await page.locator("[data-role='agent']").getByText("Streamed answer").waitFor({ timeout: 10000 });
-    await page.waitForTimeout(200);
-    assert.equal((await entryFades(page)).length, mid, "the caught-up reply starts no new fade");
+    assert.equal((await entryFadesAfter(entry(page, "Streamed answer"))).length, mid, "the caught-up reply starts no new fade");
   } finally {
     await browser.close();
     await server.close();
