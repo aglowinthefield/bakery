@@ -34,7 +34,7 @@ Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|hi
        bakery-cli conflicts [--board ID|PATH] [--json]
        bakery-cli sentinels [--board ID|PATH] [--json]
        bakery-cli sentinel-pause|sentinel-resume|sentinel-run SENTINEL_ID [--board ID|PATH] [--json]
-       bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 1-99] [--budget USD|off] [--board ID|PATH] [--yes]
+       bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 0-99|off] [--budget USD|off] [--board ID|PATH] [--yes]
 
 doctor checks Node, git, pi, gh, worktrunk, the data directory, the server and each board, printing PASS, WARN or FAIL
 per check; it exits 1 if any check fails. Against a remote BAKERY_URL it checks only the server and boards.
@@ -61,6 +61,7 @@ the server never reads paths. Nothing is sent to any service outside Bakery.
 purge-attachments permanently deletes the attached files and records of archived cards, all or none. It cannot be
 undone, even if the card is restored, so it needs --yes.
 stats prints card counts per lane and the pickup state.
+pickup --limit sets the most automatic starts per rolling 24 hours; 0 or off means no limit.
 board prints a board's integration mode; --integration github-pr makes a card Done when its GitHub pull request
 merges onto origin/main (needs gh and a GitHub remote link), --integration local merges on Approve.
 --merge-limit sets the most unattended review merges per rolling 24 hours (0 means no limit); at the limit
@@ -169,7 +170,7 @@ const priorityValue = value => Object.hasOwn(priorities, value) ? priorities[val
 const priorityName = value => Object.keys(priorities).find(key => priorities[key] === (value ?? 0)) ?? String(value ?? 0);
 const money = cost => typeof cost !== "number" ? "—" : cost > 0 && cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
 const lanes = ["triage", "ready", "running", "review", "failed", "interrupted", "done", "archived"];
-const pickupSummary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
+const pickupSummary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.pickupDailyLimit === 0 ? `${item.autoPickupStarts ?? 0} starts in 24h (no limit)` : `${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h`}${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
 const cardLine = card => `${card.id}\t${card.status}\t${card.title ?? ""}`;
 
 // The API has no single-card GET, so find the card in its board's list.
@@ -415,9 +416,10 @@ async function main() {
     if (args[0] === "on" && !opts.yes) throw new Error("Enabling pickup can start paid Pi runs immediately. Repeat with --yes to confirm.");
     const concurrency = opts.concurrency === undefined ? board.pickupConcurrency : Number(opts.concurrency);
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Concurrency must be an integer from 1 to 4");
-    const limit = opts.limit === undefined ? (board.pickupDailyLimit ?? 6) : Number(opts.limit);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 99) throw new Error("Limit must be an integer from 1 to 99");
-    if (args[0] === "on" && board.autoPickupEnabled && limit > board.pickupDailyLimit && !opts.yes)
+    const limit = opts.limit === undefined ? (board.pickupDailyLimit ?? 6) : opts.limit === "off" ? 0 : /^\d+$/.test(opts.limit) ? Number(opts.limit) : NaN;
+    if (!Number.isSafeInteger(limit) || limit < 0 || limit > 99) throw new Error("Limit must be off, 0 (no limit) or an integer from 1 to 99");
+    const current = board.pickupDailyLimit ?? 6;
+    if (args[0] === "on" && board.autoPickupEnabled && current !== 0 && (limit === 0 || limit > current) && !opts.yes)
       throw new Error("Raising the limit can start paid Pi runs immediately. Repeat with --yes to confirm.");
     const input = { autoPickupEnabled: args[0] === "on", pickupConcurrency: concurrency, pickupDailyLimit: limit };
     if (opts.budget !== undefined) {
