@@ -88,6 +88,10 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
   /** Last time the latest run's agent reported anything; null before the first run. */
   lastActivityAt: string | null;
+  /** Automatic retries spent after temporary provider failures since the card's last successful run; see `autoRetryDelaysMinutes`. */
+  autoRetries: number;
+  /** When auto-pickup may retry this Ready card after a temporary provider failure; null when no retry is waiting. */
+  autoRetryAt: string | null;
   /** Set only for Review cards that are not your turn; null means a person is needed (or the card is not in Review). */
   reviewWait: ReviewWait | null;
   /** Where the card waits for an agent review to start on its board (1 is next); null when it is not queued. */
@@ -125,6 +129,8 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   failureKind: ProviderFailureKind | null;
   /** Id of the failed run whose rejected session this run replaced with a fresh one; null for ordinary runs. */
   recoveryOf: string | null;
+  /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
+  retryScheduled: number;
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
@@ -137,6 +143,11 @@ const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlane
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
 export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
+/**
+ * Minutes an automatic run that failed on a `transient` or `rate-limit` provider error waits before auto-pickup retries
+ * its card, one entry per retry. Once they are used up the next such failure pauses pickup like any other failure.
+ */
+export const autoRetryDelaysMinutes = [1, 5, 15] as const;
 /** A status change (fromStatus/toStatus set) or a note (both null), with why it happened. */
 export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string };
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
@@ -229,7 +240,7 @@ export class Board {
     // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
     // Cards that exist before this column are not new, and a card made in the board UI never is.
     if (!cardColumns.has("unseen")) this.db.exec("ALTER TABLE cards ADD COLUMN unseen INTEGER NOT NULL DEFAULT 0");
-    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT", "prCommentsSeen TEXT"])
+    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT", "prCommentsSeen TEXT", "autoRetries INTEGER NOT NULL DEFAULT 0", "autoRetryAt TEXT"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     if (!cardColumns.has("prPushedRunId")) {
       // Before this column, a PR was opened from the latest run unless a CI fix run came after it. When a fix run may
@@ -359,6 +370,7 @@ export class Board {
     }
     // The failed run a fresh-session recovery run replaced. Later runs on the card resume the recovery run's session.
     if (!runColumns.has("recoveryOf")) this.db.exec("ALTER TABLE runs ADD COLUMN recoveryOf TEXT");
+    if (!runColumns.has("retryScheduled")) this.db.exec("ALTER TABLE runs ADD COLUMN retryScheduled INTEGER NOT NULL DEFAULT 0");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
@@ -813,7 +825,7 @@ export class Board {
   }
   private hasUnresolvedAutoFailure(repo: string, since: string | null): boolean {
     return !!this.db.prepare(`SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId
-      WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed' AND runs.startedAt>=?
+      WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed' AND runs.retryScheduled=0 AND runs.startedAt>=?
         AND cards.status NOT IN ('done', 'archived') AND ${notSentinelJob}
         AND NOT EXISTS (SELECT 1 FROM approvals WHERE approvals.cardId=cards.id AND approvals.merged=1)
         AND NOT EXISTS (SELECT 1 FROM external_integrations WHERE external_integrations.cardId=cards.id)
@@ -850,7 +862,8 @@ export class Board {
       if (repoBoard.autoPickupBudgetReached || repoBoard.integrationError) continue;
       const atLimit = this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || (repoBoard.pickupDailyLimit > 0 && repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit);
       if (atLimit) continue;
-      const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='ready' AND ${notSentinelJob} ORDER BY priority DESC, createdAt, rowid`).all(repoBoard.repo) as { id: string }[];
+      // A card waiting out its retry backoff is skipped until its time comes.
+      const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='ready' AND (autoRetryAt IS NULL OR autoRetryAt<=?) AND ${notSentinelJob} ORDER BY priority DESC, createdAt, rowid`).all(repoBoard.repo, now()) as { id: string }[];
       // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
       result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card)));
     }
@@ -1526,14 +1539,16 @@ export class Board {
       if (repoBoard?.autoPickupEnabled && !isSentinelJob(card) && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
         throw new RunLimitError(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
-        (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard)))
+        (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard) ||
+        (card.autoRetryAt !== null && card.autoRetryAt > now())))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       // Later runs resume the session the card's latest run used, which is a fresh one after a recovery or a narration-free retry.
       const latest = this.db.prepare("SELECT sessionId FROM runs WHERE cardId=? ORDER BY attempt DESC LIMIT 1").get(cardId) as { sessionId: string } | undefined;
       const id = randomUUID(), sessionId = freshSession || recoveryOf ? `bakery-${cardId}-${attempt}` : latest?.sessionId ?? `bakery-${cardId}`;
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, recoveryOf, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy, recoveryOf);
-      this.db.prepare("UPDATE cards SET status='running', updatedAt=? WHERE id=?").run(now(), cardId);
+      // Any start, manual or automatic, uses up a waiting retry; the retry count stays until a run succeeds.
+      this.db.prepare("UPDATE cards SET status='running', autoRetryAt=NULL, updatedAt=? WHERE id=?").run(now(), cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);
       this.db.exec("COMMIT");
       const started = this.getRun(id)!;
@@ -1592,14 +1607,28 @@ export class Board {
     if (run?.status !== "running") return;
     this.db.prepare("UPDATE runs SET output=? WHERE id=?").run((run.output + chunk).slice(-60000), id);
   }
-  finish(id: string, status: "review" | "failed", error: string | null = null, failureKind: ProviderFailureKind | null = null) {
+  /** `retryable` is false for a run Bakery or the operator ended (stop, timeout, protocol failure), whatever provider error came before. */
+  finish(id: string, status: "review" | "failed", error: string | null = null, failureKind: ProviderFailureKind | null = null, retryable = true) {
     const run = this.getRun(id);
     if (!run || run.status !== "running") return;
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("UPDATE runs SET status=?, error=?, failureKind=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, status === "failed" && isProviderFailureKind(failureKind) ? failureKind : null, now(), id);
-      this.db.prepare("UPDATE cards SET status=?, updatedAt=? WHERE id=?").run(status, now(), run.cardId);
-      this.explain(run.cardId, status === "review" ? `Attempt ${run.attempt} finished; waiting for review` : `Attempt ${run.attempt} failed: ${error ?? "unknown error"}`);
+      const kind = status === "failed" && isProviderFailureKind(failureKind) ? failureKind : null;
+      const card = this.getCard(run.cardId);
+      // A temporary provider failure of an automatic run goes back to Ready and waits out a backoff instead of pausing
+      // pickup. Past the last delay, or for any other failure, the card fails and pickup pauses as before.
+      const retry = retryable && card && run.startedBy === "auto" && (kind === "transient" || kind === "rate-limit") && !isSentinelJob(card) && card.autoRetries < autoRetryDelaysMinutes.length;
+      this.db.prepare("UPDATE runs SET status=?, error=?, failureKind=?, retryScheduled=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, kind, retry ? 1 : 0, now(), id);
+      if (retry) {
+        const retries = card.autoRetries + 1, at = new Date(Date.now() + autoRetryDelaysMinutes[card.autoRetries] * 60_000).toISOString();
+        this.db.prepare("UPDATE cards SET status='ready', autoRetries=?, autoRetryAt=?, updatedAt=? WHERE id=?").run(retries, at, now(), run.cardId);
+        this.explain(run.cardId, `Attempt ${run.attempt} failed with a ${kind === "rate-limit" ? "rate limit" : "temporary provider or network error"}; automatic retry ${retries} of ${autoRetryDelaysMinutes.length} at ${at}: ${error ?? "unknown error"}`);
+      } else {
+        this.db.prepare(`UPDATE cards SET status=?, ${status === "review" ? "autoRetries=0, autoRetryAt=NULL, " : ""}updatedAt=? WHERE id=?`).run(status, now(), run.cardId);
+        const capped = card && run.startedBy === "auto" && (kind === "transient" || kind === "rate-limit") && card.autoRetries >= autoRetryDelaysMinutes.length;
+        this.explain(run.cardId, status === "review" ? `Attempt ${run.attempt} finished; waiting for review`
+          : `Attempt ${run.attempt} failed${capped ? ` after ${card.autoRetries} automatic retries` : ""}: ${error ?? "unknown error"}`);
+      }
       if (status === "review") this.clearMergeFailure(run.cardId);
       this.db.exec("COMMIT");
     } catch (err) { this.db.exec("ROLLBACK"); throw err; }
