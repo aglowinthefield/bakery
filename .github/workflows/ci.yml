@@ -29,7 +29,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # UI tests drive Chromium through Playwright.
+      # UI tests drive Chromium through Playwright, and WebKit on macOS (see tests/setup.ts).
       - run: npx playwright install --with-deps chromium
+      - if: runner.os == 'macOS'
+        run: npx playwright install webkit
       - run: npm test
       - run: npm run build
