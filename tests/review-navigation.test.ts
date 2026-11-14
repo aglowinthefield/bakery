@@ -22,8 +22,9 @@ test("changed files open their own patches and focus the heading without changin
   const comments = [{ id: "note", cardId: "card", runId: "run", fingerprint, path: files[1], line: 2, fileLine: 1, kind: "add", code: "second", body: "Keep this note", state: "draft", createdAt: "2026-01-01" }];
   const requests: string[] = [];
   await page.route("**/api/**", async route => {
-    const path = new URL(route.request().url()).pathname;
-    requests.push(`${route.request().method()} ${path}`);
+    const { pathname: path, search } = new URL(route.request().url());
+    // Keep the query: the open diff polls `/review?fingerprint` every 4s, which is not a reload of the review.
+    requests.push(`${route.request().method()} ${path}${search}`);
     const data: Record<string, unknown> = {
       "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
