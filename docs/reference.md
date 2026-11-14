@@ -36,6 +36,7 @@ flowchart LR
 - [Server, data, and restarts](#server-data-and-restarts)
 - [Safety](#safety)
 - [Development](#development)
+- [Releasing](#releasing)
 
 ## Quick start
 
@@ -436,6 +437,12 @@ Tests use a fake offline `pi` and temporary Git repositories. They don't call a 
 - Read-only Linear import into local cards, keyed by issue ID. Bakery won't write to Linear.
 - Better process identity checks for interrupted runs, beyond PID liveness.
 - External CI before approval and automatic card creation.
+
+## Releasing
+
+From a clean checkout of `main`, run `npm run release -- 0.2.0`. It sets that version in `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`, adds a `CHANGELOG.md` section from the merge commit subjects since the last `v*` tag, commits, and creates the tag `v0.2.0`. It doesn't push.
+
+Review the commit, then `git push origin main v0.2.0`. Pushing the tag runs `.github/workflows/release.yml`, which creates a GitHub release using that changelog section as its notes.
 
 ## Colleagues prototype (fixture data)
 
