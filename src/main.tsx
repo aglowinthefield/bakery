@@ -2771,6 +2771,19 @@ export function App() {
                                     card={item}
                                     activity={activity}
                                   />
+                                  {!!item.autoRetries && (
+                                    <span
+                                      data-testid="auto-retry"
+                                      title="Automatic pickup retries a run that failed on a temporary provider or network error, at most 3 times"
+                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-amber-500"
+                                    >
+                                      <RotateCcw size={10} aria-hidden />
+                                      Retry {item.autoRetries}/3
+                                      {item.autoRetryAt &&
+                                        item.status === "ready" &&
+                                        ` · next ${new Date(item.autoRetryAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+                                    </span>
+                                  )}
                                   {item.attempts > 1 && (
                                     <span
                                       data-testid="attempt-count"

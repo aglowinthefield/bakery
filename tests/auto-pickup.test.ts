@@ -355,3 +355,176 @@ test("sentinel jobs live outside auto-pickup: never picked, never limited, never
     await waitFor(() => [fix.id, request.id, plain.id].every(id => item.board.getCard(id)?.status === "review"));
   } finally { await item.close(); }
 });
+
+const providerFailurePi = (
+  item: ReturnType<typeof fixture>,
+  errorMessage: string,
+) =>
+  writeFileSync(
+    join(item.dir, "fake-pi"),
+    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage } })}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`,
+  );
+const DNS = "cannot resolve tunnel destination api.anthropic.com (ETIMEDOUT)";
+/** Pretends the card's backoff has run out. */
+const expireBackoff = (item: ReturnType<typeof fixture>, id: string) => {
+  const db = new DatabaseSync(join(item.dir, "board.sqlite"));
+  try {
+    db.prepare("UPDATE cards SET autoRetryAt=? WHERE id=?").run(
+      new Date(Date.now() - 1000).toISOString(),
+      id,
+    );
+  } finally {
+    db.close();
+  }
+};
+
+test("a temporary provider failure returns the card to Ready, retries after a backoff, and pickup keeps running", async () => {
+  const item = fixture();
+  try {
+    providerFailurePi(item, DNS);
+    const flaky = item.card("Flaky network");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.listRuns(flaky.id)[0]?.status === "failed");
+    let card = item.board.getCard(flaky.id)!;
+    assert.equal(card.status, "ready");
+    assert.equal(card.autoRetries, 1);
+    const wait = Date.parse(card.autoRetryAt!) - Date.now();
+    assert.ok(
+      wait > 50_000 && wait <= 60_000,
+      `first retry waits 1 minute, got ${wait}ms`,
+    );
+    assert.equal(item.board.listRuns(flaky.id)[0].failureKind, "transient");
+    item.pickup.tick();
+    assert.equal(
+      item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled,
+      true,
+      "pickup is not paused",
+    );
+    assert.equal(
+      item.board.listRuns(flaky.id).length,
+      1,
+      "the card waits out its backoff",
+    );
+    assert.throws(() => item.board.claim(flaky.id, "auto"), /not eligible/);
+    // The network recovers, and the backoff passes.
+    writeFileSync(
+      join(item.dir, "fake-pi"),
+      `#!/bin/sh\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`,
+    );
+    expireBackoff(item, flaky.id);
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(flaky.id)?.status === "review");
+    card = item.board.getCard(flaky.id)!;
+    assert.equal(item.board.listRuns(flaky.id).length, 2);
+    assert.equal(
+      card.autoRetries,
+      0,
+      "a successful run clears the retry count",
+    );
+    assert.equal(card.autoRetryAt, null);
+    assert.equal(
+      item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled,
+      true,
+    );
+  } finally {
+    await item.close();
+  }
+});
+
+test("a temporary provider failure retries after 1, 5 and 15 minutes, then the fourth failure pauses pickup", async () => {
+  const item = fixture();
+  try {
+    providerFailurePi(item, "Rate limited: 429 rate_limit_error");
+    const stuck = item.card("Never recovers");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    const minutes: number[] = [];
+    for (let round = 1; round <= 3; round++) {
+      item.pickup.tick();
+      await waitFor(
+        () =>
+          item.board.listRuns(stuck.id).length === round &&
+          item.board.getCard(stuck.id)?.status === "ready",
+      );
+      const card = item.board.getCard(stuck.id)!;
+      assert.equal(card.autoRetries, round);
+      minutes.push(
+        Math.round((Date.parse(card.autoRetryAt!) - Date.now()) / 60_000),
+      );
+      item.pickup.tick();
+      assert.equal(
+        item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled,
+        true,
+      );
+      expireBackoff(item, stuck.id);
+    }
+    assert.deepEqual(minutes, [1, 5, 15]);
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(stuck.id)?.status === "failed");
+    assert.equal(item.board.listRuns(stuck.id).length, 4);
+    const waiting = item.card("Waiting");
+    item.pickup.tick();
+    assert.equal(
+      item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled,
+      false,
+    );
+    assert.match(
+      item.board.getBoard(item.repoBoard.id)?.autoPickupError ?? "",
+      /automatic run failed/i,
+    );
+    assert.equal(item.board.listRuns(waiting.id).length, 0);
+    assert.match(
+      item.board.listCardEvents(stuck.id).at(-1)!.reason,
+      /after 3 automatic retries/,
+    );
+  } finally {
+    await item.close();
+  }
+});
+
+test("a non-transient provider failure pauses pickup at once without a retry", async () => {
+  const item = fixture();
+  try {
+    providerFailurePi(
+      item,
+      '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+    );
+    const rejected = item.card("Bad key"),
+      waiting = item.card("Waiting");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(rejected.id)?.status === "failed");
+    const card = item.board.getCard(rejected.id)!;
+    assert.equal(card.autoRetries, 0);
+    assert.equal(card.autoRetryAt, null);
+    item.pickup.tick();
+    assert.equal(
+      item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled,
+      false,
+    );
+    assert.equal(item.board.listRuns(waiting.id).length, 0);
+  } finally {
+    await item.close();
+  }
+});
+
+test("an automatic run the operator stops after a temporary provider error is not retried and pauses pickup", async () => {
+  const item = fixture();
+  try {
+    const event = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "429 rate_limit_error" } });
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf '%s\\n' '${event}'\nexec sleep 30\n`);
+    const stopped = item.card("Stopped"), waiting = item.card("Waiting");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.listRuns(stopped.id)[0]?.output.includes("Provider request failed") === true);
+    item.worker.stop(item.board.listRuns(stopped.id)[0].id);
+    await waitFor(() => item.board.getCard(stopped.id)?.status === "failed");
+    const card = item.board.getCard(stopped.id)!;
+    assert.equal(card.autoRetries, 0);
+    assert.equal(card.autoRetryAt, null);
+    assert.equal(item.board.listRuns(stopped.id)[0].retryScheduled, 0);
+    item.pickup.tick();
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, false);
+    assert.equal(item.board.listRuns(waiting.id).length, 0);
+  } finally { await item.close(); }
+});
