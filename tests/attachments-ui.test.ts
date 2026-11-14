@@ -242,3 +242,86 @@ test("purging an archived card's attachments asks first: Cancel or Escape sends 
     assert.equal(nativeDialogs, 0);
   } finally { await browser.close(); await server.close(); }
 });
+
+test("clicking a thumbnail opens a lightbox carousel over the card's images, with a full-size view and the original", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    const card = { id: "card", title: "Gallery", body: "", repo: "/tmp/repo", source: "manual", status: "review", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false, attachmentCount: 4 };
+    const files = [
+      { id: "a1", cardId: "card", messageId: null, name: "before.png", type: "image/png", size: 2048, createdAt: "2026-01-01" },
+      { id: "a2", cardId: "card", messageId: null, name: "run.log", type: "text/plain", size: 5, createdAt: "2026-01-01" },
+      { id: "a3", cardId: "card", messageId: null, name: "after.png", type: "image/png", size: 4096, createdAt: "2026-01-01" },
+      { id: "a4", cardId: "card", messageId: null, name: "wide.svg", type: "image/svg+xml", size: 300, createdAt: "2026-01-01" },
+    ];
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
+      "/api/boards/board/cards": [card],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/card/runs": [],
+      "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/comments": [],
+      "/api/boards/board/cards/card/auto-review": [],
+      "/api/boards/board/cards/card/history": [],
+      "/api/boards/board/cards/card/attachments": files,
+      "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [] },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
+      "/api/status": { draining: false, activeRuns: 0 },
+    };
+    // A 3000x200 image: wider than the window, so "fit" shrinks it and "full size" does not.
+    const wideImage = `<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="200"><rect width="3000" height="200" fill="teal"/></svg>`;
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (/\/attachments\/a[13]$/.test(path)) return route.fulfill({ contentType: "image/svg+xml", body: wideImage });
+      assert.ok(path in data, `Unexpected API request: ${path}`);
+      await route.fulfill({ json: data[path] });
+    });
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+    await page.getByRole("button", { name: /Gallery/ }).click();
+    const section = page.getByRole("region", { name: "Card attachments" });
+    await section.getByRole("img", { name: "after.png" }).click();
+
+    const viewer = page.getByRole("dialog", { name: "after.png" });
+    await viewer.waitFor();
+    assert.match(await viewer.textContent() ?? "", /2 of 2/);
+    // The non-image file and the unsupported type are not part of the carousel.
+    assert.equal(await viewer.getByRole("button", { name: /^Show / }).count(), 2);
+    assert.equal(await viewer.getByRole("link", { name: "Open original" }).getAttribute("href"), "/api/boards/board/cards/card/attachments/a3");
+    assert.equal(await viewer.getByRole("link", { name: "Open original" }).getAttribute("target"), "_blank");
+
+    // Next wraps around to the first image; the arrow keys step too.
+    await viewer.getByRole("button", { name: "Next image" }).click();
+    await page.getByRole("dialog", { name: "before.png" }).waitFor();
+    await page.keyboard.press("ArrowLeft");
+    await page.getByRole("dialog", { name: "after.png" }).waitFor();
+    await page.keyboard.press("ArrowRight");
+    const first = page.getByRole("dialog", { name: "before.png" });
+    await first.waitFor();
+    assert.match(await first.textContent() ?? "", /1 of 2/);
+
+    // Fitted, the wide image fits the window; at full size it keeps its natural width and the stage scrolls.
+    const big = first.getByRole("img", { name: "before.png" });
+    await page.waitForFunction(() => { const img = document.querySelector<HTMLImageElement>('[data-lightbox-stage] img'); return !!img && img.complete && img.naturalWidth > 0; });
+    assert.ok((await big.evaluate(img => img.getBoundingClientRect().width)) < 1200);
+    await first.getByRole("button", { name: "Full size" }).click();
+    assert.equal(Math.round(await big.evaluate(img => img.getBoundingClientRect().width)), 3000);
+    assert.ok(await first.evaluate(dialog => { const stage = dialog.querySelector("[data-lightbox-stage]")!; return stage.scrollWidth > stage.clientWidth; }));
+    await first.getByRole("button", { name: "Fit to window" }).click();
+    assert.ok((await big.evaluate(img => img.getBoundingClientRect().width)) < 1200);
+
+    // Escape closes only the lightbox, not the card behind it.
+    // Radix attaches its Escape listener a tick after the dialog shows, so retry, but never press twice for one close.
+    for (let i = 0; i < 10; i++) {
+      await page.keyboard.press("Escape");
+      if (await first.waitFor({ state: "hidden", timeout: 1000 }).then(() => true, () => false)) break;
+    }
+    await first.waitFor({ state: "hidden" });
+    await page.waitForTimeout(300);
+    assert.equal(await page.getByRole("dialog").count(), 1);
+    await section.waitFor({ state: "visible" });
+  } finally { await browser.close(); await server.close(); }
+});
