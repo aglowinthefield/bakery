@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { after, before, test } from "node:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
@@ -47,6 +48,15 @@ async function open(options: { cards: ReturnType<typeof card>[] }) {
 }
 
 const section = (page: Page, name: string) => page.getByRole("region", { name });
+const titles = (page: Page, name: string) => section(page, name).getByRole("listitem").allInnerTexts().then(items => items.map(item => item.split("\n")[0]));
+
+// Each repository's cards arrive on their own request, so a section can show nothing or part of its list at first.
+async function eventually<T>(read: () => Promise<T>, expected: T, timeout = 10_000) {
+  let actual = await read();
+  for (const started = Date.now(); !isDeepStrictEqual(actual, expected) && Date.now() - started < timeout; actual = await read())
+    await new Promise(resolve => setTimeout(resolve, 25));
+  assert.deepEqual(actual, expected);
+}
 
 test("Today opens first and gathers what needs you across every repository", async () => {
   const { page } = await open({ cards: [
@@ -60,11 +70,10 @@ test("Today opens first and gathers what needs you across every repository", asy
   ] });
   try {
     await page.getByRole("heading", { name: "Today" }).waitFor();
-    assert.deepEqual(await section(page, "Needs you").getByRole("listitem").allInnerTexts().then(items => items.map(item => item.split("\n")[0])),
-      ["Card review-old", "Card review-new", "Card broken"]);
-    assert.deepEqual(await section(page, "In progress").getByRole("listitem").allInnerTexts().then(items => items.map(item => item.split("\n")[0])), ["Card busy"]);
-    assert.deepEqual(await section(page, "Finished since your last visit").getByRole("listitem").allInnerTexts().then(items => items.map(item => item.split("\n")[0])), ["Card merged"]);
-    assert.match(await page.getByRole("status", { name: "Since your last visit" }).innerText(), /1 merged · 3 need you · \$1\.75 in the last 24h/);
+    await eventually(() => titles(page, "Needs you"), ["Card review-old", "Card review-new", "Card broken"]);
+    await eventually(() => titles(page, "In progress"), ["Card busy"]);
+    await eventually(() => titles(page, "Finished since your last visit"), ["Card merged"]);
+    await page.getByRole("status", { name: "Since your last visit" }).filter({ hasText: /1 merged · 3 need you · \$1\.75 in the last 24h/ }).waitFor();
     await section(page, "In progress").getByRole("button", { name: /Card busy/ }).click();
     await page.getByRole("dialog").getByText("Card busy").waitFor();
   } finally { await page.close(); }

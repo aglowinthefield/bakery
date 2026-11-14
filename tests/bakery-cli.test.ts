@@ -423,7 +423,9 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
     assert.equal(result.code, 1, "a board whose repository is missing fails the run");
     assert.match(result.stdout, /^PASS\tserver\thttp:\/\/127\.0\.0\.1:\d+ \(1 board\)/m);
     assert.match(result.stdout, /^FAIL\tboard \/nonexistent\/bakery-doctor\trepository path does not exist/m);
-    assert.match(result.stdout, /\d+ passed, \d+ warnings, 1 failed$/m);
+    // pi, gh and Worktrunk may be missing on the machine running the tests, so count the failures instead of fixing them at 1.
+    const failed = result.stdout.split("\n").filter(line => line.startsWith("FAIL\t")).length;
+    assert.match(result.stdout, new RegExp(`\\d+ passed, \\d+ warnings, ${failed} failed$`, "m"));
     const json = JSON.parse((await f.run("doctor", "--json")).stdout);
     assert.deepEqual(json.find((check: { name: string }) => check.name === "server").status, "pass");
   } finally { await f.close(); }

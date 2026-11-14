@@ -206,7 +206,7 @@ test("after a sentinel run Bakery pushes the rebased branch with a lease", async
     git(worktree, "switch", "-q", "-C", "feat", "origin/feat"); git(worktree, ...commit, "rebase", "-q", "origin/main");
     const run = f.board.claim(card.id);
     f.board.finish(run.id, "review");
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await f.sentinel.idle();
     assert.notEqual(git(worktree, "ls-remote", "origin", "refs/heads/feat").split("\t")[0], head, "the branch moved");
     assert.equal(f.board.getCard(card.id)?.status, "done");
     assert.match(f.comments.get(pr.number)!.map(item => item.body).join("\n"), /rebased this pull request onto the latest main and pushed/);
@@ -221,7 +221,7 @@ test("a sentinel run that changes nothing puts its report on the PR instead of p
     const [card] = f.sentinelCards();
     const run = f.board.claim(card.id);
     f.board.finish(run.id, "review");
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await f.sentinel.idle();
     assert.match(f.comments.get(pr.number)!.map(item => item.body).join("\n"), /could not push its fix: the card worktree is missing/);
     assert.equal(f.board.getCard(card.id)?.status, "review");
   } finally { f.cleanup(); }
@@ -244,7 +244,7 @@ test("the push is refused when someone pushed to the PR branch after the card wa
     const theirs = git(f.upstream, "rev-parse", "HEAD");
     const run = f.board.claim(card.id);
     f.board.finish(run.id, "review");
-    await new Promise(resolve => setTimeout(resolve, 400));
+    await f.sentinel.idle();
     assert.equal(git(worktree, "ls-remote", "origin", "refs/heads/feat").split("\t")[0], theirs, "the person's push survives");
     assert.match(f.comments.get(pr.number)!.map(item => item.body).join("\n"), /could not push its fix/);
     assert.equal(f.board.getCard(card.id)?.status, "review");
@@ -267,7 +267,7 @@ test("when main moves during the run, Bakery rebases the result onto it and stil
     f.land("main3.txt");
     const run = f.board.claim(card.id);
     f.board.finish(run.id, "review");
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await f.sentinel.idle();
     assert.equal(git(worktree, "ls-remote", "origin", "refs/heads/feat").split("\t")[0], git(worktree, "rev-parse", "HEAD"));
     git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD");
     assert.equal(f.board.getCard(card.id)?.status, "done");
@@ -291,7 +291,7 @@ test("a pre-push hook that refuses does not stop the sentinel's push", async () 
     git(worktree, "switch", "-q", "-C", "feat", "origin/feat"); git(worktree, ...commit, "rebase", "-q", "origin/main");
     const run = f.board.claim(card.id);
     f.board.finish(run.id, "review");
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await f.sentinel.idle();
     assert.equal(f.board.getCard(card.id)?.status, "done");
   } finally { f.cleanup(); }
 });

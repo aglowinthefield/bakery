@@ -23,11 +23,20 @@ jobs:
     steps:
       # Keep LF line endings on Windows so `prettier --check` in the build matches Linux.
       - run: git config --global core.autocrlf false
+      # Tests create temporary Git repositories and commit in them.
+      - run: |
+          git config --global user.name "Bakery CI"
+          git config --global user.email "ci@bakery.invalid"
+          git config --global init.defaultBranch main
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+      # UI tests drive Chromium through Playwright, and WebKit on macOS (see tests/setup.ts).
+      - run: npx playwright install --with-deps chromium
+      - if: runner.os == 'macOS'
+        run: npx playwright install webkit
       - run: npm test
       - run: npm run build

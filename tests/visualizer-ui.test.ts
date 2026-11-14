@@ -42,6 +42,18 @@ const labelBox = async (page: Page, id: string) => {
   return box;
 };
 
+/** Resolves once no label moves between two frames: new nodes slide out from their parent, which takes about a second. */
+// No named functions inside: tsx wraps them in a `__name` helper that does not exist in the page.
+const settled = (page: Page) => page.evaluate(async () => {
+  let last: number[] = [];
+  for (;;) {
+    await new Promise(requestAnimationFrame);
+    const now = [...document.querySelectorAll("[data-viz-label]")].flatMap(el => [el.getBoundingClientRect().x, el.getBoundingClientRect().y]);
+    if (now.length === last.length && now.every((v, i) => Math.abs(v - last[i]) < 0.01)) return;
+    last = now;
+  }
+});
+
 /** The RGB of the canvas at a point, read from a screenshot because the WebGL buffer is not kept between frames. */
 const pixel = async (page: Page, x: number, y: number) => {
   const png = (await page.screenshot()).toString("base64");
@@ -69,6 +81,7 @@ test("the graph lays out left to right, and drag, wheel and fit move the view", 
   try {
     await page.locator("[data-viz-label]").first().waitFor({ state: "attached" });
     await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>("[data-viz-label]")].filter(el => el.style.display !== "none").length === 4);
+    await settled(page);
     const [root, mid, leaf] = [await labelBox(page, "root"), await labelBox(page, "mid"), await labelBox(page, "leaf")];
     assert.ok(root.x < mid.x && mid.x < leaf.x, "each dependent sits to the right of its dependency");
     assert.match((await page.locator('[data-viz-label="leaf"]').textContent())!, /leaf card.*blocked by 1/);

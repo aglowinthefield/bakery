@@ -67,6 +67,8 @@ export class Sentinel {
   private owner?: string;
   /** Sentinels with a run going in this process, so a due check and a run-now never overlap. */
   private running = new Set<string>();
+  /** Pushes after finished runs that have not settled yet. */
+  private pushes = new Set<Promise<void>>();
   constructor(private readonly board: Board, private readonly github: GitHub, private readonly store: SentinelStore, private readonly locks: PrLocks,
     private readonly dataDir: string, private readonly ownerLogin?: string, private readonly intervalMs = 5 * 60_000, private readonly requestMs = 60_000,
     /** Starts a job's run. Without it (tests) jobs stay Ready. */
@@ -75,7 +77,12 @@ export class Sentinel {
     private readonly pollMs = 15_000,
     /** False when BAKERY_SENTINEL=0: nothing dispatches, whoever asks (timer, run-now or resume). */
     readonly active = true) {
-    board.onRun((event, run) => event === "finished" ? this.afterRun(run) : undefined);
+    board.onRun((event, run) => {
+      if (event !== "finished") return;
+      const push = this.afterRun(run).finally(() => this.pushes.delete(push));
+      this.pushes.add(push);
+      return push;
+    });
     // Before any timer: link job cards made before sentinels had records. Idempotent, so a crash here repeats it.
     const adopted = store.adoptLegacyJobs({ "pr-health": intervalMs, "pr-requests": requestMs });
     if (adopted) console.log(`[sentinel] linked ${adopted} existing job card(s) to their sentinels`);
@@ -86,6 +93,8 @@ export class Sentinel {
     this.timer = setInterval(() => void this.dispatchDue(), this.pollMs);
     void this.locks.reconcile().then(() => this.dispatchDue());
   }
+  /** Resolves once every push started by a finished run has settled. */
+  async idle(): Promise<void> { while (this.pushes.size) await Promise.allSettled(this.pushes); }
   shutdown(): void { if (this.timer) clearInterval(this.timer); this.timer = undefined; }
   /** What the Sentinels screen shows for a board: each sentinel with its latest runs and the job cards it made, newest first. */
   describe(boardId: string): { sentinel: SentinelRecord; name: string; running: boolean; runs: SentinelRun[]; jobs: Card[] }[] {
