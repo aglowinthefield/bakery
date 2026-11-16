@@ -24,6 +24,16 @@ export class AutoPickup {
         this.board.noteCard(card.id, `Could not send the refused push's hook output to the agent: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    // A rerun the agent reviewer asked for waits here when the repository was at its run limit.
+    for (const card of this.board.listWaitingSendBacks()) {
+      const runId = this.board.listRuns(card.id)[0].id;
+      try {
+        if (this.worker.startSendBack(card)) this.board.setSendBackWaiting(runId, false);
+      } catch (error) {
+        this.board.setSendBackWaiting(runId, false);
+        this.board.noteCard(card.id, `The agent reviewer sent this back, but Bakery could not start the new attempt: ${error instanceof Error ? error.message : String(error)}. Run it again to apply the requested changes, or review it yourself.`);
+      }
+    }
     for (const repoBoard of this.board.listBoards().filter(item => item.autoPickupEnabled)) {
       const blocker = this.board.autoPickupBlocker(repoBoard);
       if (blocker) {

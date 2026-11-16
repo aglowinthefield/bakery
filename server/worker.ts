@@ -160,6 +160,18 @@ export class Worker {
     }
   }
   /**
+   * Starts the rerun the agent reviewer asked for. Returns false when the repository is at its run limit or Bakery is
+   * draining for a restart: the card stays queued (`Board.listWaitingSendBacks`) and `AutoPickup` tries again.
+   */
+  startSendBack(card: Card): boolean {
+    if (this.draining) return false;
+    try { this.start(card, "manual", "to apply the agent reviewer's requested changes"); return true; }
+    catch (error) {
+      if (error instanceof RunLimitError) return false;
+      throw error;
+    }
+  }
+  /**
    * A local-mode card starts from origin/main when the repository has an origin and local HEAD is not ahead of it,
    * so it never builds on a stale checkout. Unpushed local commits win: then HEAD is the base. Offline only warns.
    */

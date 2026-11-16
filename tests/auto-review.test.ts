@@ -8,6 +8,9 @@ import { join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
 import { AutoReview, promptDiff, reviewerVerdict } from "../server/auto-review.js";
+import { RunLimitError } from "../server/board.js";
+import { AutoPickup } from "../server/auto-pickup.js";
+import { Worker } from "../server/worker.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 const settle = (verdict: string) => [
@@ -631,5 +634,70 @@ test("auto-review is not stopped by the diff viewer's 200-file cap, but still re
     await item.auto.tick();
     assert.equal(item.board.listAutoReviewJobs(many.card.id)[0].details, "Agent requested human review: Stop here", "reached the reviewer");
     assert.match(item.board.listAutoReviewJobs(binary.card.id)[0].details, /Binary, symlink, or submodule/);
+  } finally { item.close(); }
+});
+
+const requestChanges = '{"verdict":"request_changes","reason":"Missing test","changes":[{"path":"README.md","line":1,"comment":"Add a regression test"}]}';
+function pullRequestBoard(item: ReturnType<typeof fixture>) {
+  item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
+  item.board.setIntegration(item.repoBoard.id, "github-pr");
+  item.board.setAutoPullRequest(item.repoBoard.id, true);
+  item.board.setAutoReview(item.repoBoard.id, true, "true");
+}
+
+test("a reviewer's send-back at the run limit waits for a free slot instead of landing in Review for a person", async () => {
+  const item = fixture(requestChanges);
+  try {
+    pullRequestBoard(item);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    let full = true;
+    const started: string[] = [];
+    const auto = new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => {
+      if (full) throw new RunLimitError("at its limit");
+      started.push(current.card.id);
+    });
+    await auto.tick();
+    assert.equal(item.board.getCard(current.card.id)!.reviewWait, "rerun_queued");
+    assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "automatic pull requests do not take a queued rerun");
+    assert.deepEqual(item.board.listWaitingSendBacks().map(card => card.id), [current.card.id]);
+    const worker = { startSendBack: () => { if (full) return false; started.push(current.card.id); return true; } } as unknown as Worker;
+    new AutoPickup(item.board, worker).tick();
+    assert.deepEqual(started, [], "still full");
+    full = false;
+    new AutoPickup(item.board, worker).tick();
+    assert.deepEqual(started, [current.card.id]);
+    assert.equal(item.board.listWaitingSendBacks().length, 0);
+  } finally { item.close(); }
+});
+
+test("a card the reviewer hands to a person, or sends back too often, becomes a candidate for a draft pull request with the findings", async () => {
+  for (const verdict of ['{"verdict":"needs_human","reason":"Product call"}', requestChanges]) {
+    const item = fixture(verdict);
+    try {
+      pullRequestBoard(item);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const current = item.reviewedCard();
+      if (verdict === requestChanges) {
+        // Out of reruns: two earlier send-backs on this card.
+        for (const id of ["old-1", "old-2"]) item.board.sqlite.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,changes) VALUES (?,?,'needs_human','2020-01-01T00:00:00.000Z','[{}]')").run(current.card.id, id);
+      }
+      await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => { throw new Error("must not rerun"); }).tick();
+      assert.deepEqual(item.board.listAutoPullRequestCandidates().map(entry => entry.card.id), [current.card.id]);
+      assert.match(item.board.autoReviewHandoff(current.run.id) ?? "", verdict === requestChanges ? /out of reruns[\s\S]*Missing test[\s\S]*README\.md:1/ : /Product call/);
+    } finally { item.close(); }
+  }
+});
+
+test("on a pull-request board the reviewer is told that no pull request exists yet", async () => {
+  const item = fixture();
+  try {
+    pullRequestBoard(item);
+    const prompt = join(item.dir, "prompt.txt");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > ${prompt}\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"ok"}')}EVENTS\n`);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    item.reviewedCard();
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), undefined, async card => item.board.getCard(card.id)!).tick();
+    assert.match(readFileSync(prompt, "utf8"), /none exists for this card yet[^.]*never a finding/);
   } finally { item.close(); }
 });

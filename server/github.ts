@@ -328,9 +328,9 @@ export class GitHub {
   async editComment(repo: string, commentId: string, body: string): Promise<void> {
     await this.gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`]);
   }
-  /** Opens a PR and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
-  async create(repo: string, branch: string, title: string, body: string): Promise<string> {
-    const output = await this.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title", title, "--body", body]);
+  /** Opens a PR (a draft one when asked) and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
+  async create(repo: string, branch: string, title: string, body: string, draft = false): Promise<string> {
+    const output = await this.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title", title, "--body", body, ...(draft ? ["--draft"] : [])]);
     const url = output.trim().split("\n").reverse().find(line => parsePullRequestUrl(line.trim()));
     if (!url) throw new Error(`gh pr create did not print a pull request URL: ${output.trim().slice(0, 500)}`);
     return url.trim();

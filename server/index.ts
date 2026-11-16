@@ -7,7 +7,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
-import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
+import { Board, RunLimitError, isSentinelJob, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
 import { turboCacheUsage } from "./turbo-summary.js";
 import { PoisonedSessionError, Worker } from "./worker.js";
@@ -96,13 +96,13 @@ async function draftForPullRequest(card: Card, fingerprint: string, lead: string
   if (draft.problem) throw new Error(`${lead}: ${draft.problem}. Use Approve and open PR`);
   return draft;
 }
-async function pushDrafted(card: Card, fingerprint: string, draft: { title: string; body: string }, pushedBy: "agent-review" | "auto-pull-request"): Promise<Card> {
-  const opened = await sendBackRefusedPush(card, () => integration.openPullRequest(card, fingerprint, github, draft, pushedBy));
+async function pushDrafted(card: Card, fingerprint: string, draft: { title: string; body: string }, pushedBy: "agent-review" | "auto-pull-request", handoff?: string): Promise<Card> {
+  const opened = await sendBackRefusedPush(card, () => integration.openPullRequest(card, fingerprint, github, draft, pushedBy, handoff));
   void githubSync.syncBoard(board.boardForRepo(card.repo)!.id);
   return opened;
 }
 // On a github-pr board an agent approval opens the PR (drafted like the Approve dialog's), and the card waits on GitHub.
-const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", "to apply the agent reviewer's requested changes"),
+const autoReview = new AutoReview(board, integration, piBin, card => { if (!worker.startSendBack(card)) throw new RunLimitError("Repository is at its run limit, or Bakery is restarting"); },
   async (card, fingerprint) => {
     const draft = await draftForPullRequest(card, fingerprint, "Agent approved, but the pull request draft needs a person");
     // Drafting can take minutes; turning auto-review off meanwhile still stops the push, and a link to an external PR does too.
@@ -111,10 +111,11 @@ const autoReview = new AutoReview(board, integration, piBin, card => worker.star
     if (!fresh || fresh.status !== "review" || fresh.prOverrideUrl) throw new Error("The card changed or was linked to a pull request during drafting");
     return pushDrafted(fresh, fingerprint, draft, "agent-review");
   });
-// Without auto-review, a github-pr board can still open each card's pull request as soon as its run reaches Review.
+// A github-pr board can open each card's pull request as soon as its run reaches Review. With auto-review on, it waits
+// for the agent reviewer and then opens a draft for a card the reviewer left to a person.
 const autoPullRequest = new AutoPullRequest(board, card => integration.reviewFingerprint(card),
   (card, fingerprint) => draftForPullRequest(card, fingerprint, "The pull request draft needs a person"),
-  (card, fingerprint, draft) => pushDrafted(card, fingerprint, draft, "auto-pull-request"));
+  (card, fingerprint, draft, handoff) => pushDrafted(card, fingerprint, draft, "auto-pull-request", handoff));
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);

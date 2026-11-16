@@ -60,9 +60,10 @@ export type CiFeedbackSource = "ci" | "push" | "conflict" | "comment";
 export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number; conflictRepairs: number; conflictRepairKey: string | null; prCommentsSeen: string | null };
 /**
  * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Bakery is about to send
- * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
+ * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main). A rerun the
+ * agent reviewer asked for that is waiting for a free run slot (`rerun_queued`) is the agent's turn too.
  */
-export type ReviewWait = "agent_review" | "ci_fix" | "github";
+export type ReviewWait = "agent_review" | "ci_fix" | "github" | "rerun_queued";
 /**
  * What a person does next with a Review card that is their turn: approve changed files (`pr_ready`) or close a run
  * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
@@ -134,7 +135,12 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
+/**
+ * `handoff` is what Bakery posts on the draft pull request it opens when the review leaves the card for a person on a
+ * board with automatic pull requests; empty for jobs from before it was kept. `sendBackWaiting` is 1 while the
+ * reviewer's requested changes wait for a free run slot (see `Board.listWaitingSendBacks`).
+ */
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string; handoff: string; sendBackWaiting: number } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 /** How many runs of one card Bakery pushes to open its pull request without Approve; see `listAutoPullRequestCandidates`. */
@@ -377,6 +383,8 @@ export class Board {
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
     if (!jobColumns.has("changes")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN changes TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("requeued")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN requeued INTEGER NOT NULL DEFAULT 0");
+    if (!jobColumns.has("handoff")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN handoff TEXT NOT NULL DEFAULT ''");
+    if (!jobColumns.has("sendBackWaiting")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN sendBackWaiting INTEGER NOT NULL DEFAULT 0");
     // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
       for (const definition of usageDefinitions.split(", "))
@@ -890,14 +898,16 @@ export class Board {
   }
   /**
    * Review cards whose pull request Bakery should open without Approve, oldest finished run first. See
-   * `setAutoPullRequest`. With auto-review on, the agent reviewer's approval opens the PR instead, so this stays out.
+   * `setAutoPullRequest`. With auto-review on, the agent reviewer goes first: its approval opens the PR itself, and a
+   * card it sends back reruns, so only a run whose review ended in a hand-off to a person (or that no review covers,
+   * because it finished before auto-review was turned on) is a candidate here, and its PR opens as a draft.
    * Only a card's first PR is opened this way: updating a pushed PR still takes Approve (CI fixes excepted, which
    * GitHub sync pushes). Each run is tried once, and a card at most `maxAutoPullRequestAttempts` times, so a pre-push
    * hook that keeps refusing the agent's fixes cannot loop forever.
    */
   listAutoPullRequestCandidates(): { card: Card; run: Run }[] {
     const result: { card: Card; run: Run }[] = [];
-    for (const repoBoard of this.listBoards().filter(item => item.integration === "github-pr" && item.autoPullRequestEnabled && !item.autoReviewEnabled)) {
+    for (const repoBoard of this.listBoards().filter(item => item.integration === "github-pr" && item.autoPullRequestEnabled)) {
       const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='review' AND ${notSentinelJob}`).all(repoBoard.repo) as { id: string }[];
       for (const { id } of ids) {
         const card = this.getCard(id), run = this.listRuns(id)[0];
@@ -910,7 +920,28 @@ export class Board {
     const attempts = this.db.prepare("SELECT COUNT(*) AS n, SUM(runId=?) AS tried FROM auto_pull_requests WHERE cardId=?").get(run.id, card.id) as { n: number; tried: number | null };
     return run.status === "review" && !!run.finishedAt && !!repoBoard.autoPullRequestEnabledAt && run.finishedAt > repoBoard.autoPullRequestEnabledAt &&
       !run.ciFix && !card.prOverrideUrl && !card.prPushedRunId && !attempts.tried && attempts.n < maxAutoPullRequestAttempts &&
-      !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id);
+      !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id) && !this.agentReviewPending(repoBoard, card.id, run);
+  }
+  /** Whether the agent reviewer still has a say on this run before a pull request may open: it is queued, running, or sent the card back. */
+  agentReviewPending(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
+    if (!repoBoard.autoReviewEnabled) return false;
+    if (this.awaitsAutoReview(repoBoard, cardId, run)) return true;
+    const job = this.getAutoReviewJob(run.id);
+    return !!job && (job.state !== "needs_human" || job.changes !== "");
+  }
+  /** What the agent reviewer left for a person on this run, for the draft pull request; null when it never reviewed it. */
+  autoReviewHandoff(runId: string): string | null {
+    const job = this.getAutoReviewJob(runId);
+    return job?.state === "needs_human" && job.changes === "" ? job.handoff || "The agent review did not reach a verdict." : null;
+  }
+  /** Review cards whose reviewer-requested rerun is waiting for a run slot (see `Worker.startSendBack`), oldest first. */
+  listWaitingSendBacks(): Card[] {
+    const rows = this.db.prepare("SELECT cardId, runId FROM auto_review_jobs WHERE sendBackWaiting=1 ORDER BY finishedAt").all() as { cardId: string; runId: string }[];
+    return rows.map(row => ({ card: this.getCard(row.cardId), runId: row.runId })).filter(item => item.card?.status === "review" && this.listRuns(item.card.id)[0]?.id === item.runId).map(item => item.card!);
+  }
+  /** Marks the reviewer's requested rerun as waiting for a free run slot, or as no longer waiting. */
+  setSendBackWaiting(runId: string, waiting: boolean): void {
+    this.db.prepare("UPDATE auto_review_jobs SET sendBackWaiting=? WHERE runId=?").run(waiting ? 1 : 0, runId);
   }
   /** Records that Bakery is opening `runId`'s pull request on its own. False when the run is no longer a candidate. */
   claimAutoPullRequest(cardId: string, runId: string): boolean {
@@ -939,6 +970,8 @@ export class Board {
   private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued">, repoBoard: RepoBoard | undefined, run = this.listRuns(card.id)[0]): ReviewWait | null {
     if (card.status !== "review" || !repoBoard) return null;
     if (run?.status !== "review") return null;
+    const job = this.getAutoReviewJob(run.id);
+    if (job?.sendBackWaiting && !card.prState) return "rerun_queued";
     if (repoBoard.integration === "github-pr") {
       // Before a pull request exists, an agent review in progress or queued is the agent's turn.
       if (!card.prState && (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run))) return "agent_review";
@@ -1010,9 +1043,9 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  finishAutoReview(runId: string, state: "needs_human" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
-    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
-      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", runId);
+  finishAutoReview(runId: string, state: "needs_human" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[], handoff = ""): void {
+    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=?, handoff=? WHERE runId=? AND state='running'")
+      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", handoff.slice(0, 6000), runId);
   }
   /** What a running review is doing now; shown in the Reviews tab until it finishes. */
   setAutoReviewProgress(runId: string, details: string): void {

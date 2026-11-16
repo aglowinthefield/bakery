@@ -3436,8 +3436,10 @@ export function App() {
                       Pushes the card branch and opens its pull request when a
                       run reaches Review, without waiting for Approve. Only runs
                       that finish after you turn this on are pushed. With
-                      auto-review on, the agent reviewer&apos;s approval opens
-                      it instead.
+                      auto-review on, the agent reviewer goes first: its
+                      approval opens the pull request, a card it sends back
+                      reruns, and a card it hands to a person (or that is out of
+                      reruns) gets a draft pull request with its findings.
                     </span>
                   </span>
                 </label>
@@ -3641,9 +3643,13 @@ export function App() {
                 {mergeLimit === 0
                   ? "No limit on merges per 24 hours."
                   : `At most ${mergeLimit} merge${mergeLimit === 1 ? "" : "s"} per 24 hours.`}{" "}
-                Findings, errors, or changes require human review. Local merge
-                only, never push. Auto-review alone does not start Ready cards;
-                enable Auto pickup above.
+                Findings, errors, or changes require human review. On a local
+                board it merges and never pushes. On a pull-request board an
+                approval opens the pull request; with automatic pull requests
+                on, a card the reviewer hands to a person still gets a draft
+                pull request with its findings, and the reviewer never blocks
+                it. Auto-review alone does not start Ready cards; enable Auto
+                pickup above.
               </p>
               <label className="mt-4 block text-xs">
                 Verification command

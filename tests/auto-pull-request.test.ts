@@ -96,26 +96,51 @@ test("a card that keeps coming back from a refused push is only tried a few time
   } finally { item.close(); }
 });
 
-test("auto-review takes precedence, and a local board never opens pull requests", async () => {
+test("with auto-review on, a pull request opens as a draft only after the agent reviewer hands the card to a person", async () => {
   const item = fixture();
   try {
     item.board.setAutoPullRequest(item.repoBoard.id, true);
     item.board.setAutoReview(item.repoBoard.id, true, "true");
     await later();
-    item.reviewedCard();
-    assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "the agent reviewer's approval opens it instead");
+    const card = item.reviewedCard(), run = item.board.listRuns(card.id)[0];
+    assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "the reviewer has not looked yet");
+    item.board.beginAutoReview(card.id, run.id);
+    assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "still reviewing");
+    item.board.finishAutoReview(run.id, "needs_human", "Agent requested human review: risky", "f".repeat(64), undefined, "The agent reviewer left this for a person:\n\nrisky");
+    assert.deepEqual(item.board.listAutoPullRequestCandidates().map(entry => entry.card.id), [card.id]);
+    let handoff: string | undefined;
+    const auto = new AutoPullRequest(item.board, () => "f".repeat(64), item.draft, async (current, _fingerprint, _draft, findings) => { handoff = findings; return item.open(current); });
+    await auto.tick();
+    assert.match(handoff ?? "", /risky/);
+    assert.deepEqual(item.opened, [card.id]);
+  } finally { item.close(); }
+});
+
+test("with auto-review on, a card the reviewer sent back or approved is not opened by automatic pull requests", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoPullRequest(item.repoBoard.id, true);
+    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    await later();
+    const sent = item.reviewedCard(), sentRun = item.board.listRuns(sent.id)[0];
+    item.board.beginAutoReview(sent.id, sentRun.id);
+    item.board.finishAutoReview(sentRun.id, "needs_human", "Sent back", "f".repeat(64), [{ path: "a", comment: "fix" }]);
+    const approved = item.reviewedCard(), approvedRun = item.board.listRuns(approved.id)[0];
+    item.board.beginAutoReview(approved.id, approvedRun.id);
+    item.board.finishAutoReview(approvedRun.id, "pull_request", "ok", "f".repeat(64));
+    assert.equal(item.board.listAutoPullRequestCandidates().length, 0);
   } finally { item.close(); }
   const local = fixture("local");
   try {
     local.board.setAutoPullRequest(local.repoBoard.id, true);
     await later();
     local.reviewedCard();
-    assert.equal(local.board.listAutoPullRequestCandidates().length, 0);
+    assert.equal(local.board.listAutoPullRequestCandidates().length, 0, "a local board never opens pull requests");
   } finally { local.close(); }
 });
 
-test("nothing is pushed when, while the draft is written, auto-review is turned on or an external pull request is linked", async () => {
-  for (const change of ["auto-review", "override", "opt-out"] as const) {
+test("nothing is pushed when, while the draft is written, auto-review is turned off or an external pull request is linked", async () => {
+  for (const change of ["override", "opt-out"] as const) {
     const item = fixture();
     try {
       item.board.setAutoPullRequest(item.repoBoard.id, true);
@@ -123,8 +148,7 @@ test("nothing is pushed when, while the draft is written, auto-review is turned 
       const card = item.reviewedCard();
       let pushed = 0;
       const auto = new AutoPullRequest(item.board, () => "f".repeat(64), async () => {
-        if (change === "auto-review") item.board.setAutoReview(item.repoBoard.id, true, "true");
-        else if (change === "override") item.board.setPullRequestOverride(card.id, "https://github.com/example/repo/pull/99");
+        if (change === "override") item.board.setPullRequestOverride(card.id, "https://github.com/example/repo/pull/99");
         else item.board.setAutoPullRequest(item.repoBoard.id, false);
         return { title: "t", body: "b" };
       }, async current => { pushed++; return current; });

@@ -4,7 +4,8 @@ import type { Board, Card } from "./board.js";
  * Opens the pull request for Review cards on github-pr boards that turned on automatic pull requests (see
  * `Board.listAutoPullRequestCandidates`), without waiting for Approve. `draft` writes the title and body, which can take
  * minutes; afterwards the card and board are reloaded and the push only happens if the card is still eligible. `push`
- * pushes like Approve does and returns the card. A failure stays on the card's pull request error and History for a person.
+ * pushes like Approve does and returns the card. With auto-review on, the agent reviewer goes first; a run it handed to a
+ * person gets a draft pull request, and `push` receives the reviewer's findings to post on it. A failure stays on the card's pull request error and History for a person.
  */
 export type PullRequestDraft = { title: string; body: string };
 export class AutoPullRequest {
@@ -12,7 +13,7 @@ export class AutoPullRequest {
   private timer: ReturnType<typeof setInterval> | undefined;
   private draining = false;
   constructor(private board: Board, private fingerprint: (card: Card) => string, private draft: (card: Card, fingerprint: string) => Promise<PullRequestDraft>,
-    private push: (card: Card, fingerprint: string, draft: PullRequestDraft) => Promise<Card>) {}
+    private push: (card: Card, fingerprint: string, draft: PullRequestDraft, handoff?: string) => Promise<Card>) {}
   start(): void {
     this.timer = setInterval(() => { void this.tick(); }, 5000);
     void this.tick();
@@ -43,7 +44,7 @@ export class AutoPullRequest {
     if (fresh.prOverrideUrl) throw new Error(`The card was linked to ${fresh.prOverrideUrl} while the pull request was drafted`);
     if (fresh.prPushedRunId === run.id) throw new Error("This run was pushed while the pull request was drafted");
     if (!current || current.integration !== "github-pr" || !current.autoPullRequestEnabled || current.autoPullRequestEnabledAt !== optedInAt) throw new Error("Automatic pull requests were turned off or changed while the pull request was drafted");
-    if (current.autoReviewEnabled) throw new Error("Auto-review was turned on while the pull request was drafted; its agent reviewer decides whether to open it");
+    if (this.board.agentReviewPending(current, card.id, run)) throw new Error("The agent reviewer took over this run while the pull request was drafted");
     return fresh;
   }
   private async process(card: Card, runId: string): Promise<void> {
@@ -51,9 +52,11 @@ export class AutoPullRequest {
       const fingerprint = this.fingerprint(card), optedInAt = this.board.boardForRepo(card.repo)?.autoPullRequestEnabledAt;
       const drafted = await this.draft(card, fingerprint);
       const fresh = this.refreshed(card, runId, optedInAt);
-      const opened = await this.push(fresh, fingerprint, drafted);
+      // A run the agent reviewer handed to a person opens as a draft, with its findings on the pull request.
+      const handoff = this.board.boardForRepo(card.repo)?.autoReviewEnabled ? this.board.autoReviewHandoff(runId) ?? undefined : undefined;
+      const opened = await this.push(fresh, fingerprint, drafted, handoff);
       if (opened.prUrl && opened.prState === "OPEN") {
-        this.board.noteCard(card.id, `Opened ${opened.prUrl} automatically when the run reached Review`);
+        this.board.noteCard(card.id, handoff ? `Opened ${opened.prUrl} as a draft after the agent reviewer left the card for a person` : `Opened ${opened.prUrl} automatically when the run reached Review`);
         console.log(`Opened ${opened.prUrl} automatically for card ${card.id} in ${card.repo}`);
       }
     } catch (error) {
