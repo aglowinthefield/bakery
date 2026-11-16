@@ -15,6 +15,8 @@ const settle = (verdict: string) => [
     usage: { input: 4000, output: 50, cacheRead: 0, cacheWrite: 0, totalTokens: 4050, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.03 } } } }),
   JSON.stringify({ type: "agent_settled", aborted: false }), "",
 ].join("\n");
+/** A path inside a verification command, which runs under sh: backslashes would be eaten as escapes. */
+const posix = (path: string) => path.replaceAll("\\", "/");
 function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and correct"}') {
   const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-")), repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
@@ -305,7 +307,7 @@ test("a board's merge limit leaves the next card for a person before any verific
   const item = fixture();
   try {
     const marker = join(item.dir, "verified");
-    item.board.setAutoReview(item.repoBoard.id, true, `echo run >> ${marker}`);
+    item.board.setAutoReview(item.repoBoard.id, true, `echo run >> ${posix(marker)}`);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMergeLimit, 0, "no limit by default");
     assert.throws(() => item.board.setAutoReviewMergeLimit(item.repoBoard.id, -1), /0 \(no limit\) or between 1 and 99/);
     assert.throws(() => item.board.setAutoReviewMergeLimit(item.repoBoard.id, 1.5), /0 \(no limit\)/);
@@ -363,7 +365,7 @@ test("uncommitted overlapping edits on main stop auto-review before verification
   const item = fixture();
   try {
     const marker = join(item.dir, "verified");
-    item.board.setAutoReview(item.repoBoard.id, true, `touch ${marker}`);
+    item.board.setAutoReview(item.repoBoard.id, true, `touch ${posix(marker)}`);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard(), before = git(item.repo, "rev-parse", "main");
     writeFileSync(join(item.repo, "README.md"), "uncommitted main change\n");

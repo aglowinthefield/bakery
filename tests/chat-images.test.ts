@@ -21,7 +21,10 @@ test("local raster links become managed inline images; arbitrary bytes and symli
     writeFileSync(join(dir,"fake.png"), "secret text");
     const fake = `[fake](${join(dir,"fake.png")})`;
     assert.equal(publishChatImages(fake, dir, "chat", "board", dir), fake);
-    symlinkSync("/etc/passwd", join(dir,"escape.png"));
+    const outside = join(tmpdir(), `bakery-outside-${process.pid}.png`);
+    writeFileSync(outside, "not an image");
+    process.once("exit", () => rmSync(outside, { force: true }));
+    try { symlinkSync(outside, join(dir,"escape.png")); } catch { return; } // Windows without symlink privilege
     const escape = `[escape](${join(dir,"escape.png")})`;
     assert.equal(publishChatImages(escape, dir, "chat", "board", dir), escape);
     assert.doesNotMatch(JSON.stringify(parseMarkdown("![bad](https://example.com/tracker.png)")), /"type":"image"/);

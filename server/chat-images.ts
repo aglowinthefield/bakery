@@ -15,14 +15,14 @@ export function chatImagePath(sessionDir: string, chatId: string, id: string): s
   return join(sessionDir, "images", chatId, id);
 }
 
-/** Import explicit local raster links into opaque, chat-scoped storage. */
+/** Import explicit local raster links into opaque, chat-scoped storage. Absolute paths only: `/…`, or `C:\…` on Windows. */
 export function publishChatImages(text: string, sessionDir: string, chatId: string, boardId: string, repo: string): string {
-  return text.replace(/!?\[([^\]\n]*)\]\(\s*(\/[^)\n]+?)\s*\)/g, (original, label: string, path: string) => {
+  return text.replace(/!?\[([^\]\n]*)\]\(\s*((?:\/|[A-Za-z]:[\\/])[^)\n]+?)\s*\)/g, (original, label: string, path: string) => {
     try {
       if (!/\.(png|jpe?g|gif|webp)$/i.test(path)) return original;
-      const file = realpathSync(path);
+      const file = realpathSync.native(path);
       const allowed = [repo, tmpdir()].some(root => {
-        const part = relative(realpathSync(root), file);
+        const part = relative(realpathSync.native(root), file);
         return part !== "" && !part.startsWith("..") && !isAbsolute(part);
       });
       if (!allowed || !statSync(file).isFile() || statSync(file).size > 10 * 1024 * 1024) return original;

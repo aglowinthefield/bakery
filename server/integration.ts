@@ -216,11 +216,11 @@ export class Integration {
     if (!run || !run.worktree || !(card.status === "review" && run.status === "review" ||
       allowFailed && card.status === "failed" && run.status === "failed")) throw new Error("Only a reviewed run can be inspected or approved");
     const repo = card.repo, worktree = join(this.dataDir, "worktrees", card.id);
-    if (!existsSync(worktree) || realpathSync(worktree) !== realpathSync(run.worktree)) throw new Error("Card worktree is missing or has moved");
-    if (realpathSync(git(repo, "rev-parse", "--show-toplevel")) !== realpathSync(repo) ||
-      realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree) ||
-      realpathSync(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
-      realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")) ||
+    if (!existsSync(worktree) || realpathSync.native(worktree) !== realpathSync.native(run.worktree)) throw new Error("Card worktree is missing or has moved");
+    if (realpathSync.native(git(repo, "rev-parse", "--show-toplevel")) !== realpathSync.native(repo) ||
+      realpathSync.native(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync.native(worktree) ||
+      realpathSync.native(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
+      realpathSync.native(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")) ||
       git(worktree, "symbolic-ref", "--short", "HEAD") !== `bakery/${card.id}`) throw new Error("Card worktree is not on its expected branch in this repository");
     if (git(worktree, "ls-files", "-u")) throw new Error("Resolve conflicts in the card worktree before review");
     return { repo, worktree, run };

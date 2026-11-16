@@ -1,5 +1,5 @@
-import { execFileSync, execSync, spawn, type ChildProcess } from "node:child_process";
-import { command } from "./platform.js";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { command, killTree, killWindowsTree, posixShell } from "./platform.js";
 import { Board, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, settledReply, usageInStream } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
@@ -12,7 +12,7 @@ function execute(command: string, args: string[], cwd: string, timeoutMs: number
   return new Promise((resolve, reject) => {
     // Own process group: a timeout must kill the test runner and browsers under `sh`, or the pipes never close.
     const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
-    const stop = () => { try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); } catch { /* Already gone. */ } };
+    const stop = () => { try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL"); else killTree(child, "SIGKILL"); } catch { /* Already gone. */ } };
     let stdout = "", stderr = "", tail = "", exceeded = false;
     const timer = setTimeout(() => { exceeded = true; stop(); }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (outputTail) tail = (tail + chunk.toString()).slice(-outputTail); if (stdout.length > 1_000_000) { exceeded = true; stop(); } });
@@ -120,7 +120,7 @@ export class AutoReview {
   }
   async shutdown(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
-    for (const reviewer of this.reviewers.values()) reviewer.kill("SIGTERM");
+    for (const reviewer of this.reviewers.values()) killTree(reviewer);
     while (this.activeReviews.size) await new Promise(resolve => setTimeout(resolve, 50));
   }
   /** Stops claiming new reviews and resolves once the review in progress, if any, has finished. */
@@ -173,7 +173,7 @@ export class AutoReview {
       // combined stdout and stderr go into the error, which becomes the card's auto-review message. Test output can contain
       // secrets, so it is capped there and must not be logged anywhere else.
       this.board.setAutoReviewProgress(run.id, "Running the verification command before review…");
-      try { await execute("/bin/sh", ["-c", repoBoard.verificationCommand], run.worktree, 5 * 60_000, 2000, { ...process.env, ...this.board.sharedCacheEnvFor(card.repo) }); }
+      try { await execute(posixShell() ?? "/bin/sh", ["-c", repoBoard.verificationCommand], run.worktree, 5 * 60_000, 2000, { ...process.env, ...this.board.sharedCacheEnvFor(card.repo) }); }
       catch (error) { verificationOutput = true; throw error; }
       verificationOutput = false;
       if (this.integration.reviewFingerprint(this.board.getCard(card.id)!) !== fingerprint) throw new Error("Work changed during verification");
@@ -224,7 +224,10 @@ export class AutoReview {
         return;
       }
       const result = this.integration.approve(currentCard, fingerprint, "auto", scratch => {
-        try { execSync(current.verificationCommand, { cwd: scratch, env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo) }, timeout: 5 * 60_000, stdio: "ignore" }); }
+        // spawnSync's timeout ends only the shell on Windows, so sweep up whatever the command left running.
+        const verification = spawnSync(current.verificationCommand, { cwd: scratch, shell: posixShell() ?? true, env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo) }, timeout: 5 * 60_000, stdio: "ignore" });
+        if (process.platform === "win32" && verification.pid) killWindowsTree(verification.pid);
+        try { if (verification.error || verification.status !== 0) throw new Error("failed"); }
         catch { throw new Error("Verification failed on the merged result; main was not updated"); }
         const latestCard = this.board.getCard(card.id), latestBoard = this.board.getBoard(repoBoard.id);
         if (!latestCard || latestCard.title !== card.title || latestCard.body !== card.body ||
@@ -249,11 +252,11 @@ export class AutoReview {
       let stdout = "", stderr = "", exceeded = false, pending = "";
       const progress = new ReviewProgress(Date.now());
       let reportedAt = 0;
-      const timer = setTimeout(() => { exceeded = true; child.kill("SIGTERM"); }, 20 * 60_000);
+      const timer = setTimeout(() => { exceeded = true; killTree(child); }, 20 * 60_000);
       child.stdout?.on("data", (chunk: Buffer) => {
         const text = chunk.toString();
         stdout += text;
-        if (stdout.length > 20_000_000) { exceeded = true; child.kill("SIGTERM"); }
+        if (stdout.length > 20_000_000) { exceeded = true; killTree(child); }
         pending += text;
         const lines = pending.split("\n"); pending = lines.pop() ?? "";
         for (const line of lines) progress.feed(line);

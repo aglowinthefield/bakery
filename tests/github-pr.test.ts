@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
@@ -94,7 +94,7 @@ function fixture(wtBin?: string, integration: "github-pr" | "default" = "github-
   git(upstream, "add", "README.md"); git(upstream, ...commitArgs, "initial"); git(upstream, "push", "-q", "origin", "main");
   execFileSync("git", ["clone", "-q", origin, repo], { stdio: "ignore" });
   const previousPath = process.env.PATH;
-  process.env.PATH = `${bin}:${previousPath}`;
+  process.env.PATH = `${bin}${delimiter}${previousPath}`;
   process.env.FAKE_GH_DIR = ghDir;
   const board = new Board(join(dir, "board.sqlite"));
   const repoBoard = board.addRepo(repo);

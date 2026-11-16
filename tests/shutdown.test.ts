@@ -18,7 +18,7 @@ async function freePort(): Promise<number> {
 
 // An open browser tab holds a chat event stream. If shutdown leaves it open, the process never exits, systemd never
 // restarts it, and the tab keeps talking to a server whose database is closed.
-test("SIGTERM exits the server even while a chat event stream is open", async () => {
+test("SIGTERM exits the server even while a chat event stream is open", { skip: process.platform === "win32" && "Windows cannot deliver SIGTERM; child.kill() ends the process outright" }, async () => {
   const home = mkdtempSync(join(tmpdir(), "bakery-shutdown-"));
   const repo = join(home, "code", "alpha"), dataDir = join(home, "data");
   mkdirSync(repo, { recursive: true });

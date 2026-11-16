@@ -1,5 +1,5 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { command } from "./platform.js";
+import { command, killTree } from "./platform.js";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
@@ -67,7 +67,7 @@ export class Worker {
   /** `wtBin` enables Worktrunk hooks for new card worktrees; omit it to skip hooks entirely. */
   constructor(private board: Board, private dataDir: string, private piBin = "pi", private wtBin?: string, private attach?: { cli: string; env: NodeJS.ProcessEnv }) {}
   private terminate(id: string, child: ChildProcess, reason: string) {
-    if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
+    if (killTree(child) && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
   /** `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked. */
   start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run): Run {
@@ -75,7 +75,7 @@ export class Worker {
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
     const root = git(card.repo, "rev-parse", "--show-toplevel");
-    if (realpathSync(root) !== realpathSync(card.repo)) throw new Error("Workspace must be the root of a Git repository");
+    if (realpathSync.native(root) !== realpathSync.native(card.repo)) throw new Error("Workspace must be the root of a Git repository");
     try { git(root, "rev-parse", "--verify", "HEAD^{commit}"); }
     catch { throw new Error(`Repository ${root} has no HEAD commit. Make an initial commit before starting a run; Bakery will not commit for you.`); }
     const worktree = join(this.dataDir, "worktrees", card.id);
@@ -91,10 +91,10 @@ export class Worker {
     const ciFeedback = this.board.getCiFeedback(card.id);
     if (conflict && !existsSync(worktree)) throw new Error("Card worktree is missing; inspect and restore it before repairing the conflict");
     if (conflict && (
-      realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree) ||
+      realpathSync.native(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync.native(worktree) ||
       git(worktree, "symbolic-ref", "--short", "HEAD") !== branch ||
-      realpathSync(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
-      realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+      realpathSync.native(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
+      realpathSync.native(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     // A session the provider rejected replays the same history every time; only an explicit recovery gets past it.
     if (!recoverFrom && latestRun?.status === "failed" && latestRun.failureKind === "invalid-history") throw new PoisonedSessionError(card.id, latestRun.id, `run ${latestRun.attempt}`);
@@ -103,7 +103,7 @@ export class Worker {
     let created = false;
     let mainMerged = "";
     try {
-      if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");
+      if (existsSync(worktree) && realpathSync.native(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync.native(worktree)) throw new Error("Existing path is not the card worktree");
       mkdirSync(join(this.dataDir, "worktrees"), { recursive: true });
       // On a github-pr board a card starts from origin/main, fetched now, so it never builds on a stale checkout.
       if (prMode) fetchOrigin(root);

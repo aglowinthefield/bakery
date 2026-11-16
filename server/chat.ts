@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { command } from "./platform.js";
+import { command, killTree } from "./platform.js";
 import { settledReply } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
 import { publishChatImages } from "./chat-images.js";
@@ -257,7 +257,7 @@ export class Chats {
     if (!turn) return;
     turn.stopped = true;
     // Pi's tool processes share its pipes, so end the whole group or the turn would not finish until they exit.
-    try { if (process.platform !== "win32" && turn.child.pid) process.kill(-turn.child.pid, "SIGTERM"); else turn.child.kill("SIGTERM"); } catch { turn.child.kill("SIGTERM"); }
+    try { if (process.platform !== "win32" && turn.child.pid) process.kill(-turn.child.pid, "SIGTERM"); else killTree(turn.child); } catch { turn.child.kill("SIGTERM"); }
   }
 
   /** Stops any reply, then removes the chat and its Pi session file. */

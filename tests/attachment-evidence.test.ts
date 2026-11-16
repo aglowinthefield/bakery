@@ -136,7 +136,7 @@ test("a work run's prompt tells the agent to attach evidence with the CLI, and o
       prompts.push(readFileSync(promptFile, "utf8"));
       // The address reaches the agent through its environment, not a shell prefix in the command.
       if (attach) assert.equal(readFileSync(`${promptFile}.env`, "utf8"), "http://127.0.0.1:4317 1");
-      if (attach) assert.ok(prompts[0].includes(`node '/opt/bakery/bakery-cli.mjs' attach ${card.id} --board ${repoBoard.id} FILE...`));
+      if (attach) assert.ok(prompts[0].includes(`node ${quoteArg("/opt/bakery/bakery-cli.mjs")} attach ${card.id} --board ${repoBoard.id} FILE...`));
     }
     assert.match(prompts[0], /saved as attachments of this card before you finish/);
     assert.match(prompts[0], /Do not upload files anywhere else/);
@@ -179,5 +179,9 @@ test("bakery-cli attach prints each saved file at once and keeps it when a later
     const saved = JSON.parse(json.out) as { name: string }[];
     assert.deepEqual(saved.map(item => item.name), ["ok.png"]);
     assert.match(json.err, /gone\.png/);
-  } finally { server.kill(); rmSync(home, { recursive: true, force: true }); }
+  } finally {
+    // Wait for the server to exit: on Windows it holds the database open until it is gone.
+    if (server.exitCode === null) { const exited = new Promise(resolve => server.once("exit", resolve)); server.kill(); await exited; }
+    rmSync(home, { recursive: true, force: true });
+  }
 });

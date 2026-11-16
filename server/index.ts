@@ -231,9 +231,9 @@ function repoRoot(value: unknown) {
   if (!isAbsolute(path)) throw new Error("Repository path must be absolute or start with ~/");
   let root: string;
   try {
-    root = realpathSync(path);
+    root = realpathSync.native(path);
     const gitRoot = execFileSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-    if (realpathSync(gitRoot) !== root) throw new Error("Not a Git repository root");
+    if (realpathSync.native(gitRoot) !== root) throw new Error("Not a Git repository root");
   } catch { throw new Error(`Repository path is not an existing Git repository root: ${input}`); }
   return root;
 }
@@ -893,8 +893,10 @@ const startDrain = (onDrained: () => void) => {
   void Promise.all([worker.drain(), autoReview.drain(), autoPullRequest.drain()]).then(onDrained);
 };
 process.on("message", (message: unknown) => {
-  if ((message as { type?: unknown } | null)?.type !== "drain") return;
-  startDrain(() => process.send?.({ type: "drained" }));
+  const type = (message as { type?: unknown } | null)?.type;
+  // Windows has no SIGTERM to send: killing a process there is abrupt, so the parent asks over IPC instead.
+  if (type === "shutdown") shutdown("SIGTERM");
+  if (type === "drain") startDrain(() => process.send?.({ type: "drained" }));
 });
 // Without the supervisor (npm start under systemd), SIGUSR2 drains and then exits so the service manager restarts
 // the server with whatever is on disk. scripts/update.sh sends it after pulling.
