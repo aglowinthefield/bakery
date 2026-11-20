@@ -6,6 +6,8 @@ export type RouteView =
   | "chat"
   | "sentinels"
   | "stats"
+  | "colleagues"
+  | "rooms"
   | "logs"
   | "settings";
 export const settingsSections = [
@@ -29,6 +31,8 @@ export interface Route {
  * `/` is not a screen: it opens whichever screen was viewed last, so a new tab picks up where you were.
  */
 export function formatRoute({ view, boardId, cardId, section }: Route): string {
+  if (view === "colleagues") return "/colleagues";
+  if (view === "rooms") return "/rooms";
   if (view === "settings") return `/settings/${section ?? "general"}`;
   if (view === "today" || view === "stats" || view === "logs")
     return `/${view}`;
@@ -53,6 +57,10 @@ export function parseRoute(path: string): Route | null {
     parts.length === 1
   )
     return { view: parts[0], boardId: null, cardId: null };
+  if (parts[0] === "colleagues" && parts.length === 1)
+    return { view: "colleagues", boardId: null, cardId: null };
+  if (parts[0] === "rooms" && parts.length === 1)
+    return { view: "rooms", boardId: null, cardId: null };
   if (parts[0] === "settings" && parts.length <= 2) {
     const section = settingsSections.find(
       (item) => item === (parts[1] ?? "general"),

@@ -32,6 +32,7 @@ import {
   Search,
   Settings2,
   Sun,
+  Users,
   BarChart3,
   ScrollText,
   Globe2,
@@ -69,6 +70,7 @@ import {
   type ThinkingLevel,
 } from "../server/agent-models.js";
 import { AgentBadge, reworkSummary } from "./attempts.js";
+import { ColleaguesView, RoomsView } from "./colleagues.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
@@ -670,11 +672,14 @@ export function App() {
       saved === "chat" ||
       (saved === "sentinels" && features.sentinels) ||
       saved === "stats" ||
+      saved === "colleagues" ||
+      saved === "rooms" ||
       saved === "logs" ||
       saved === "settings"
       ? saved
       : "today";
   });
+  const [roomsBoard, setRoomsBoard] = useState<string | null>(null);
   const [reposCollapsed, setReposCollapsed] = useState(
     () => localStorage.getItem("bakery-repos-collapsed") === "true",
   );
@@ -1105,7 +1110,9 @@ export function App() {
     setView("chat");
     localStorage.setItem("bakery-view", "chat");
   };
-  const openPage = (page: "stats" | "logs" | "settings") => {
+  const openPage = (
+    page: "stats" | "logs" | "settings" | "colleagues" | "rooms",
+  ) => {
     setView(page);
     localStorage.setItem("bakery-view", page);
     restoreCard.current = null;
@@ -1222,7 +1229,7 @@ export function App() {
   // 12% to nothing, which looks like the page going from 88% to full opacity. Animating the page's
   // <main> gives all of it its own compositor layer, and the operator saw that fade reveal from a
   // corner (suspected tile-by-tile layer painting in the webview; not reproduced in Chromium).
-  const pageKey = `${view}:${view === "settings" || view === "today" || view === "stats" || view === "logs" ? "" : (boardId ?? "")}`;
+  const pageKey = `${view}:${view === "settings" || view === "today" || view === "stats" || view === "logs" || view === "colleagues" || view === "rooms" ? "" : (boardId ?? "")}`;
   const shownPageKey = useRef<string | null>(null);
   const pageFadeVeil = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1699,7 +1706,7 @@ export function App() {
         <div className="px-2 pt-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
           <button
             onClick={openToday}
-            className={`mb-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+            className={`mb-1 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
           >
             <Sun size={16} aria-hidden="true" />
             <span className="text-[14px] font-medium text-foreground">
@@ -1710,6 +1717,25 @@ export function App() {
                 {needsYouCount}
               </span>
             )}
+          </button>
+          <button
+            onClick={() => {
+              setRoomsBoard(null);
+              openPage("rooms");
+            }}
+            aria-current={view === "rooms" ? "page" : undefined}
+            className={`mb-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "rooms" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+          >
+            <MessageSquare size={16} aria-hidden="true" />
+            <span>Rooms</span>
+          </button>
+          <button
+            onClick={() => openPage("colleagues")}
+            aria-current={view === "colleagues" ? "page" : undefined}
+            className={`mb-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "colleagues" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+          >
+            <Users size={16} aria-hidden="true" />
+            <span>Colleagues</span>
           </button>
           <button
             onClick={toggleRepos}
@@ -1887,6 +1913,17 @@ export function App() {
                       )}
                     </button>
                   )}
+                  {open && (
+                    <button
+                      onClick={() => {
+                        setRoomsBoard(item.id);
+                        openPage("rooms");
+                      }}
+                      className="ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:bg-accent/30 hover:text-foreground"
+                    >
+                      <Users size={13} aria-hidden="true" /> Rooms
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -1982,6 +2019,14 @@ export function App() {
         <main className="page-fade min-w-0 flex-1">
           <Logs />
         </main>
+      )}
+      {view === "colleagues" && <ColleaguesView boards={boards} />}
+      {view === "rooms" && (
+        <RoomsView
+          boards={boards}
+          boardFilter={roomsBoard}
+          onBoardFilter={setRoomsBoard}
+        />
       )}
       {view === "settings" && (
         <SettingsPage
@@ -2105,6 +2150,8 @@ export function App() {
             supportsSentinels(currentBoard)) ||
           view === "stats" ||
           view === "logs" ||
+          view === "colleagues" ||
+          view === "rooms" ||
           view === "settings" ||
           (view === "pulls" &&
             !!currentBoard &&

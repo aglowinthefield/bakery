@@ -19,6 +19,10 @@ import { AutoPickup } from "./auto-pickup.js";
 import { AutoPullRequest } from "./auto-pull-request.js";
 import { discuss, discussionPrompt } from "./discuss.js";
 import { Chats, writeTopic } from "./chat.js";
+import { ColleagueStore } from "./colleague-store.js";
+import { impressionConfig } from "./impression.js";
+import { handleRoomRoute } from "./room-routes.js";
+import { Rooms } from "./rooms.js";
 import { chatImagePath, publishChatImages, rasterType } from "./chat-images.js";
 import { draftPullRequest } from "./pr-draft.js";
 import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
@@ -66,6 +70,12 @@ const chats = new Chats(board, {
   piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs")}`,
   env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
   topic: (repoBoard, message) => writeTopic(piBin, repoBoard.repo, piModelArgs(board.agentModelFor(repoBoard.repo, "draft")), message),
+});
+// Persistent colleagues and group rooms. Their Pi children get no BAKERY_* or IMPRESSION_* variables: no board access, no ambient credentials.
+const roomEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("BAKERY_") && !key.startsWith("IMPRESSION_")));
+const rooms = new Rooms(board, new ColleagueStore(board.sqlite), {
+  piBin, dataDir, env: roomEnv, impression: () => impressionConfig(process.env),
+  screenModel: process.env.BAKERY_SCREEN_MODEL ? { model: process.env.BAKERY_SCREEN_MODEL, thinking: "low" } : undefined, pollMs: Number(process.env.BAKERY_ROOM_POLL_MS) || 5000,
 });
 // Work agents save screenshots and other evidence as card attachments through the CLI, which finds this server through its environment.
 const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt", {
@@ -587,6 +597,7 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": type, "Content-Length": bytes.length, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox", "Cache-Control": "private, max-age=3600" });
       res.end(bytes); return;
     }
+    if ((path === "/api/colleagues" || path.startsWith("/api/colleagues/") || path === "/api/rooms" || path.startsWith("/api/rooms/") || /^\/api\/boards\/[\w-]+\/new-card-policy$/.test(path)) && await handleRoomRoute(rooms, board, req, res, path, send, body)) return;
     const chatRoute = path.match(/^\/api\/boards\/([\w-]+)\/chats(?:\/([\w-]+)(?:\/(messages|stop|events|view|discard))?)?$/);
     if (chatRoute) {
       const repoBoard = board.getBoard(chatRoute[1]), chatId = chatRoute[2], action = chatRoute[3];
@@ -892,7 +903,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   if (shuttingDown) return;
   shuttingDown = true;
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
-  server.close(); server.closeAllConnections(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
+  server.close(); server.closeAllConnections(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown(); rooms.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
   worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so

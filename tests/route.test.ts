@@ -41,3 +41,12 @@ test("the visualizer has its own path under the board", () => {
     cardId: null,
   });
 });
+
+test("colleagues and rooms are global routes", () => {
+  for (const view of ["colleagues", "rooms"] as const) {
+    const path = formatRoute({ view, boardId: null, cardId: null });
+    assert.equal(path, `/${view}`);
+    assert.deepEqual(parseRoute(path), { view, boardId: null, cardId: null });
+  }
+  assert.equal(parseRoute("/rooms/x"), null);
+});
