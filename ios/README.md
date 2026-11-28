@@ -23,6 +23,10 @@ On first launch enter the server address, for example `mochi:4317`. The server o
 - `Alice/Theme` colours from `src/style.css`, light and dark.
 - `Alice/Views` screens.
 
+## Tests
+
+`AliceTests` are unit tests with no server, for example decoding. Run them on the Mac with `xcodegen generate`, then `xcodebuild -project Alice.xcodeproj -scheme Alice -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO -only-testing:AliceTests test`.
+
 ## UI tests
 
 `ALICE_BOARD=<scratch board id> scripts/sim.sh test` runs `AliceUITests` on the simulator against a live server and copies screenshots to `/tmp/alice-ios-shots`. Use a scratch board: the tests create and move cards.

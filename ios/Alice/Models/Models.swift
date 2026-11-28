@@ -27,7 +27,27 @@ enum CardStatus: String, Codable, CaseIterable, Hashable {
 }
 
 enum ReviewWait: String, Codable, Hashable { case agent_review, ci_fix, github }
-enum ReviewAction: String, Codable, Hashable { case pr_ready, accept_findings }
+/// The next step on a Review card that is your turn (server/board.ts ReviewAction). Values this app doesn't know
+/// decode as `.unknown` so a newer server never fails the whole card list.
+enum ReviewAction: String, Codable, CaseIterable, Hashable {
+    case pr_ready, accept_findings, agent_approved, needs_you, unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ReviewAction(rawValue: raw) ?? .unknown
+    }
+
+    /// src/model.ts reviewActionLabels; nil for a value this app doesn't know.
+    var label: String? {
+        switch self {
+        case .pr_ready: "PR ready"
+        case .accept_findings: "Accept findings"
+        case .agent_approved: "Agent approved"
+        case .needs_you: "Needs you"
+        case .unknown: nil
+        }
+    }
+}
 
 struct LiveActivity: Codable, Hashable { let tool: String?; let turn: Int?; let since: String? }
 struct ReviewQueuePos: Codable, Hashable { let position: Int; let of: Int }

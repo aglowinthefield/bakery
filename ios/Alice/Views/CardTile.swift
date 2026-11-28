@@ -85,7 +85,7 @@ struct CardTile: View {
         else if let label = card.reviewWaitLabel {
             add(Badge(text: label, icon: card.activity() == .working ? "arrow.triangle.2.circlepath" : "hourglass", color: T.mutedFg))
         } else if attention {
-            let text = card.reviewAction == .pr_ready ? "PR ready" : card.reviewAction == .accept_findings ? "Accept findings" : "Your turn"
+            let text = card.reviewAction?.label ?? "Your turn"
             add(Badge(text: text, icon: "eye", color: T.status(.review), filled: true))
         } else if card.activity() == .quiet, let at = card.lastActivityAt.flatMap(ISO.parse) {
             add(Badge(text: "Quiet \(Int(Date.now.timeIntervalSince(at) / 60))m", icon: "pause.circle", color: T.amber))

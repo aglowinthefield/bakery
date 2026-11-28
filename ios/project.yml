@@ -40,6 +40,16 @@ targets:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: Alice connects to your Alice server on your network.
         UILaunchScreen: {}
+  AliceTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [AliceTests]
+    dependencies:
+      - target: Alice
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.alice.ios.tests
   AliceUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -57,4 +67,4 @@ schemes:
       targets:
         Alice: all
     test:
-      targets: [AliceUITests]
+      targets: [AliceTests, AliceUITests]
