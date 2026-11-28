@@ -1,0 +1,2 @@
+# Every card adds a one-line bullet under "## Unreleased"; union keeps both cards' bullets instead of a conflict.
+/CHANGELOG.md merge=union
